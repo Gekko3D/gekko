@@ -12,6 +12,7 @@ import (
 type ManagedGeometryView struct {
 	root          *managedIndexNode[*managedSectorRecord]
 	retainedBytes uint64
+	copyBytes     uint64
 }
 
 // CaptureGeometry captures qualified sealed geometry in constant time without
@@ -24,7 +25,7 @@ func (m *ManagedXBrickMap) CaptureGeometry() (ManagedGeometryView, bool) {
 		return ManagedGeometryView{}, false
 	}
 	m.exclusive = nil
-	return ManagedGeometryView{root: m.geometry, retainedBytes: m.geometryRetainedBytes}, true
+	return ManagedGeometryView{root: m.geometry, retainedBytes: m.geometryRetainedBytes, copyBytes: m.geometryCopyBytes}, true
 }
 
 // Len returns the captured sector count in constant time without allocation.
@@ -36,6 +37,22 @@ func (v ManagedGeometryView) Len() int { return managedIndexSize(v.root) }
 // Aliases may be charged repeatedly. The view itself, owner/map metadata,
 // coordinate-only topology, allocator overhead and GPU storage are excluded.
 func (v ManagedGeometryView) RetainedBytes() uint64 { return v.retainedBytes }
+
+// CopyBytes returns the frozen aggregate charge of all CopySector outputs in
+// constant time without allocation. Each output charges its Sector header,
+// exact-length packed pointer backing, a complete Brick per packed reference
+// and the captured auxiliary backing capacity. Retained input records, map
+// metadata, allocator overhead and GPU storage are excluded.
+func (v ManagedGeometryView) CopyBytes() uint64 { return v.copyBytes }
+
+// CopySectorBytes preflights one CopySector output in logarithmic time without
+// allocation. Invalid indices return zero and false.
+func (v ManagedGeometryView) CopySectorBytes(index int) (uint64, bool) {
+	if node := managedIndexAt(v.root, index); node != nil {
+		return node.value.copyBytes, true
+	}
+	return 0, false
+}
 
 // Coord reads signed X/Y/Z lexicographic order in logarithmic time without
 // allocation. Invalid indices return a zero coordinate and false.
@@ -66,10 +83,11 @@ type managedSectorRecord struct {
 	count         int
 	bricks        [64]*Brick
 	retainedBytes uint64
+	copyBytes     uint64
 }
 
-func newManagedSectorRecord(sector *Sector, retainedBytes uint64) *managedSectorRecord {
-	record := &managedSectorRecord{coords: sector.Coords, mask: sector.BrickMask64, count: len(sector.PackedBricks), retainedBytes: retainedBytes}
+func newManagedSectorRecord(sector *Sector, retainedBytes, copyBytes uint64) *managedSectorRecord {
+	record := &managedSectorRecord{coords: sector.Coords, mask: sector.BrickMask64, count: len(sector.PackedBricks), retainedBytes: retainedBytes, copyBytes: copyBytes}
 	copy(record.bricks[:], sector.PackedBricks)
 	return record
 }
@@ -77,7 +95,12 @@ func newManagedSectorRecord(sector *Sector, retainedBytes uint64) *managedSector
 func (r *managedSectorRecord) copySector() *Sector {
 	sector := &Sector{Coords: r.coords, BrickMask64: r.mask, PackedBricks: make([]*Brick, r.count)}
 	for i := range sector.PackedBricks {
-		sector.PackedBricks[i] = r.bricks[i].Copy()
+		brick := *r.bricks[i]
+		if aux := brick.PrecomputedAux; aux != nil {
+			brick.PrecomputedAux = make([]byte, len(aux), cap(aux))
+			copy(brick.PrecomputedAux, aux)
+		}
+		sector.PackedBricks[i] = &brick
 	}
 	return sector
 }
@@ -90,35 +113,46 @@ func addManagedGeometryBytes(total, charge uint64) (uint64, bool) {
 // Every geometry root reaches exactly one node and record per sector; no AVL
 // subtree accounting is needed. Count backing capacity rather than auxiliary
 // length, which only bounds copy work. Cached charges on old records never change.
-func managedSectorRetainedBytes(sector *Sector) (uint64, bool) {
+func managedSectorGeometryBytes(sector *Sector) (retainedBytes, copyBytes uint64, ok bool) {
 	if len(sector.PackedBricks) != bits.OnesCount64(sector.BrickMask64) {
-		return 0, false
+		return 0, 0, false
 	}
-	charge := uint64(unsafe.Sizeof(managedIndexNode[*managedSectorRecord]{})) + uint64(unsafe.Sizeof(managedSectorRecord{}))
+	var backingBytes uint64
 	for _, brick := range sector.PackedBricks {
 		aux := brick.PrecomputedAux
 		if len(aux) > VoxelAuxRecordBytes || len(aux) == 0 && cap(aux) != 0 {
-			return 0, false
+			return 0, 0, false
 		}
-		var ok bool
-		charge, ok = addManagedGeometryBytes(charge, uint64(unsafe.Sizeof(Brick{})))
+		backingBytes, ok = addManagedGeometryBytes(backingBytes, uint64(unsafe.Sizeof(Brick{})))
 		if !ok {
-			return 0, false
+			return 0, 0, false
 		}
-		charge, ok = addManagedGeometryBytes(charge, uint64(cap(aux)))
+		backingBytes, ok = addManagedGeometryBytes(backingBytes, uint64(cap(aux)))
 		if !ok {
-			return 0, false
+			return 0, 0, false
 		}
 	}
-	return charge, true
+	retainedHeader := uint64(unsafe.Sizeof(managedIndexNode[*managedSectorRecord]{})) + uint64(unsafe.Sizeof(managedSectorRecord{}))
+	retainedBytes, ok = addManagedGeometryBytes(backingBytes, retainedHeader)
+	if !ok {
+		return 0, 0, false
+	}
+	// Qualified cardinality is bounded by the 64-bit mask population.
+	copyHeader := uint64(unsafe.Sizeof(Sector{})) + uint64(len(sector.PackedBricks))*uint64(unsafe.Sizeof((*Brick)(nil)))
+	copyBytes, ok = addManagedGeometryBytes(backingBytes, copyHeader)
+	return retainedBytes, copyBytes, ok
 }
 
 // Qualify all copied current sectors before creating any record tree. Legacy
 // copyable unsupported data retains the existing dense snapshot fallback.
 func (m *ManagedXBrickMap) seedGeometryRecords() {
-	var total uint64
+	var total, copyTotal uint64
 	for _, sector := range m.current.Sectors {
-		charge, ok := managedSectorRetainedBytes(sector)
+		charge, copyCharge, ok := managedSectorGeometryBytes(sector)
+		if !ok {
+			return
+		}
+		copyTotal, ok = addManagedGeometryBytes(copyTotal, copyCharge)
 		if !ok {
 			return
 		}
@@ -135,16 +169,18 @@ func (m *ManagedXBrickMap) seedGeometryRecords() {
 	m.geometry = buildManagedIndex(keys, func(key [3]int) *managedSectorRecord {
 		sector := m.current.Sectors[key]
 		// The exclusive constructor already qualified and charged every sector.
-		charge, _ := managedSectorRetainedBytes(sector)
-		return newManagedSectorRecord(sector, charge)
+		charge, copyCharge, _ := managedSectorGeometryBytes(sector)
+		return newManagedSectorRecord(sector, charge, copyCharge)
 	})
 	m.geometryRetainedBytes = total
+	m.geometryCopyBytes = copyTotal
 	m.geometryQualified = true
 }
 
 func (m *ManagedXBrickMap) disableGeometryRecords() {
 	m.geometry = nil
 	m.geometryRetainedBytes = 0
+	m.geometryCopyBytes = 0
 	m.geometryQualified = false
 }
 
@@ -157,23 +193,24 @@ func (m *ManagedXBrickMap) refreshGeometrySector(key [3]int) {
 	if !present && prior == nil {
 		return
 	}
-	var charge uint64
+	var charge, copyCharge uint64
 	if present {
 		var ok bool
-		charge, ok = managedSectorRetainedBytes(sector)
+		charge, copyCharge, ok = managedSectorGeometryBytes(sector)
 		if !ok {
 			m.disableGeometryRecords()
 			return
 		}
-		if prior != nil && prior.value.matchesSector(sector, charge) {
+		if prior != nil && prior.value.matchesSector(sector, charge, copyCharge) {
 			return
 		}
 	}
-	var oldCharge uint64
+	var oldCharge, oldCopyCharge uint64
 	if prior != nil {
 		oldCharge = prior.value.retainedBytes
+		oldCopyCharge = prior.value.copyBytes
 	}
-	if m.geometryRetainedBytes < oldCharge {
+	if m.geometryRetainedBytes < oldCharge || m.geometryCopyBytes < oldCopyCharge {
 		m.disableGeometryRecords()
 		return
 	}
@@ -182,20 +219,26 @@ func (m *ManagedXBrickMap) refreshGeometrySector(key [3]int) {
 		m.disableGeometryRecords()
 		return
 	}
+	copyTotal, ok := addManagedGeometryBytes(m.geometryCopyBytes-oldCopyCharge, copyCharge)
+	if !ok {
+		m.disableGeometryRecords()
+		return
+	}
 	var record *managedSectorRecord
 	if present {
-		record = newManagedSectorRecord(sector, charge)
+		record = newManagedSectorRecord(sector, charge, copyCharge)
 	}
 	m.geometry = updateManagedIndex(m.geometry, key, record, present)
 	m.geometryRetainedBytes = total
+	m.geometryCopyBytes = copyTotal
 }
 
 // Payload and flags can change in place only on exclusive backing. Public
 // capture and Fork clear that exclusivity, so later mutations of captured
 // backing detach and change these references. Compare before allocating a new
 // record/path; already-exclusive content edits keep the existing index intact.
-func (r *managedSectorRecord) matchesSector(sector *Sector, retainedBytes uint64) bool {
-	if r.coords != sector.Coords || r.mask != sector.BrickMask64 || r.count != len(sector.PackedBricks) || r.retainedBytes != retainedBytes {
+func (r *managedSectorRecord) matchesSector(sector *Sector, retainedBytes, copyBytes uint64) bool {
+	if r.coords != sector.Coords || r.mask != sector.BrickMask64 || r.count != len(sector.PackedBricks) || r.retainedBytes != retainedBytes || r.copyBytes != copyBytes {
 		return false
 	}
 	for i, brick := range sector.PackedBricks {

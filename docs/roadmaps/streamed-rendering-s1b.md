@@ -756,7 +756,7 @@ global lookup publication remain atomic.
 
 ### S1l4: Captured geometry charge
 
-Completed 2026-10-05 in this batch. Geometry captures now carry constant-time
+Completed 2026-10-05 in `d983dd5`. Geometry captures now carry constant-time
 retained-byte accounting, including auxiliary backing capacity. The lasting
 domain and fallback contract are in
 [managed geometry views](../renderer/editing.md#managed-geometry-views).
@@ -774,12 +774,49 @@ Engine and consumer verification is recorded in the main roadmap. No native
 behavior changed. Producer leases, staged-copy accounting and coherent structural
 publication remain separate work; this API establishes no total-memory ceiling.
 
-### Next alignment: Managed staged admission policy
+### S1l5: Copied-sector preflight charge
 
-Proposed first runtime consumer: qualified ordinary managed geometry through its
-existing asset/renderer binding. Streamed terrain, retained, planet and LOD owners
-keep their existing qualification rules; private worker integration follows after
-this consumer establishes the generation contract. Raw/exposed inputs retain
+Completed 2026-10-05 in this batch. Qualified geometry views expose frozen total
+and indexed copied-sector charges; defensive copies allocate captured auxiliary
+capacity explicitly. The lasting domain and fallback contract are in
+[managed geometry views](../renderer/editing.md#managed-geometry-views).
+
+From `gekko/`, focused, volume, ownership race and engine checks passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume -run '^TestS1l' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/volume -run '^(TestS1l|TestP1c|TestP1e)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Consumer builds passed from their respective modules under
+`/Users/ddevidch/code/go/gekko3d`:
+
+| Module | Command |
+| --- | --- |
+| `gekko-editor` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l5-build/editor/ ./...` |
+| `actiongame` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l5-build/actiongame/ ./...` |
+| `spacegame_go` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l5-build/spacegame/ ./...` |
+| `spacesim` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l5-build/spacesim/ ./...` |
+| `examples/testing-vox` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l5-build/testing-vox/ ./...` |
+
+The transient public-API probe
+`env GOCACHE=/tmp/gekko3d-gocache go run /tmp/gekko-s1l5-paint.go`
+measured zero warmed paint allocations at 2 and 1,025 sectors while preserving
+historical charges. Construction and capture are outside that measurement.
+Existing tests and unrelated changes remain preserved; module stat-cache warnings
+exited successfully. No native rendering behavior changed, so no visual check or
+frame-time claim. Producer leases, staged metadata charges and coherent structural
+publication remain separate integration; this API is no total-memory ceiling.
+
+### Approved follow-up: Managed staged admission policy
+
+Approved by the user on 2026-10-05, with the smallest ownership prerequisite
+implemented first. First runtime consumer: qualified ordinary managed geometry
+through its existing asset/renderer binding. Streamed terrain, retained, planet
+and LOD owners keep their existing qualification rules; private worker integration
+follows after this consumer establishes the generation contract. Raw/exposed inputs retain
 synchronous compatibility. This is a permanent ownership step.
 
 Use an opt-in budget, disabled by default, with initial helper limits of 16 sector
@@ -810,7 +847,9 @@ bounded continuation, equal-count replacement, coalescing/refusal, live edits an
 halos, removal, cancellation, exposure/promotion and shared retirement with separate
 test/implementation agents and independent reviews. Run focused and race checks,
 engine tests and consumer builds; user release verification must confirm current
-coverage, final publication, resize and retirement. Policy alignment is pending.
+coverage, final publication, resize and retirement. The policy is approved;
+producer leases, staged metadata accounting and allocation publication remain
+separate implementation steps.
 
 ## Verification and execution record
 

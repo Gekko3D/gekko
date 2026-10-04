@@ -25,6 +25,7 @@ type ManagedXBrickMap struct {
 	topology              *managedTopologyNode
 	geometry              *managedIndexNode[*managedSectorRecord]
 	geometryRetainedBytes uint64
+	geometryCopyBytes     uint64
 	geometryQualified     bool
 	// Only these brick pointers are exclusively owned. Fork clears this set
 	// because every current brick becomes shared, including previous edits.
@@ -408,6 +409,7 @@ func (m *ManagedXBrickMap) Fork() *ManagedXBrickMap {
 		topology:              m.topology,
 		geometry:              m.geometry,
 		geometryRetainedBytes: m.geometryRetainedBytes,
+		geometryCopyBytes:     m.geometryCopyBytes,
 		geometryQualified:     m.geometryQualified,
 		brickVoxelCounts:      maps.Clone(m.brickVoxelCounts),
 		staleSolid:            maps.Clone(m.staleSolid),

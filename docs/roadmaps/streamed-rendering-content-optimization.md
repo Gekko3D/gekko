@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l4, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -467,6 +467,19 @@ from `gekko/`, plus these consumer builds from their respective modules:
 No native rendering behavior changed. Producer leases, copied staging geometry
 and structural publication still require runtime integration.
 
+#### S1l5: Copied-sector preflight charge
+
+Completed 2026-10-05 in this batch. Qualified captures expose frozen aggregate
+and indexed copied-sector charges before allocation. Defensive copies preserve
+captured auxiliary capacity explicitly; existing input charges, authority,
+snapshots and legacy fallback retain their contracts.
+[Contract](../renderer/editing.md#managed-geometry-views) and
+[verification](streamed-rendering-s1b.md#s1l5-copied-sector-preflight-charge).
+
+The user approved the staged-admission policy with this ownership prerequisite
+first. Producer leases, staged metadata charges and coherent GPU publication
+remain next; no native rendering or frame-time claim.
+
 ### S2. Bound caches and worker throughput by bytes
 
 Budget decoded content, prepared geometry, pending results, retained GPU data, normals, materials and editable patches by bytes. Bound `RuntimeContentLoader`; geometry eviction alone leaves source arrays resident.
@@ -862,7 +875,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | S1l1 | `edea1e6` | Immutable managed coordinate frontier | [Owner contract](../renderer/editing.md#managed-topology-views) |
 | S1l2 | `4f52848` | Frozen qualified sector geometry with exact snapshot compatibility | [Owner contract](../renderer/editing.md#managed-geometry-views) |
 | S1l3 | `19f4ca6` | Count manager-owned allocation references without repeated reclamation scans | [Renderer contract](../renderer/runtime.md#allocation-snapshot-ownership) |
-| S1l4 | This batch | Frozen conservative geometry capture charge | [Owner contract](../renderer/editing.md#managed-geometry-views) |
+| S1l4 | `d983dd5` | Frozen conservative geometry capture charge | [Owner contract](../renderer/editing.md#managed-geometry-views) |
+| S1l5 | This batch | Frozen copied-sector charges with deterministic defensive backing | [Owner contract](../renderer/editing.md#managed-geometry-views) |
 | S2a | `896e1eb` | Prepared geometry byte budgets and build suppression | [Design](streamed-rendering-s2a.md) |
 | S2b | `1504a7c` | Decoded leases and pending-result admission | [Design](streamed-rendering-s2b.md) |
 | S3a | `d93f3ac` | Incremental v2 observer selection | [Design](streamed-rendering-s3a.md) |

@@ -216,6 +216,28 @@ legacy copying; earlier views remain valid. This is input accounting, not a heap
 process-memory or renderer-admission ceiling. Defensive copies and later generation
 leases require their own declared accounting.
 
+`CopyBytes()` returns the frozen total charge of all `CopySector` outputs in
+constant time without allocation. `CopySectorBytes(index)` reports one output's
+charge in logarithmic time without allocating the copy; invalid indices return
+zero and false. Each output charges its `Sector` header, exact-length packed
+pointer backing, one complete dense `Brick` per packed reference and the captured
+auxiliary backing capacity. Allocated empty sectors charge their header; empty
+views charge zero. Repeated references are charged as independent output copies.
+
+Qualified copies explicitly allocate each auxiliary slice with its captured
+length and capacity, preserving nil and nonnil empty slices. Copy work follows
+initialized length; backing charge follows capacity. Input capacity remains
+governed by existing defensive construction, and legacy `Brick.Copy` is unchanged.
+Tracked changes update both cached totals; historical views and sealed forks
+retain their frozen charges. Checked accounting failure disables new captures.
+
+Copied-sector charge excludes captured index/record storage, destination map and
+staging index/journal metadata, allocator overhead and GPU resources. It is a
+preflight primitive for the copied geometry domain, not a total staged-memory
+ceiling. A future staged owner must charge its map/index/journal metadata
+separately before admission. Runtime leases, admission and publication remain
+separate integration.
+
 Qualified `Snapshot` and `CopyChangedSectors` copy the same private records in a
 linear traversal under exclusive access. Synchronous defensive copying does not
 establish an extra capture barrier. Their identities, bounds, revision tombstones,
