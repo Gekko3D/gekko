@@ -18,9 +18,9 @@ C3g1 pure primitive extraction, C3g2 canonical model frames and C3g3 pure palett
 construction, C3g4 owned source-model preparation, C3g5 model headers, C3g6 scoped
 reads, C3g7 whole model closure verification, C3g8 owned model packets/adoption and C3g9
 public consumer integration, C3g10 shipping model emission and C3g11 CLI selection
-complete. Opt-in,
-single-material opaque LOD is approved; compiler
-source-kind adapters remain separate work; mixed-material/transparency reduction stays conditional.
+and C3g12 source-loading measurements complete. Opt-in single-material opaque
+inline LOD is approved; model LOD, static collapse and mixed-material/transparency
+reduction stay conditional.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
 
 ## Authority and ownership
@@ -627,3 +627,33 @@ Old `.gkassetc` stdout/API and flags remain preserved; `-lod2` stays inline-only
 contract. `env GOCACHE=/tmp/gekko3d-gocache go test ./cmd/assetcompile -count=1`
 and full engine `go test ./...` passed. No consumer API/runtime change or new GPU
 check. C3g10 is `5fdf3e1`; representative source-loading measurements remain next.
+
+## Source-model loading measurements (C3g12)
+
+At `7b081de`, the [repeatable CPU diagnostic](diagnostics/c3_models.go) checks
+exact primary geometry, dimensions, bounds and static palette parity before timing
+public `LoadAndPrepareAuthoredAsset`. All four samples passed. Go 1.25.4, darwin/arm64,
+GOMAXPROCS=1, default codec, three sequential 100ms benchmark runs per variant.
+Cold means fresh loader/server, warm means seeded owners; filesystem/codec are warm.
+Compilation and parity are outside timing. Values below are median ms/op.
+
+| Selected source | Legacy cold | Compiled cold | Legacy warm | Compiled warm | Source + JSON bytes | Complete shipping bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| CamoStellarJet, model 0 | 2.478 | 6.180 | 1.729 | 3.297 | 79,081 | 5,378 |
+| Sponza, model 62 | 26.159 | 16.527 | 12.885 | 14.769 | 20,455,195 | 52,479 |
+| Brandenburg gate, model 3 | 151.400 | 117.589 | 46.225 | 101.179 | 10,115,081 | 380,709 |
+| Procedural cube 32³ | 6.111 | 4.341 | 1.928 | 3.988 | 709 | 1,129 |
+
+Sponza and gate select 99,045/5,105,446 and 708,578/2,521,915 source voxels,
+respectively. Shipping sizes include the complete selected-model closure, not an
+entire source scene. Cold allocated bytes fell from 118.30MB to 4.52MB for Sponza
+and 181.45MB to 20.75MB for gate; jet rose from 1.45MB to 4.43MB. No universal
+speedup: every warm compiled case regressed, and small jet cold loading regressed.
+Gate heavy variants had only one operation per run; profile and longer timing
+before optimizing. No disk-cold, RSS, GPU, spawn or FPS claim.
+
+Command: `env GOCACHE=/tmp/gekko3d-gocache go run docs/roadmaps/diagnostics/c3_models.go -engine . -duration 100ms`.
+Legacy VOX parsing prints progress alongside JSONL; select lines starting with `{`
+for analysis. Original clean results: `/tmp/gekko-c3-models-results.jsonl`.
+The next valuable step is profiling warm verification/preparation, preserving
+whole-closure authentication and independently owned worker packets.

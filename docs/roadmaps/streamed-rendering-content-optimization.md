@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-04. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g11 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-04. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g12 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -3453,6 +3453,15 @@ Verification: `env GOCACHE=/tmp/gekko3d-gocache go test ./cmd/assetcompile -coun
 and full engine `go test ./...` passed. Procedural/mixed output, no-op mtimes/bytes,
 legacy stdout, help and strict pre-input selection are covered. No consumer API/
 runtime change; consumer builds and GPU checks need no repetition after C3g10.
+
+### C3g12: Representative source-model measurements
+
+C3g11 is `7b081de`. The [CPU measurements](streamed-rendering-c3.md#source-model-loading-measurements-c3g12)
+prove primary/dimensions/bounds/palette parity across jet, Sponza, gate and cube.
+Large selected VOX cold loads and shipping bytes improve; every warm compiled load
+regresses. A repeatable public-API diagnostic is retained; production is unchanged.
+Next: profile warm verification/preparation before further geometry features.
+No disk-cold, RSS, GPU or FPS claim. C3g11 full engine checks remain current.
 
 Existing tests preserved. macOS linker/module stat-cache warnings exited successfully. Notification-only changes needed no new windowed smoke/engine sweep. Unrelated editor/sample baselines not rerun; see S3c/S3d. Publication/compilation verified; incomplete producers still require live extraction.
 
