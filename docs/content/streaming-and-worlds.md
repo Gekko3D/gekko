@@ -1158,11 +1158,23 @@ is explicit opt-in. Other origins retain legacy full snapshots.
 
 Workers decode v2 full/base-delta and v3 hybrid payloads at the existing `SnapshotPath`, bind
 explicit placement/item IDs to the selected owner, and validate the effective
-lattice and `gekko-voxel-shape-v1` rasterization version. Delta bases reconstruct
-from the owning RuntimeContentLoader's immutable authored definition, using the
-same shape conversion and `ModelScale` resampling as construction. Mutable live
-geometry caches are never canonical bases. Existing decoded-definition pinning
-and file-refresh behavior remain unchanged.
+lattice and `gekko-voxel-shape-v1` rasterization version. Delta bases use one
+canonical input boundary. Legacy JSON uses the owning RuntimeContentLoader's
+immutable authored definition and existing shape conversion/`ModelScale`
+resampling. An exact lowercase `.gkassetc` path explicitly selects a compiled
+header; corrupt compiled input never falls back to JSON. Other suffixes and the
+public JSON loading APIs keep their existing contracts.
+
+Compiled bases verify the selected part, referenced frame identity and sizes,
+effective lattice and original base identity. The default E2 logical limits
+apply before dense construction. Canonical bricks already contain post-scale
+geometry, so construction does not resample them. A short independent loader
+scope releases only its own pins on success or failure; a closed originating
+scope cannot start or complete verification. Previously decoded valid frames
+remain usable after a borrowed codec closes. Returned geometry is independently
+owned. Full replacement payloads need header metadata and lattice only, without
+loading an unused base frame. Mutable live geometry caches are never canonical
+bases; no additional base cache is introduced.
 
 Bound payloads reject missing/non-shape parts and authored collapse requests. Legacy v1
 keeps ordered, unbound snapshot acceptance and existing origins, including

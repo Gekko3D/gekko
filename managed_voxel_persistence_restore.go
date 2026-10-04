@@ -49,49 +49,43 @@ func restoreManagedVoxelPersistenceOwner(cmd *Commands, assets *AssetServer, eid
 	if err != nil || !(payload.SchemaVersion == content.CurrentVoxelObjectPayloadSchemaVersion && payload.Mode == content.VoxelObjectPayloadBaseDelta || payload.SchemaVersion == content.HybridVoxelObjectPayloadSchemaVersion && payload.Mode == content.VoxelObjectPayloadHybridDelta) {
 		return fail()
 	}
-	def, err := state.Loader.LoadAsset(path)
-	if err != nil || def.ID != ref.AssetID || def.Runtime != nil && def.Runtime.CollapseVoxelParts {
+	canonicalPart, err := loadRuntimeAssetCanonicalPart(state.Loader, path, ref.ItemID, true, runtimeAssetCanonicalOptions{
+		proveAuthoredBase: true,
+		acceptMetadata: func(assetID string, lattice content.VoxelObjectLatticeDef) bool {
+			return assetID == ref.AssetID && lattice.VoxelResolution == VoxelResolutionOrDefault(&vmc)
+		},
+	})
+	if err != nil || canonicalPart.assetID != ref.AssetID || canonicalPart.lattice.VoxelResolution != VoxelResolutionOrDefault(&vmc) {
 		return fail()
 	}
-	for _, part := range def.Parts {
-		if part.ID != ref.ItemID {
-			continue
-		}
-		if part.Source.Kind != content.AssetSourceKindVoxelShape || part.Source.VoxelShape == nil {
-			return fail()
-		}
-		lattice := authoredVoxelShapeLattice(part.VoxelResolution)
-		if lattice.VoxelResolution != VoxelResolutionOrDefault(&vmc) {
-			return fail()
-		}
-		canonical := buildAuthoredVoxelShapeMap(part)
-		base := VoxelObjectSnapshotFromXBrickMap(canonical)
-		identity, decodedBytes, err := content.VoxelObjectBaseIdentity(base, lattice, nil)
-		if err != nil {
-			return fail()
-		}
-		resolved, err := content.ResolveVoxelObjectPayload(payload, base, lattice, ref.PlacementID, ref.ItemID, nil)
-		if err != nil {
-			return fail()
-		}
-		isolated := source.Copy()
-		current := VoxelObjectSnapshotFromXBrickMap(isolated)
-		slices.SortFunc(current.Voxels, func(a, b content.VoxelObjectVoxelDef) int {
-			for _, pair := range [3][2]int{{a.Z, b.Z}, {a.Y, b.Y}, {a.X, b.X}} {
-				if pair[0] < pair[1] {
-					return -1
-				}
-				if pair[0] > pair[1] {
-					return 1
-				}
-			}
-			return 0
-		})
-		if !slices.Equal(current.Voxels, resolved.Voxels) {
-			return fail()
-		}
-		binding := &managedVoxelPersistenceBinding{state: state, generation: state.Generation, levelID: state.LevelID, levelPath: filepath.Clean(state.LevelPath), ref: ref, assetPath: path, baseBricks: persistenceMapBrickCount(canonical), baseVoxels: len(base.Voxels), baseDecodedBytes: decodedBytes}
-		return volume.NewManagedXBrickMapWithBase(canonical, isolated), authoredVoxelBase{identity: identity, lattice: lattice}, binding
+	canonical := canonicalPart.geometry
+	lattice := canonicalPart.lattice
+	identity := canonicalPart.identity
+	decodedBytes := canonicalPart.decodedBytes
+	base := canonicalPart.snapshot
+	if base == nil {
+		base = VoxelObjectSnapshotFromXBrickMap(canonical)
 	}
-	return fail()
+	resolved, err := content.ResolveVoxelObjectPayload(payload, base, lattice, ref.PlacementID, ref.ItemID, nil)
+	if err != nil {
+		return fail()
+	}
+	isolated := source.Copy()
+	current := VoxelObjectSnapshotFromXBrickMap(isolated)
+	slices.SortFunc(current.Voxels, func(a, b content.VoxelObjectVoxelDef) int {
+		for _, pair := range [3][2]int{{a.Z, b.Z}, {a.Y, b.Y}, {a.X, b.X}} {
+			if pair[0] < pair[1] {
+				return -1
+			}
+			if pair[0] > pair[1] {
+				return 1
+			}
+		}
+		return 0
+	})
+	if !slices.Equal(current.Voxels, resolved.Voxels) {
+		return fail()
+	}
+	binding := &managedVoxelPersistenceBinding{state: state, generation: state.Generation, levelID: state.LevelID, levelPath: filepath.Clean(state.LevelPath), ref: ref, assetPath: path, baseBricks: persistenceMapBrickCount(canonical), baseVoxels: len(base.Voxels), baseDecodedBytes: decodedBytes}
+	return volume.NewManagedXBrickMapWithBase(canonical, isolated), authoredVoxelBase{identity: identity, lattice: lattice}, binding
 }

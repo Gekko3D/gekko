@@ -31,29 +31,20 @@ func resolveStreamedVoxelObjectPayload(loader *RuntimeContentLoader, placements 
 	if selected == nil {
 		return nil, true, fmt.Errorf("voxel-object placement %q is not selected", override.PlacementID)
 	}
-	def, err := loader.LoadAsset(content.ResolveDocumentPath(selected.AssetPath, levelPath))
+	needBase := payload.Mode == content.VoxelObjectPayloadBaseDelta || payload.Mode == content.VoxelObjectPayloadHybridDelta
+	canonical, err := loadRuntimeAssetCanonicalPart(loader, content.ResolveDocumentPath(selected.AssetPath, levelPath), override.ItemID, needBase, runtimeAssetCanonicalOptions{})
 	if err != nil {
 		return nil, true, err
 	}
-	if def.Runtime != nil && def.Runtime.CollapseVoxelParts {
-		return nil, true, fmt.Errorf("voxel-object payload requires individual authored parts")
+	var base *content.VoxelObjectSnapshotDef
+	if needBase {
+		base = canonical.snapshot
+		if base == nil {
+			base = VoxelObjectSnapshotFromXBrickMap(canonical.geometry)
+		}
 	}
-	for _, part := range def.Parts {
-		if part.ID != override.ItemID {
-			continue
-		}
-		if part.Source.Kind != content.AssetSourceKindVoxelShape || part.Source.VoxelShape == nil {
-			return nil, true, fmt.Errorf("voxel-object part %q is not an authored voxel_shape", part.ID)
-		}
-		lattice := authoredVoxelShapeLattice(part.VoxelResolution)
-		var base *content.VoxelObjectSnapshotDef
-		if payload.Mode == content.VoxelObjectPayloadBaseDelta || payload.Mode == content.VoxelObjectPayloadHybridDelta {
-			base = VoxelObjectSnapshotFromXBrickMap(buildAuthoredVoxelShapeMap(part))
-		}
-		snapshot, err := content.ResolveVoxelObjectPayload(payload, base, lattice, override.PlacementID, override.ItemID, nil)
-		return snapshot, true, err
-	}
-	return nil, true, fmt.Errorf("voxel-object part %q is missing", override.ItemID)
+	snapshot, err := content.ResolveVoxelObjectPayload(payload, base, canonical.lattice, override.PlacementID, override.ItemID, nil)
+	return snapshot, true, err
 }
 
 // Pure legacy placements keep direct item lookups. A prepared or current v2

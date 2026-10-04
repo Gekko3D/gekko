@@ -163,31 +163,16 @@ func captureManagedVoxelPersistenceBinding(cmd *Commands, assets *AssetServer, e
 			return
 		}
 	}
-	loader := state.Loader
-	def, err := loader.LoadAsset(actualPath)
-	if err != nil || def.ID != ref.AssetID || def.Runtime != nil && def.Runtime.CollapseVoxelParts {
+	canonical, err := loadRuntimeAssetCanonicalPart(state.Loader, actualPath, ref.ItemID, true, runtimeAssetCanonicalOptions{
+		proveAuthoredBase: true,
+		acceptMetadata: func(assetID string, lattice content.VoxelObjectLatticeDef) bool {
+			return assetID == ref.AssetID && lattice == entry.authoredBase.lattice
+		},
+	})
+	if err != nil || canonical.assetID != ref.AssetID || canonical.lattice != entry.authoredBase.lattice || canonical.identity != entry.authoredBase.identity {
 		return
 	}
-	for _, part := range def.Parts {
-		if part.ID != ref.ItemID {
-			continue
-		}
-		if part.Source.Kind != content.AssetSourceKindVoxelShape || part.Source.VoxelShape == nil {
-			return
-		}
-		lattice := authoredVoxelShapeLattice(part.VoxelResolution)
-		if lattice != entry.authoredBase.lattice {
-			return
-		}
-		canonical := buildAuthoredVoxelShapeMap(part)
-		snapshot := VoxelObjectSnapshotFromXBrickMap(canonical)
-		identity, decodedBytes, err := content.VoxelObjectBaseIdentity(snapshot, lattice, nil)
-		if err != nil || identity != entry.authoredBase.identity {
-			return
-		}
-		entry.persistenceBinding = &managedVoxelPersistenceBinding{state: state, generation: state.Generation, levelID: state.LevelID, levelPath: filepath.Clean(state.LevelPath), ref: ref, assetPath: actualPath, baseBricks: persistenceMapBrickCount(canonical), baseVoxels: len(snapshot.Voxels), baseDecodedBytes: decodedBytes}
-		return
-	}
+	entry.persistenceBinding = &managedVoxelPersistenceBinding{state: state, generation: state.Generation, levelID: state.LevelID, levelPath: filepath.Clean(state.LevelPath), ref: ref, assetPath: actualPath, baseBricks: canonical.bricks, baseVoxels: canonical.voxels, baseDecodedBytes: canonical.decodedBytes}
 }
 
 // Query captured provenance using only current owner metadata and membership.
