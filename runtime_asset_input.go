@@ -11,11 +11,29 @@ import (
 
 // Selection is explicit. Public LoadAsset remains a strict authoring JSON API.
 type runtimeAssetInput struct {
-	definition *content.AssetDef
-	compiled   *content.CompiledAssetHeaderDef
+	definition    *content.AssetDef
+	compiled      *content.CompiledAssetHeaderDef
+	compiledModel *content.CompiledAssetModelHeaderDef
+}
+
+// Extensions select one strict typed format; no probing or authoring fallback.
+func isCompiledAssetPath(path string) bool {
+	switch filepath.Ext(path) {
+	case ".gkassetc", ".gkmodelassetc":
+		return true
+	default:
+		return false
+	}
 }
 
 func loadRuntimeAssetInput(loader *RuntimeContentLoader, path string) (runtimeAssetInput, error) {
+	if filepath.Ext(path) == ".gkmodelassetc" {
+		header, _, err := loader.LoadCompiledAssetModelHeader(path)
+		if err != nil {
+			return runtimeAssetInput{}, err
+		}
+		return runtimeAssetInput{definition: header.Asset, compiledModel: header}, nil
+	}
 	if filepath.Ext(path) == ".gkassetc" {
 		header, _, err := loader.LoadCompiledAssetHeader(path)
 		if err != nil {
@@ -60,7 +78,7 @@ func loadRuntimeAssetCanonicalPart(loader *RuntimeContentLoader, path, itemID st
 		return result, fmt.Errorf("content origin scope is closed")
 	}
 	verificationLoader := loader
-	if filepath.Ext(path) == ".gkassetc" {
+	if isCompiledAssetPath(path) {
 		scope := loader.NewScope()
 		defer scope.Close()
 		verificationLoader = scope.Loader()
@@ -93,7 +111,7 @@ func loadRuntimeAssetCanonicalPart(loader *RuntimeContentLoader, path, itemID st
 		return runtimeAssetCanonicalPart{}, fmt.Errorf("canonical asset owner or lattice mismatch")
 	}
 	if needBase {
-		if input.compiled == nil {
+		if input.compiled == nil && input.compiledModel == nil {
 			result.geometry = buildAuthoredVoxelShapeMap(part)
 			snapshot := VoxelObjectSnapshotFromXBrickMap(result.geometry)
 			result.snapshot = snapshot
@@ -104,9 +122,15 @@ func loadRuntimeAssetCanonicalPart(loader *RuntimeContentLoader, path, itemID st
 			result.voxels = len(snapshot.Voxels)
 		} else {
 			var ref *content.CompiledAssetShapeRefDef
-			for i := range input.compiled.Shapes {
-				if input.compiled.Shapes[i].PartID == itemID {
-					ref = &input.compiled.Shapes[i]
+			var refs []content.CompiledAssetShapeRefDef
+			if input.compiled != nil {
+				refs = input.compiled.Shapes
+			} else {
+				refs = input.compiledModel.Shapes
+			}
+			for i := range refs {
+				if refs[i].PartID == itemID {
+					ref = &refs[i]
 					break
 				}
 			}

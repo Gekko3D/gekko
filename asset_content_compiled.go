@@ -3,6 +3,7 @@ package gekko
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 
 	"github.com/gekko3d/gekko/content"
 )
@@ -11,6 +12,13 @@ type verifiedCompiledAssetShape struct {
 	definition   *content.CompiledAssetShapeDef
 	baseIdentity string
 	contentID    string
+}
+
+type verifiedCompiledAssetModel struct {
+	definition   *content.CompiledAssetModelDef
+	contentID    string
+	baseIdentity string
+	palette      *content.CompiledAssetModelPaletteDef
 }
 
 type verifiedCompiledAssetLOD struct {
@@ -27,6 +35,7 @@ type compiledAssetVerification struct {
 	animations *content.ResolvedAssetAnimations
 	shapes     map[string]verifiedCompiledAssetShape
 	lods       map[string]verifiedCompiledAssetLOD
+	models     map[string]verifiedCompiledAssetModel
 }
 
 func (session *compiledAssetVerification) close() {
@@ -57,7 +66,19 @@ func verifyCompiledAssetInput(path string, loader *RuntimeContentLoader, cancell
 		}
 	}()
 	verification := scope.Loader()
-	header, _, err := verification.LoadCompiledAssetHeader(path)
+	var header *content.CompiledAssetHeaderDef
+	var modelHeader *content.CompiledAssetModelHeaderDef
+	var err error
+	if filepath.Ext(path) == ".gkmodelassetc" {
+		modelHeader, _, err = verification.LoadCompiledAssetModelHeader(path)
+		if err == nil {
+			// A borrowed structural view reuses inline/LOD verification only. The model
+			// header's typed decoder already validated original metadata without source IO.
+			header = &content.CompiledAssetHeaderDef{Asset: modelHeader.Asset, Shapes: modelHeader.Shapes, LODs: modelHeader.LODs}
+		}
+	} else {
+		header, _, err = verification.LoadCompiledAssetHeader(path)
+	}
 	if err != nil {
 		return nil, &authoredAssetInputLoadError{err}
 	}
@@ -70,8 +91,10 @@ func verifyCompiledAssetInput(path string, loader *RuntimeContentLoader, cancell
 	if err := json.Unmarshal(metadata, &definition); err != nil {
 		return nil, err
 	}
-	if validation := content.ValidateAsset(&definition, content.AssetValidationOptions{}); validation.HasErrors() {
-		return nil, fmt.Errorf("compiled asset validation failed: %s", validation.Error())
+	if modelHeader == nil {
+		if validation := content.ValidateAsset(&definition, content.AssetValidationOptions{}); validation.HasErrors() {
+			return nil, fmt.Errorf("compiled asset validation failed: %s", validation.Error())
+		}
 	}
 	if err := checkCompiledAssetWork(loader, cancelled); err != nil {
 		return nil, err
@@ -131,6 +154,10 @@ func verifyCompiledAssetInput(path string, loader *RuntimeContentLoader, cancell
 		}
 		verified[part.ID] = verifiedCompiledAssetShape{definition: shape, baseIdentity: identity, contentID: ref.ContentID}
 	}
+	models, err := verifyCompiledAssetModels(modelHeader, parts, verification, loader, path, cancelled)
+	if err != nil {
+		return nil, err
+	}
 	var lods map[string]verifiedCompiledAssetLOD
 	if len(header.LODs) > 0 {
 		lods = make(map[string]verifiedCompiledAssetLOD, len(header.LODs))
@@ -187,7 +214,7 @@ func verifyCompiledAssetInput(path string, loader *RuntimeContentLoader, cancell
 		return nil, err
 	}
 	success = true
-	return &compiledAssetVerification{scope: scope, def: &definition, animations: animations, shapes: verified, lods: lods}, nil
+	return &compiledAssetVerification{scope: scope, def: &definition, animations: animations, shapes: verified, lods: lods, models: models}, nil
 }
 
 func prepareCompiledAuthoredAsset(path string, assets *AssetServer, loader *RuntimeContentLoader) (*PreparedAuthoredAsset, error) {

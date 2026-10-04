@@ -15,7 +15,8 @@ upload staging, C3h11 pure qualification guards and C3h12a owned derivative
 packets/accounting, C3h12b ordinary derivative adoption and C3h13a explicit
 instance intent, C3h13b instance qualification, C3h13c runtime activation and
 C3g1 pure primitive extraction, C3g2 canonical model frames and C3g3 pure palette
-construction, C3g4 owned source-model preparation and C3g5 model headers complete. Opt-in,
+construction, C3g4 owned source-model preparation, C3g5 model headers, C3g6 scoped
+reads and C3g7 whole model closure verification complete. Opt-in,
 single-material opaque LOD is approved; compiler
 source-kind adapters remain separate work; mixed-material/transparency reduction stays conditional.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
@@ -574,3 +575,12 @@ no dependency following or new cache owner. [Decoded ownership](../assets/runtim
 owns the contract. Focused/race, full engine tests and five consumer builds passed.
 C3g5 is `5d61df0`; verified runtime selection/adoption and shipping compilation
 remain next. No loading speed gain claimed yet.
+
+## Verified model input (C3g7)
+
+Explicit `.gkmodelassetc` selection authenticates the complete mixed closure without
+original VOX IO. Session metadata/palettes own their nested storage; frames borrow
+child scope leases. Existing `.gkassetc`, JSON and selected-inline E2 contracts
+remain unchanged. [The header contract](../content/compiled-voxels.md#compiled-ordinary-model-asset-headers)
+owns selection and verification. Focused/race, full engine and five consumer builds
+passed. C3g6 is `33163a1`; owned packets/adoption and shipping emission remain next.

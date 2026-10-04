@@ -459,8 +459,16 @@ No registered IDs, palette source paths, animations or frame overrides persist.
 Encode/decode/save/load borrow codecs, return owned decoded metadata and zero
 results on failure, and preserve synced atomic save/bounded read behavior. Typed
 canonical re-marshal rejects unknown fields, fixed-array padding/truncation and
-noncanonical JSON. Compiler emission, runtime input selection and adoption remain
-separate integration work; legacy readers reject this explicit new envelope.
+noncanonical JSON. Private runtime selection uses lowercase `.gkmodelassetc`;
+`.gkassetc` continues selecting only the legacy header kind, with no probing or
+fallback. Whole-closure verification checks every model/inline/LOD reference before
+preparation, including physical sizes, supported lattice, logical/base identities
+and palette binding. Verification scopes borrow frames and own metadata/palettes;
+cancellation or a closed origin releases only their child leases. Original model
+source files are never reopened. The E2 canonical boundary still accepts only
+inline parts and proves only the selected shape, including within mixed headers.
+Compiler emission and public runtime adoption remain separate integration work;
+legacy readers reject this explicit new envelope.
 
 ## Compiled ordinary asset headers
 
