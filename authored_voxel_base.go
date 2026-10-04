@@ -52,6 +52,11 @@ func (assets *AssetServer) recordVerifiedAuthoredVoxelBase(id AssetId, lattice c
 	}
 	assets.mu.Lock()
 	defer assets.mu.Unlock()
+	assets.recordVerifiedAuthoredVoxelBaseLocked(id, lattice, identity)
+}
+
+// The caller holds assets.mu for atomic geometry and provenance publication.
+func (assets *AssetServer) recordVerifiedAuthoredVoxelBaseLocked(id AssetId, lattice content.VoxelObjectLatticeDef, identity string) {
 	if _, exists := assets.voxModels[id]; !exists {
 		return
 	}

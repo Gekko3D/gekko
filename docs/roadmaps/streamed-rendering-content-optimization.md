@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3e complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f1 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -817,7 +817,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | C3d2 | `84322d4` | Verified compiled canonical bases for binding, delta restoration and overrides | [Loading contract](../content/streaming-and-worlds.md#ordinary-object-override-loading) |
 | C3d3 | `e1b7a99` | Verified direct compiled preparation/spawning with content-identity geometry reuse | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
 | C3d4a | `54af05d` | Ordinary compiled level placements with unchanged stream ownership and delta reload | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
-| C3e | This commit | Default-profile compiler CLI with explicit shipping output and unchanged publication | [Compiler contract](../content/compiled-voxels.md#ordinary-asset-compiler-emission) |
+| C3e | `eaf29c2` | Default-profile compiler CLI with explicit shipping output and unchanged publication | [Compiler contract](../content/compiled-voxels.md#ordinary-asset-compiler-emission) |
+| C3f1 | This commit | Private single-use compiled geometry adoption with atomic shared key and base provenance | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -2691,6 +2692,26 @@ env GOCACHE=/tmp/gekko3d-gocache go test ./...
 Engine sweep and five consumer commands above passed. Real-source CLI compile
 and no-op reuse passed. No renderer behavior changed; no new GPU check required.
 Existing tests and unrelated changes are preserved.
+
+### C3f1: Compiled shared geometry adoption
+
+Private adoption transfers worker registration storage into ordinary shared
+geometry with atomic key/base publication. Warm reuse drains unused storage;
+conflicting provenance fails without replacement. This prerequisite preserves
+public copying and ordinary asset lifetime; worker packets and integration follow.
+Contract: [compiled preparation](../assets/runtime-assets.md#compiled-ordinary-asset-preparation).
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(C3f1|C3d3|P5a)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(C3f1|C3d3|P5a)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Engine sweep and five consumer commands above passed. Concurrent reuse, source
+isolation and late aliased release pass. No current runtime route changes, so
+no new GPU check required. Existing tests and unrelated changes are preserved.
 
 Existing tests preserved. macOS linker/module stat-cache warnings exited successfully. Notification-only changes needed no new windowed smoke/engine sweep. Unrelated editor/sample baselines not rerun; see S3c/S3d. Publication/compilation verified; incomplete producers still require live extraction.
 

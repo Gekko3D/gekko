@@ -186,6 +186,19 @@ geometry access and managed edit isolation retain their existing contracts.
 With a nil asset server, preparation still verifies input and resolves metadata
 without constructing or registering geometry.
 
+Private compiled adoption accepts independently verified C1 content/base
+identities and the supported source lattice. A cold publication transfers a
+separate P5 single-use registration copy into the ordinary shared geometry key;
+the worker source remains independent. Key and original-base metadata publish
+together under the server lock. A warm publication releases the unused copy and
+reuses the existing ID. Verified metadata may fill missing original provenance;
+conflicting recorded provenance fails without replacement or reading mutable
+warm geometry. Public registration keeps defensive copying.
+
+These IDs retain ordinary `AssetServer` lifetime. Packet release never deletes
+adopted geometry, and imported prepared-cache eviction/leases do not own these
+IDs. Worker packet preparation and streamed publication remain separate delivery.
+
 ### Authored voxel collapse reuse
 
 Repeated eligible static collapses reuse the existing composite before

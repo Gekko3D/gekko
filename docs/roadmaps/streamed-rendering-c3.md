@@ -3,7 +3,7 @@
 Status: approved direction; C3a shape frames, C3b headers and C3c offline
 compiler, C3d1 decoded-cache integration, C3d2 canonical-base adoption and C3d3
 direct runtime preparation/spawning, C3d4a ordinary level placements and C3e
-compiler CLI complete.
+compiler CLI and C3f1 private shared adoption complete.
 Ordinary worker preparation remains separate; special level consumers still use JSON.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
 
