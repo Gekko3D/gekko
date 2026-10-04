@@ -13,7 +13,11 @@ func voxelBufferSize(buffer *wgpu.Buffer) uint64 {
 	return buffer.GetSize()
 }
 func (m *GpuBufferManager) currentVoxelGPUResources() voxelGPUResources {
-	r := voxelGPUResources{SectorTable: voxelBufferSize(m.SectorTableBuf), BrickTable: voxelBufferSize(m.BrickTableBuf), Auxiliary: voxelBufferSize(m.DenseOccupancyBuf), Material: voxelBufferSize(m.MaterialBuf), SectorGrid: voxelBufferSize(m.SectorGridBuf), DirectLookup: voxelBufferSize(m.DirectSectorLookupBuf), SectorGridParams: voxelBufferSize(m.SectorGridParamsBuf)}
+	backend := m.voxelNative
+	if backend == nil {
+		backend = nativeVoxelBackend{m}
+	}
+	r := voxelGPUResources{SectorTable: backend.BufferSize(m.SectorTableBuf), BrickTable: backend.BufferSize(m.BrickTableBuf), Auxiliary: backend.BufferSize(m.DenseOccupancyBuf), Material: backend.BufferSize(m.MaterialBuf), SectorGrid: backend.BufferSize(m.SectorGridBuf), DirectLookup: backend.BufferSize(m.DirectSectorLookupBuf), SectorGridParams: backend.BufferSize(m.SectorGridParamsBuf), StagingBytes: m.stagingVoxelGPUBytes()}
 	for _, retired := range m.retiredBuffers {
 		r.RetiredBytes = addRetainedVoxelBytes(r.RetiredBytes, retired.VoxelBytes)
 	}
@@ -23,8 +27,7 @@ func (m *GpuBufferManager) currentVoxelGPUResources() voxelGPUResources {
 			r.AtlasBytes = addRetainedVoxelBytes(r.AtlasBytes, pageBytes)
 		}
 	}
-	limits := m.Device.GetLimits().Limits
-	r.MaxBufferBytes, r.MaxStorageBytes, r.MaxUniformBytes = limits.MaxBufferSize, limits.MaxStorageBufferBindingSize, limits.MaxUniformBufferBindingSize
+	r.MaxBufferBytes, r.MaxStorageBytes, r.MaxUniformBytes = backend.Limits()
 	return r
 }
 
@@ -77,6 +80,8 @@ func (m *GpuBufferManager) growVoxelGPUResources(resources *voxelGPUResources, n
 		if err != nil {
 			return fmt.Errorf("voxel %s allocation: %w", labels[i], err)
 		}
+		m.voxelGPUWorkStats.Creates++
+		m.voxelGPUWorkStats.CreatedBytes = addRetainedVoxelBytes(m.voxelGPUWorkStats.CreatedBytes, size)
 	}
 	if m.VoxelPayloadPageCount > MaxVoxelAtlasPages {
 		return fmt.Errorf("voxel atlas page count %d exceeds %d", m.VoxelPayloadPageCount, MaxVoxelAtlasPages)
@@ -115,6 +120,11 @@ func (m *GpuBufferManager) growVoxelGPUResources(resources *voxelGPUResources, n
 			return fmt.Errorf("voxel migration finish: %w", err)
 		}
 		m.Device.GetQueue().Submit(commands)
+		for i, buffer := range buffers {
+			if buffer != nil && *destinations[i] != nil {
+				m.voxelGPUWorkStats.CopiedBytes = addRetainedVoxelBytes(m.voxelGPUWorkStats.CopiedBytes, old[i])
+			}
+		}
 	}
 	for i, buffer := range buffers {
 		if buffer == nil {

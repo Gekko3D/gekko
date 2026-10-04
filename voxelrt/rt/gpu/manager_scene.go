@@ -987,17 +987,21 @@ func (m *GpuBufferManager) publishVoxelLookupBuffer(name string, destination **w
 		return m.ensureBuffer(name, destination, data, usage, 0)
 	}
 	current := *destination
-	if current == nil || uint64(len(data)) > current.GetSize() {
+	backend := m.voxelNative
+	if backend == nil {
+		backend = nativeVoxelBackend{m}
+	}
+	if current == nil || uint64(len(data)) > backend.BufferSize(current) {
 		panic(fmt.Sprintf("voxel lookup %s exceeds admitted capacity", name))
 	}
-	limits := m.Device.GetLimits().Limits
-	limit := min(limits.MaxBufferSize, limits.MaxStorageBufferBindingSize)
+	bufferLimit, storageLimit, uniformLimit := backend.Limits()
+	limit := min(bufferLimit, storageLimit)
 	if usage&wgpu.BufferUsageUniform != 0 {
-		limit = min(limits.MaxBufferSize, limits.MaxUniformBufferBindingSize)
+		limit = min(bufferLimit, uniformLimit)
 	}
-	if current.GetSize() > limit {
+	if backend.BufferSize(current) > limit {
 		panic(fmt.Sprintf("voxel lookup %s exceeds device limit", name))
 	}
-	mustQueueVoxelWrite(m.Device.GetQueue().WriteBuffer(current, 0, data))
+	mustQueueVoxelWrite(m.writeVoxelBuffer(current, 0, data))
 	return false
 }

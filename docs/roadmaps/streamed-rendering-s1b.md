@@ -556,30 +556,88 @@ env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1j-build/testing-vox/ .
 
 ## Next alignment: Frame-bounded voxel publication
 
-Whole-map structure preparation, global lookup rebuilding and native buffer
-migration remain atomic. Spreading them across updates introduces current and
+Whole-map structure preparation and global lookup rebuilding remain atomic;
+S1k bounds native buffer migration. Spreading the remaining work across updates introduces current and
 staging generations, with coherent publication and existing coverage retained.
 This is a permanent ownership change; S1i/S1j do not authorize it implicitly.
 
-Resolve these behavior choices before implementation:
+Approved by the user on 2026-10-04:
 
-1. Prefer continuing visible edits and material animation through bounded replay
-   or mirrored writes into staging. The simpler alternative delays GPU content
-   updates until migration completes. Growing pools are shared, so that pause
-   affects existing owners beyond the arriving map. CPU authority, dirty work,
-   readiness and fallback pins must survive either choice.
-2. Native buffer/texture creation is indivisible. Prefer one reported oversized
+1. Continue visible edits and material animation through mirrored writes into
+   staging. Growing pools are shared; pausing them would delay existing owners
+   beyond the arriving map. Preserve CPU authority, dirty work and fallback pins.
+2. Native buffer/texture creation is indivisible. Allow one reported oversized
    allocation as the only creation operation in that update so loading progresses;
-   the strict alternative defers it until the configured budget is raised.
+   physical admission and hard device limits still apply.
    Resumable copy/lookup work cannot establish a driver elapsed-time bound.
 
-After alignment, specify bounded capture/replay storage, finite completion under
-continuous edits, generation cancellation, structural/lookup coherence and safe
-retirement. Expected owners: GPU admission, native growth, structure preparation,
-lookup/scene records and app resource recreation. Focused tests must cover actual
-budgeted continuation, edits, cancellation and old-generation readiness; a user
-release check must confirm publication and resource lifetime. No dependent code
-or new tests have been started.
+The completed S1k batch bounds native buffer creation and migration after
+renderer bootstrap. One fixed physical generation advances independently of
+live demand. Mirror current writes into created replacements; charge duplicate
+content bytes to the existing upload cap. Publish all replacements together and
+rerun live admission, never captured logical ownership. Demand changes cannot
+restart copying indefinitely. Queued staging uses retain safe retirement and
+physical charge on failure. Preserve synchronous bootstrap and default loading;
+enabled zero work limits pause their resource. Existing material-generation
+invalidation can require material reupload at publication.
+
+Owners: GPU admission/native growth, content and lookup writers, and app resource
+recreation. Focused tests cover budgeted continuation, live edits, changed demand,
+coherent bytes and failure lifetime. A user release check must confirm publication
+and resource lifetime. Whole-map structural capture and global lookup rebuilding
+remain separate follow-ups; this batch does not claim a total frame-time bound.
+
+## S1k verification
+
+2026-10-04: focused and race checks, full engine tests, five consumer builds and
+the user release check passed. The diagnostic enables the existing media pass's
+neutral transmittance clear required by resolve. The user confirmed continuous
+animation, staged publication, resize and native retirement. Contract:
+[voxel buffer creation and migration](../renderer/runtime.md#voxel-buffer-creation-and-migration).
+
+From `gekko/`:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu -run '^TestS1k' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/gpu -run '^(TestS1k|TestS1j|TestS1i|TestVoxelUpload)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Consumer builds passed from their respective module directories under
+`/Users/ddevidch/code/go/gekko3d`:
+
+```sh
+# gekko-editor/
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1k-build/editor/ ./...
+# actiongame/
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1k-build/actiongame/ ./...
+# spacegame_go/
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1k-build/spacegame/ ./...
+# spacesim/
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1k-build/spacesim/ ./...
+# examples/testing-vox/
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1k-build/testing-vox/ ./...
+```
+
+The release diagnostic builds successfully. Run it from the engine directory:
+
+```sh
+cd /Users/ddevidch/code/go/gekko3d/gekko
+env GOCACHE=/tmp/gekko3d-gocache go build -trimpath -ldflags='-s -w' -o /tmp/gekko-s1k-migration docs/roadmaps/diagnostics/s1k_migration.go
+/tmp/gekko-s1k-migration
+```
+
+The left panel alternates orange/purple and opens/closes a small hole every
+half-second. Press SPACE to start migration with copying paused; it must keep
+animating while the right side stays empty. Resize during this pause. Press
+SPACE again to replace unadmitted blue demand with green demand and resume
+bounded copying. The left panel must keep animating through publication; the
+green panel appears only when ready. Wait for console `PASS` and resize again.
+The user reported `PASS` after this check. Automated checks establish scheduling
+and byte coherence; the release check establishes this fixture's native
+publication, visual continuity and retirement. No general frame-time or visual
+parity claim.
 
 ## Verification and execution record
 

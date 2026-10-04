@@ -66,13 +66,16 @@ func voxelAdmissionStableLess(a, b voxelAdmissionCandidate) bool {
 	return a.index < b.index
 }
 
-func (m *GpuBufferManager) voxelAdmissionSchedule(candidates []voxelAdmissionCandidate) ([]voxelAdmissionWork, map[voxelAdmissionIdentity]uint64) {
+func (m *GpuBufferManager) beginVoxelAdmissionFrame() {
 	m.voxelAdmissionFrame++
 	if m.voxelAdmissionFrame == 0 {
 		// A wrapped clock cannot give a new request an inherited ancient wait.
 		m.voxelAdmissionFrame = 1
 		m.voxelAdmissionAges = nil
 	}
+}
+
+func (m *GpuBufferManager) voxelAdmissionSchedule(candidates []voxelAdmissionCandidate) ([]voxelAdmissionWork, map[voxelAdmissionIdentity]uint64) {
 	frame := m.voxelAdmissionFrame
 	ages := make(map[voxelAdmissionIdentity]uint64)
 	first := func(target voxelServiceTarget, material bool) uint64 {

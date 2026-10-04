@@ -436,9 +436,10 @@ ordinary loading. The default is zero: the four fixed R8Uint payload pages alone
 can occupy 4 GiB at the supported 1,024³ page size.
 
 The GPU manager counts current sector, brick, auxiliary, material, hash-grid,
-direct-lookup and sector-grid parameter buffers, their unreleased replacements,
-and created payload atlas pages. A replacement needs room for old and new buffers
-at once. Retired bytes leave the charge only after native release. Other renderer
+direct-lookup and sector-grid parameter buffers, created staging replacements,
+unreleased retired replacements, and created payload atlas pages. A replacement
+needs room for old and new buffers at once. Retired bytes leave the charge only
+after native release. Other renderer
 resources, render targets and driver overhead are excluded; this is not a total
 VRAM ceiling. Slot release and retention eviction do not shrink physical buffers.
 
@@ -483,12 +484,59 @@ optional demand. Backend fallback uses the same age snapshot and retains only
 final-plan refusals. Smaller fitting work can pass a blocked request. Progress
 requires recurring fitting capacity; no fixed latency is promised.
 
-`VoxelGPUAdmissionStats()` reports `CurrentBufferBytes`, `RetiredBufferBytes`,
+`VoxelGPUAdmissionStats()` reports `CurrentBufferBytes`, `StagingBytes`, `RetiredBufferBytes`,
 `AtlasBytes`, `TotalBytes`, configured `MaxBytes`, `PressureBytes`, deferred map
 counts, cumulative allocation failures and the last allocation error. Reads use
 scalar state from the last voxel update without traversal or mutation. Byte sums
 saturate; nil manager returns zero stats. Configuration takes effect at the next
 voxel update. [Admission decision](../roadmaps/streamed-rendering-s1b.md#s1i-physical-voxel-resource-growth-admission).
+
+## Voxel Buffer Creation and Migration
+
+`SetVoxelGPUWorkBudget(VoxelGPUWorkBudget{Enabled: true, MaxCreateBytes: ...,
+MaxCreates: ..., MaxCopyBytes: ...})` bounds native voxel-buffer growth per
+`UpdateVoxelData` invocation after renderer bootstrap. The default is disabled,
+preserving synchronous loading. Enabled zero creation bytes or count pauses
+creation; zero copy bytes pauses migration. Copies use four-byte aligned ranges;
+a copy budget below four bytes cannot make progress. Disabling limits completes
+an existing generation using the ordinary unlimited work path.
+
+Creation is indivisible. With positive creation limits, a resource larger than
+the byte cap may be created only as the sole creation in that update. It is
+reported as oversized. An oversized resource encountered after another creation
+waits for a later update. This exception does not bypass physical admission or
+device limits. Native creation and command submission have no elapsed-time cap.
+Initial minimum bindings and fixed payload atlas creation remain synchronous.
+
+The GPU manager retains one fixed physical staging generation for the seven
+voxel buffers. Creation and copying advance independently of arriving logical
+demand. Published buffers remain active until all replacements are complete;
+buffer pointers publish together, followed by fresh admission from live scene
+inputs. Removed or changed demand cannot acquire ownership from a captured plan
+or restart copying indefinitely. Already admitted staging remains pinned when
+the soft memory cap is lowered; subsequent optional growth needs fresh admission.
+
+Copies submit before this update's content writes. Every write to a replaced
+buffer also reaches its created staging replacement, including empty record
+clears and lookup updates. Duplicate content bytes consume the global voxel
+upload budget; payload textures are written once. Lookup writes retain their
+separate existing budget scope. Mirroring stores no replay journal. Existing
+material-generation invalidation still applies at publication and can require
+material reupload before readiness returns, while copied material bytes remain
+available for rendering.
+
+An allocation or migration error preserves published resources and dirty CPU
+authority. Unused unpublished buffers can release immediately; staging resources
+referenced by copies or mirrored writes enter safe retirement. Their charge
+survives until native release. The render submission fence covers every queued
+use, including writes after the last migration submission. Waiting for a budget
+is not an allocation failure.
+
+`VoxelGPUWorkBudget()` reads configuration. `VoxelGPUWorkStats()` reports
+`CreatedBytes`, `Creates`, `CopiedBytes`, `OversizedCreates` and `Pending` for the
+last voxel update, without traversal or mutation. Nil manager reads return zero.
+Whole-map structure preparation and global lookup rebuilding remain atomic;
+these limits do not bound all renderer transfers or frame time.
 
 ## Render Targets and Formats
 
@@ -919,7 +967,8 @@ the same global sector cap. Zero pauses the corresponding resource; zero bytes
 pauses every content write.
 
 The byte cap covers material rows, sector/brick records, auxiliary
-occupancy/normals and mixed payloads. A full sector consumes 64 brick records,
+occupancy/normals and mixed payloads, including duplicate buffer writes into an
+active staging generation. A full sector consumes 64 brick records,
 including empty clears. Allocation/migration copies, lookup rebuilding, scene
 buffers and CPU queue/normal-halo preparation remain outside this cap.
 

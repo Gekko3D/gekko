@@ -1,6 +1,7 @@
 package gpu
 
 import (
+	"errors"
 	"sort"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
@@ -12,17 +13,17 @@ import (
 type VoxelGPUAdmissionBudget struct{ MaxBytes uint64 }
 
 type VoxelGPUAdmissionStats struct {
-	CurrentBufferBytes, RetiredBufferBytes, AtlasBytes, TotalBytes, MaxBytes, PressureBytes uint64
-	DeferredMaps, HardLimitDeferredMaps                                                     int
-	AllocationFailures                                                                      uint64
-	LastError                                                                               string
+	CurrentBufferBytes, StagingBytes, RetiredBufferBytes, AtlasBytes, TotalBytes, MaxBytes, PressureBytes uint64
+	DeferredMaps, HardLimitDeferredMaps                                                                   int
+	AllocationFailures                                                                                    uint64
+	LastError                                                                                             string
 }
 
 // A transaction snapshot uses bytes, never logical assigned-slot accounting.
 // A successful backend publishes all resources together and charges replacements.
 type voxelGPUResources struct {
 	SectorTable, BrickTable, Auxiliary, Material, SectorGrid, DirectLookup, SectorGridParams uint64
-	AtlasBytes, RetiredBytes, MaxBufferBytes, MaxStorageBytes, MaxUniformBytes               uint64
+	AtlasBytes, StagingBytes, RetiredBytes, MaxBufferBytes, MaxStorageBytes, MaxUniformBytes uint64
 }
 
 func (m *GpuBufferManager) SetVoxelGPUAdmissionBudget(budget VoxelGPUAdmissionBudget) {
@@ -47,7 +48,7 @@ func voxelResourceBufferBytes(r voxelGPUResources) uint64 {
 	return n
 }
 func voxelResourceTotalBytes(r voxelGPUResources) uint64 {
-	return addRetainedVoxelBytes(addRetainedVoxelBytes(voxelResourceBufferBytes(r), r.RetiredBytes), r.AtlasBytes)
+	return addRetainedVoxelBytes(addRetainedVoxelBytes(addRetainedVoxelBytes(voxelResourceBufferBytes(r), r.StagingBytes), r.RetiredBytes), r.AtlasBytes)
 }
 func voxelResourcePeakBytes(current, next voxelGPUResources) uint64 {
 	n := voxelResourceTotalBytes(current)
@@ -365,6 +366,11 @@ func (m *GpuBufferManager) prepareVoxelGPUAdmission(scene *core.Scene, resources
 	if m == nil || resources == nil {
 		return false
 	}
+	m.beginVoxelAdmissionFrame()
+	return m.prepareVoxelGPUAdmissionCurrentFrame(scene, resources, grow)
+}
+
+func (m *GpuBufferManager) prepareVoxelGPUAdmissionCurrentFrame(scene *core.Scene, resources *voxelGPUResources, grow func(voxelGPUResources) error) bool {
 	active := m.cleanupVoxelAdmissionOwners(scene)
 	wasActive := m.voxelAdmissionActive
 	previousLookup := m.voxelLookupMaps
@@ -509,13 +515,16 @@ func (m *GpuBufferManager) prepareVoxelGPUAdmission(scene *core.Scene, resources
 		if grow == nil {
 			build(false)
 		} else if err := grow(next); err != nil {
-			*resources = current
-			m.voxelGPUAdmissionStats.AllocationFailures = addRetainedVoxelBytes(m.voxelGPUAdmissionStats.AllocationFailures, 1)
-			message := err.Error()
-			if len(message) > 512 {
-				message = message[:512]
+			if errors.Is(err, errVoxelGPUStagePublished) {
+				// Physical publication never commits the earlier logical plan.
+				// Replan live demand without advancing its waiting clock twice.
+				m.prepareVoxelGPUAdmissionCurrentFrame(scene, resources, grow)
+				return true
 			}
-			m.voxelGPUAdmissionStats.LastError = message
+			*resources = current
+			if !errors.Is(err, errVoxelGPUWorkPending) {
+				m.recordVoxelGPUAllocationFailure(err)
+			}
 			build(false)
 		} else {
 			recreated = true
@@ -554,20 +563,36 @@ func (m *GpuBufferManager) prepareVoxelGPUAdmission(scene *core.Scene, resources
 			mat.MaterialTableLen = -1
 		}
 	}
+	m.refreshVoxelGPUAdmissionStats(*resources)
 	stats := m.voxelGPUAdmissionStats
-	stats.CurrentBufferBytes = voxelResourceBufferBytes(*resources)
+	stats.DeferredMaps = len(denied)
+	stats.HardLimitDeferredMaps = len(hard)
+	m.voxelGPUAdmissionStats = stats
+	return recreated
+}
+
+func (m *GpuBufferManager) recordVoxelGPUAllocationFailure(err error) {
+	m.voxelGPUAdmissionStats.AllocationFailures = addRetainedVoxelBytes(m.voxelGPUAdmissionStats.AllocationFailures, 1)
+	message := err.Error()
+	if len(message) > 512 {
+		message = message[:512]
+	}
+	m.voxelGPUAdmissionStats.LastError = message
+}
+
+func (m *GpuBufferManager) refreshVoxelGPUAdmissionStats(resources voxelGPUResources) {
+	stats := m.voxelGPUAdmissionStats
+	stats.CurrentBufferBytes = voxelResourceBufferBytes(resources)
+	stats.StagingBytes = resources.StagingBytes
 	stats.RetiredBufferBytes = resources.RetiredBytes
 	stats.AtlasBytes = resources.AtlasBytes
-	stats.TotalBytes = voxelResourceTotalBytes(*resources)
+	stats.TotalBytes = voxelResourceTotalBytes(resources)
 	stats.MaxBytes = m.voxelGPUAdmissionBudget.MaxBytes
 	stats.PressureBytes = 0
 	if stats.MaxBytes != 0 && stats.TotalBytes > stats.MaxBytes {
 		stats.PressureBytes = stats.TotalBytes - stats.MaxBytes
 	}
-	stats.DeferredMaps = len(denied)
-	stats.HardLimitDeferredMaps = len(hard)
 	m.voxelGPUAdmissionStats = stats
-	return recreated
 }
 
 // Final reference scan is limited to structural removals, not idle preparation.

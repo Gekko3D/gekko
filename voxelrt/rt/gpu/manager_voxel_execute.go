@@ -9,7 +9,7 @@ func (m *GpuBufferManager) executeVoxelUpload(context func() voxelNormalBakeCont
 	}
 	if work.kind == voxelUploadMaterial {
 		mat := m.MaterialAllocations[work.object]
-		mustQueueVoxelWrite(m.Device.GetQueue().WriteBuffer(m.MaterialBuf, uint64(mat.MaterialOffset)*64, buildMaterialData(work.object.MaterialTable)))
+		mustQueueVoxelWrite(m.writeVoxelBuffer(m.MaterialBuf, uint64(mat.MaterialOffset)*64, buildMaterialData(work.object.MaterialTable)))
 		return true
 	}
 	key := work.sectorCoordinate()
@@ -33,7 +33,7 @@ func (m *GpuBufferManager) executeVoxelUpload(context func() voxelNormalBakeCont
 		brick := sector.GetBrick(i%4, (i/4)%4, i/16)
 		pointers[i] = brick
 		if brick == nil {
-			mustQueueVoxelWrite(m.Device.GetQueue().WriteBuffer(m.BrickTableBuf, uint64(info.BrickTableIndex+uint32(i))*BrickRecordSize, make([]byte, BrickRecordSize)))
+			mustQueueVoxelWrite(m.writeVoxelBuffer(m.BrickTableBuf, uint64(info.BrickTableIndex+uint32(i))*BrickRecordSize, make([]byte, BrickRecordSize)))
 		} else {
 			m.uploadBrick(context, work.object, xbm, brick, info.BrickTableIndex+uint32(i), brickOriginForSectorIndex(key, i))
 		}

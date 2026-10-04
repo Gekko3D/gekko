@@ -2,6 +2,7 @@ package gpu
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"time"
 	"unsafe"
@@ -57,6 +58,13 @@ func buildMaterialData(table []core.Material) []byte {
 }
 
 func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
+	return m.updateVoxelData(scene, nativeVoxelBackend{m})
+}
+
+func (m *GpuBufferManager) updateVoxelData(scene *core.Scene, backend voxelNativeBackend) bool {
+	m.voxelNative = backend
+	m.voxelGPUWorkStats = VoxelGPUWorkStats{}
+	m.voxelWorkAdvanced = false
 	recreated := false
 	m.ensureRetainedVoxelMaps()
 	m.VoxelUniformSparseBricks = 0
@@ -64,12 +72,45 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	m.VoxelPayloadUploadsSkipped = 0
 	m.VoxelPayloadBytesAvoided = 0
 	m.VoxelRuntimeNormalBakeDuration = 0
+	stageFailed := false
+	if m.voxelGrowth != nil {
+		published, err := m.advanceVoxelGPUStage()
+		recreated = published
+		if err != nil && !errors.Is(err, errVoxelGPUWorkPending) {
+			m.recordVoxelGPUAllocationFailure(err)
+			stageFailed = true
+		}
+	}
 	resources := m.currentVoxelGPUResources()
-	recreated = m.prepareVoxelGPUAdmission(scene, &resources, func(next voxelGPUResources) error {
-		return m.growVoxelGPUResources(&resources, next)
-	})
+	if m.prepareVoxelGPUAdmission(scene, &resources, func(next voxelGPUResources) error {
+		if stageFailed || m.voxelGrowth != nil {
+			return errVoxelGPUWorkPending
+		}
+		// The existing atomic native bootstrap supplies mandatory bindings and
+		// payload atlases before resumable post-bootstrap growth is possible.
+		bootstrap := false
+		if m.Device != nil {
+			for i := uint32(0); i < m.VoxelPayloadPageCount; i++ {
+				if m.VoxelPayloadTex[i] == nil {
+					bootstrap = true
+					break
+				}
+			}
+		}
+		if bootstrap {
+			return m.growVoxelGPUResources(&resources, next)
+		}
+		err := m.startVoxelGPUStage(next)
+		resources = m.currentVoxelGPUResources()
+		if err == nil {
+			return errVoxelGPUStagePublished
+		}
+		return err
+	}) {
+		recreated = true
+	}
 	// Tree64 belongs to the optional legacy representation, outside voxel budget.
-	if m.ensureBuffer("Tree64Buf", &m.Tree64Buf, nil, wgpu.BufferUsageStorage, 64) {
+	if m.Device != nil && m.ensureBuffer("Tree64Buf", &m.Tree64Buf, nil, wgpu.BufferUsageStorage, 64) {
 		recreated = true
 	}
 
@@ -84,6 +125,8 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 		activeMaps[target.mapRef] = true
 	}
 	m.evictRetainedVoxelMaps(activeMaps)
+	m.voxelGPUWorkStats.Pending = m.voxelGrowth != nil
+	m.refreshVoxelGPUAdmissionStats(m.currentVoxelGPUResources())
 
 	return recreated
 }
@@ -510,7 +553,7 @@ func (m *GpuBufferManager) writeSectorRecord(sector *volume.Sector, info SectorG
 	binary.LittleEndian.PutUint32(sData[24:28], uint32(sector.BrickMask64>>32))
 	// 28:32 padding
 
-	mustQueueVoxelWrite(m.Device.GetQueue().WriteBuffer(m.SectorTableBuf, uint64(info.SlotIndex)*32, sData))
+	mustQueueVoxelWrite(m.writeVoxelBuffer(m.SectorTableBuf, uint64(info.SlotIndex)*32, sData))
 }
 
 func (m *GpuBufferManager) uploadBrick(context func() voxelNormalBakeContext, obj *core.VoxelObject, target *volume.XBrickMap, brick *volume.Brick, slotIdx uint32, brickOrigin [3]int) {
@@ -553,25 +596,7 @@ func (m *GpuBufferManager) uploadBrick(context func() voxelNormalBakeContext, ob
 			}
 		}
 
-		mustQueueVoxelWrite(m.Device.GetQueue().WriteTexture(
-			&wgpu.ImageCopyTexture{
-				Texture:  m.VoxelPayloadTex[payloadPage],
-				MipLevel: 0,
-				Origin:   wgpu.Origin3D{X: uint32(ax), Y: uint32(ay), Z: uint32(az)},
-				Aspect:   wgpu.TextureAspectAll,
-			},
-			payload,
-			&wgpu.TextureDataLayout{
-				Offset:       0,
-				BytesPerRow:  8,
-				RowsPerImage: 8,
-			},
-			&wgpu.Extent3D{
-				Width:              8,
-				Height:             8,
-				DepthOrArrayLayers: 8,
-			},
-		))
+		mustQueueVoxelWrite(m.voxelNative.WritePayload(payloadPage, [3]uint32{uint32(ax), uint32(ay), uint32(az)}, payload))
 	}
 
 	if mode.usesAux {
@@ -593,14 +618,14 @@ func (m *GpuBufferManager) uploadBrick(context func() voxelNormalBakeContext, ob
 			}
 			m.VoxelRuntimeNormalBakeDuration += time.Since(start)
 		}
-		mustQueueVoxelWrite(m.Device.GetQueue().WriteBuffer(m.DenseOccupancyBuf, uint64(auxSlot)*VoxelAuxRecordBytes, auxBytes))
+		mustQueueVoxelWrite(m.writeVoxelBuffer(m.DenseOccupancyBuf, uint64(auxSlot)*VoxelAuxRecordBytes, auxBytes))
 	} else {
 		// Complete-unit reclamation owns releases, including alias guards.
 	}
 
 	record := buildGpuBrickRecord(brick, mode, payloadOffset, payloadPage, auxWordBase)
 	bbuf := encodeGpuBrickRecord(record)
-	mustQueueVoxelWrite(m.Device.GetQueue().WriteBuffer(m.BrickTableBuf, uint64(slotIdx)*BrickRecordSize, bbuf))
+	mustQueueVoxelWrite(m.writeVoxelBuffer(m.BrickTableBuf, uint64(slotIdx)*BrickRecordSize, bbuf))
 }
 
 func (m *GpuBufferManager) ensureVoxelPayloadPages() bool {

@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-04. Status: staged implementation; S1a–S1j, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-04. Status: staged implementation; S1a–S1k, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -367,6 +367,15 @@ smaller-fit bypass, current request identity, hard limits and fallback readiness
 Focused/race, engine tests and five consumer builds passed. Native paths are
 unchanged from the user-verified S1i batch.
 [Verification](streamed-rendering-s1b.md#s1j-deferred-optional-admission-aging).
+
+#### S1k: Native voxel buffer work
+
+Completed 2026-10-04; the user release check passed, including native retirement.
+Opt-in creation/copy limits retain live writes through one coherent staging
+generation. Focused and race checks, full engine tests and five consumer builds
+passed. Bootstrap, whole-map structure preparation and global lookup rebuilding
+remain atomic. [Contract](../renderer/runtime.md#voxel-buffer-creation-and-migration)
+and [verification](streamed-rendering-s1b.md#s1k-verification).
 
 ### S2. Bound caches and worker throughput by bytes
 
@@ -759,6 +768,7 @@ This workflow does not independently authorize tests, delegation or commits.
 | S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
 | S1i | `3557e78` | Optional physical GPU growth admission, pinned pressure and hard-limit safety | [Renderer contract](../renderer/runtime.md#physical-voxel-gpu-admission) |
 | S1j | `818e4d5` | Age optional geometry/material demand without changing required ownership | [Renderer contract](../renderer/runtime.md#physical-voxel-gpu-admission) |
+| S1k | This commit | Bound native voxel buffer creation/copying while preserving live writes | [Renderer contract](../renderer/runtime.md#voxel-buffer-creation-and-migration) |
 | S2a | `896e1eb` | Prepared geometry byte budgets and build suppression | [Design](streamed-rendering-s2a.md) |
 | S2b | `1504a7c` | Decoded leases and pending-result admission | [Design](streamed-rendering-s2b.md) |
 | S3a | `d93f3ac` | Incremental v2 observer selection | [Design](streamed-rendering-s3a.md) |
@@ -912,10 +922,12 @@ P5c moves snapshot reconstruction/registration preparation to workers; P5d moves
 eligible first terrain renderer allocations/copying to workers. Remaining
 cache maintenance and individual atomic units are next.
 
-S1i/S1j add physical admission and optional fairness. Remaining structural,
-migration and lookup bounds need the
-[publication alignment decision](streamed-rendering-s1b.md#next-alignment-frame-bounded-voxel-publication)
-before dependent implementation; no resumable GPU generation is approved yet.
+S1i/S1j add physical admission and optional fairness. On 2026-10-04, the user
+approved continued visible updates during staging and one reported oversized
+native creation per update, subject to physical admission and hard device limits.
+[S1k scope](streamed-rendering-s1b.md#next-alignment-frame-bounded-voxel-publication)
+starts with native buffer migration; structural capture and global lookup bounds
+remain follow-ups.
 
 S1f uses the approved [private ready queue](streamed-rendering-s1b.md#s1f-deterministic-ready-commit-queue).
 On 2026-10-03, the user authorized its ownership decision and migration of existing

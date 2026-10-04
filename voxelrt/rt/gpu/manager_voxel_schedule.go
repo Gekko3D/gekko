@@ -120,6 +120,19 @@ func brickUploadBytes(brick *volume.Brick) uint64 {
 	return bytes
 }
 
+// Admission charges every buffer write, including mirrors already created in
+// staging. Payload textures are shared and remain one write per uploaded brick.
+func (m *GpuBufferManager) voxelBrickUploadBytes(brick *volume.Brick) uint64 {
+	bytes := brickUploadBytes(brick)
+	if m.voxelBufferMirrored(1) {
+		bytes += BrickRecordSize
+	}
+	if brick != nil && resolveBrickUploadMode(brick.Flags).usesAux && m.voxelBufferMirrored(2) {
+		bytes += VoxelAuxRecordBytes
+	}
+	return bytes
+}
+
 func voxelUploadOrder(obj *core.VoxelObject) uint64 {
 	if obj.VoxelUploadOrder != 0 {
 		return obj.VoxelUploadOrder
@@ -190,7 +203,11 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 		}
 		ptr, length := materialTableIdentity(obj.MaterialTable)
 		if mat.MaterialTablePtr != ptr || mat.MaterialTableLen != length || mat.BufferGeneration != m.MaterialBufferGeneration {
-			queue = append(queue, voxelUploadWork{kind: voxelUploadMaterial, object: obj, target: xbm, targetRevision: xbm.Revision, bytes: uint64(rows) * 64})
+			bytes := uint64(rows) * 64
+			if m.voxelBufferMirrored(3) {
+				bytes *= 2
+			}
+			queue = append(queue, voxelUploadWork{kind: voxelUploadMaterial, object: obj, target: xbm, targetRevision: xbm.Revision, bytes: bytes})
 		}
 	}
 	for _, xbm := range maps {
@@ -206,8 +223,11 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 				continue
 			}
 			bytes := uint64(32)
+			if m.voxelBufferMirrored(0) {
+				bytes *= 2
+			}
 			for i := 0; i < 64; i++ {
-				bytes += brickUploadBytes(sector.GetBrick(i%4, (i/4)%4, i/16))
+				bytes += m.voxelBrickUploadBytes(sector.GetBrick(i%4, (i/4)%4, i/16))
 			}
 			queue = append(queue, voxelUploadWork{kind: voxelUploadSector, object: obj, target: xbm, targetRevision: xbm.Revision, pendingGeneration: target.pendingGeneration, sectorKey: key, bytes: bytes, sectors: 1, bricks: 64})
 		}
@@ -221,7 +241,7 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 			if xbm.DirtySectors[sKey] {
 				continue
 			}
-			queue = append(queue, voxelUploadWork{kind: voxelUploadBrick, object: obj, target: xbm, targetRevision: xbm.Revision, pendingGeneration: target.pendingGeneration, brickKey: key, bytes: brickUploadBytes(sector.GetBrick(key[3], key[4], key[5])), bricks: 1})
+			queue = append(queue, voxelUploadWork{kind: voxelUploadBrick, object: obj, target: xbm, targetRevision: xbm.Revision, pendingGeneration: target.pendingGeneration, brickKey: key, bytes: m.voxelBrickUploadBytes(sector.GetBrick(key[3], key[4], key[5])), bricks: 1})
 		}
 	}
 	ages := make(map[voxelUploadIdentity]uint64, len(queue))

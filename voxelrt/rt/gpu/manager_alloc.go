@@ -158,7 +158,7 @@ func (m *GpuBufferManager) advanceRetiredBuffers() {
 						kept = append(kept, retired)
 						continue
 					}
-					retired.Buffer.Release()
+					retired.releaseBuffer()
 				}
 				continue
 			}
@@ -175,7 +175,7 @@ func (m *GpuBufferManager) advanceRetiredBuffers() {
 					kept = append(kept, retired)
 					continue
 				}
-				retired.Buffer.Release()
+				retired.releaseBuffer()
 			}
 			continue
 		}
@@ -185,6 +185,14 @@ func (m *GpuBufferManager) advanceRetiredBuffers() {
 		m.retiredBuffers[i] = retiredBuffer{}
 	}
 	m.retiredBuffers = kept
+}
+
+func (retired retiredBuffer) releaseBuffer() {
+	if retired.bufferRelease != nil {
+		retired.bufferRelease(retired.Buffer)
+	} else {
+		retired.Buffer.Release()
+	}
 }
 
 func (m *GpuBufferManager) bufferPinnedByRetiredBindGroup(buffer *wgpu.Buffer) bool {

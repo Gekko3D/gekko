@@ -482,6 +482,11 @@ type GpuBufferManager struct {
 	voxelUploadAges                map[voxelUploadIdentity]uint64
 	voxelAdmissionFrame            uint64
 	voxelAdmissionAges             map[voxelAdmissionIdentity]uint64
+	voxelNative                    voxelNativeBackend
+	voxelGPUWorkBudget             VoxelGPUWorkBudget
+	voxelGPUWorkStats              VoxelGPUWorkStats
+	voxelGrowth                    *voxelGPUStage
+	voxelWorkAdvanced              bool
 	voxelGPUAdmissionBudget        VoxelGPUAdmissionBudget
 	voxelGPUAdmissionStats         VoxelGPUAdmissionStats
 	voxelAdmissionMaps             map[*volume.XBrickMap]bool
@@ -548,6 +553,7 @@ type RetainedVoxelMapStats struct {
 type retiredBuffer struct {
 	Buffer          *wgpu.Buffer
 	VoxelBytes      uint64 // Only this manager's physical voxel resources.
+	bufferRelease   func(*wgpu.Buffer)
 	FramesLeft      int
 	Queue           *wgpu.Queue
 	SubmissionIndex wgpu.SubmissionIndex
