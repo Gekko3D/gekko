@@ -21,6 +21,13 @@ type runtimeCompiledAssetShape struct {
 
 func (v *runtimeCompiledAssetShape) runtimeContentDefinition() any { return v.Definition }
 
+type runtimeCompiledAssetLOD struct {
+	Definition *content.CompiledAssetLODDef
+	Info       voxelcodec.Info
+}
+
+func (v *runtimeCompiledAssetLOD) runtimeContentDefinition() any { return v.Definition }
+
 // LoadCompiledAssetHeader explicitly loads a bounded compiled header through the
 // shared decoded-content owner. It does not follow references or publish geometry.
 // Returned definitions are shared read-only within this owner and its scopes.
@@ -54,6 +61,26 @@ func (l *RuntimeContentLoader) LoadCompiledAssetShape(path string) (*content.Com
 			return nil, err
 		}
 		return &runtimeCompiledAssetShape{Definition: definition, Info: info}, nil
+	})
+	if err != nil {
+		return nil, voxelcodec.Info{}, err
+	}
+	return value.Definition, value.Info, nil
+}
+
+// LoadCompiledAssetLOD loads bounded derivative bricks through the shared
+// decoded-content owner. It does not follow source references or publish geometry.
+// Returned definitions are shared read-only within this owner and its scopes.
+func (l *RuntimeContentLoader) LoadCompiledAssetLOD(path string) (*content.CompiledAssetLODDef, voxelcodec.Info, error) {
+	if l == nil {
+		return content.LoadCompiledAssetLOD(path, nil)
+	}
+	value, err := loadRuntimeContent(l, "compiled-asset-lod", path, func(path string) (*runtimeCompiledAssetLOD, error) {
+		definition, info, err := content.LoadCompiledAssetLOD(path, l.owner.compiledAssetCodec)
+		if err != nil {
+			return nil, err
+		}
+		return &runtimeCompiledAssetLOD{Definition: definition, Info: info}, nil
 	})
 	if err != nil {
 		return nil, voxelcodec.Info{}, err

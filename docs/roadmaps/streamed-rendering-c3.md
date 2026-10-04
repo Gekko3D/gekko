@@ -8,7 +8,8 @@ worker integration, C3d4b NPC adaptation, C3d4c first-part level consumers and
 C3f4a private palette adoption, C3f4b worker palette integration and C3f4c
 publication accounting complete. C3h0 diagnostics and C3h1 conservative geometry
 construction, C3h2 source-bound derivative frames, C3h3 versioned headers and
-C3h4 compiler opt-in and C3h5 exact source validation complete. Opt-in,
+C3h4 compiler opt-in, C3h5 exact source validation and C3h6 scoped derivative
+reads complete. Opt-in,
 single-material opaque LOD is approved; compiler
 source-kind adapters and production LOD integration remain separate work.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
@@ -369,3 +370,11 @@ authenticated decoded source, using occupied-bit passes and temporary brick
 indexes. [Contract](../assets/runtime-assets.md#compiled-lod-source-validation).
 Derivative loading, current runtime source/material qualification and renderer
 interaction/readiness ownership remain separate work.
+
+## Scoped derivative reads (C3h6)
+
+Added explicit typed LOD reads through existing `RuntimeContentLoader` ownership,
+with shared read-only definitions, coarse-only graph charges and independent typed
+keys. [Contract](../assets/runtime-assets.md#decoded-content-lifetime).
+Reads do not follow references or publish geometry. Preparation source checks,
+current source/material qualification and renderer handoff remain pending.

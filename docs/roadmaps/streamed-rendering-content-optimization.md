@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-04. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h5 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-04. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h6 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -831,7 +831,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | C3h2 | `1976467` | Separate source-bound typed LOD frames with unchanged legacy formats and defaults | [Frame contract](../content/compiled-voxels.md#compiled-ordinary-asset-lod-frames) |
 | C3h3 | `7117e74` | Explicit schema-2 optional source-bound LOD references; unchanged schema-1 bytes and defaults | [Header contract](../content/compiled-voxels.md#compiled-ordinary-asset-headers) |
 | C3h4 | `a62ea2e` | Explicit compiler/CLI LOD opt-in with per-part opaque qualification and unchanged defaults | [Compiler contract](../content/compiled-voxels.md#ordinary-asset-compiler-emission) |
-| C3h5 | This commit | Exact original-source/derivative validation without reduction rebuild or persistent ownership | [Source contract](../assets/runtime-assets.md#compiled-lod-source-validation) |
+| C3h5 | `e620185` | Exact original-source/derivative validation without reduction rebuild or persistent ownership | [Source contract](../assets/runtime-assets.md#compiled-lod-source-validation) |
+| C3h6 | This commit | Explicit scoped LOD reads through existing decoded ownership and typed cache keys | [Decoded ownership](../assets/runtime-assets.md#decoded-content-lifetime) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -3009,6 +3010,29 @@ Verification:
 ```sh
 env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(C3h5|C3h4|C3h1)' -count=1 -timeout=60s
 env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(C3h5|C3h4|C3h1)' -count=1 -timeout=60s
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Focused/race checks, committed engine tests and five consumer build commands
+listed in C3f4b passed. Earlier C3g1 RED tests remain preserved outside the package
+through verification and are restored afterward. No GPU behavior changes; rendered
+LOD quality and performance remain unverified. Existing tests and unrelated
+changes are preserved.
+
+
+### C3h6: Scoped compiled LOD reads
+
+Added typed derivative reads through the existing shared decoded owner, without
+reference following or runtime geometry publication.
+[Contract](../assets/runtime-assets.md#decoded-content-lifetime).
+Preparation source checks, current source/material qualification and renderer
+interaction/readiness ownership remain pending.
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(C3h6|C3h5|C3d1)' -count=1 -timeout=60s
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(C3h6|C3h5|C3d1)' -count=1 -timeout=60s
 env GOCACHE=/tmp/gekko3d-gocache go test ./...
 ```
 

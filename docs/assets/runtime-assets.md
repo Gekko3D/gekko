@@ -458,7 +458,7 @@ comparison, spawning and publication remain within the atomic placement unit.
 
 ## Decoded Content Lifetime
 
-`RuntimeContentLoader` bounds warm decoded definitions across all eight content
+`RuntimeContentLoader` bounds warm decoded definitions across all supported content
 kinds with one byte LRU and per-path concurrent decode suppression. Its charge
 estimates decoded structs and referenced storage at admission. Raw `Load*`
 pointers remain usable after eviction; arbitrary external borrowers and later
@@ -498,11 +498,17 @@ embedded layer creates no separate sidecar cache entry. See
 [compiled frames](../content/compiled-voxels.md#imported-embedded-normals).
 
 `RuntimeContentLoaderOptions.CompiledAssetCodec` separately fixes the borrowed
-profile for explicit compiled ordinary headers and shapes. `LoadCompiledAssetHeader`
-and `LoadCompiledAssetShape` return shared immutable definitions and frame `Info`
+profile for explicit compiled ordinary headers, shapes and LOD derivatives.
+`LoadCompiledAssetHeader`, `LoadCompiledAssetShape` and `LoadCompiledAssetLOD`
+return shared immutable definitions and frame `Info`
 by value. They use the same scoped cache, singleflight, decoded storage charge
 and eviction rules. Shapes retain owned canonical bricks without voxel-record
-expansion. Header loading does not follow references or register geometry.
+expansion. Derivatives retain only actual coarse bricks and source metadata,
+without expanding the source count into geometry. Typed kinds have separate keys
+even at the same path. Header/derivative loading does not follow references or
+register geometry. Derivative reads prove frame structure only;
+[exact source validation](#compiled-lod-source-validation) and current runtime
+source/material qualification remain separate boundaries.
 Rejected definitions release their scope lease through the existing ownership
 boundary; other scopes remain protected. Nil loaders use direct bounded default
 IO. Failure returns nil data and zero `Info`, without a retained cache entry.
