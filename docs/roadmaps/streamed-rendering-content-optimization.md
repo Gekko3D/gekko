@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-03. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3b complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -810,7 +810,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | E2c1 | `26b0da9` | Opt-in hybrid content payloads with retained legacy/schema-2 compatibility | [Payload contract](../content/compiled-voxels.md#ordinary-voxel-object-override-payloads) |
 | E2c2 | `2c0fdf8` | Maintained changed-brick inventory and bounded primary/assignment visitors | [Managed contract](../renderer/editing.md#managed-voxel-ownership) |
 | E2c3 | `c5ef5dd` | Opt-in adaptive hybrid S4 capture and original-base reload/restoration | [Persistence contract](../content/streaming-and-worlds.md#ordinary-object-override-persistence) |
-| C3a | This commit | Canonical compiled shape frames with unchanged authored-base identity | [Shape-frame contract](../content/compiled-voxels.md#compiled-ordinary-asset-shape-frames) |
+| C3a | `19e255a` | Canonical compiled shape frames with unchanged authored-base identity | [Shape-frame contract](../content/compiled-voxels.md#compiled-ordinary-asset-shape-frames) |
+| C3b | This commit | Bounded compiled asset headers preserving metadata and explicit shape references | [Header contract](../content/compiled-voxels.md#compiled-ordinary-asset-headers) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -2531,6 +2532,27 @@ Engine sweep and the five consumer commands above passed. Three baseline runs
 measure real authored loading/preparation/spawning, not compiled savings. No GPU
 or runtime loading behavior changed; no visual or FPS claim. Existing tests and
 unrelated changes are preserved.
+
+### C3b: Compiled ordinary asset headers
+
+This commit adds bounded C1 headers with owned canonical metadata and explicit
+part-frame references. Hierarchy, palettes, pivots, skeleton and animation
+references remain intact. Unsupported source kinds and static collapse fail
+explicitly. Header validation does not load dependencies or publish geometry;
+compiler emission and runtime adoption follow. Contracts: [compiled headers](../content/compiled-voxels.md#compiled-ordinary-asset-headers).
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./content/... -run '^TestC3b' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./content/... -run '^Test(C3|E2|C1)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./content/... -run '^TestC3b' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Engine sweep and five consumer commands above passed. No runtime or GPU behavior
+changed; compiled loading gains remain unmeasured. Existing tests and unrelated
+working-tree changes are preserved.
 
 Existing tests preserved. macOS linker/module stat-cache warnings exited successfully. Notification-only changes needed no new windowed smoke/engine sweep. Unrelated editor/sample baselines not rerun; see S3c/S3d. Publication/compilation verified; incomplete producers still require live extraction.
 

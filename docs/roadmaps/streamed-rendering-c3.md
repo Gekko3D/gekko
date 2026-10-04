@@ -1,7 +1,7 @@
 # C3: Compiled ordinary assets
 
-Status: approved direction; C3a shape-frame compatibility complete. Full asset
-headers, compiler emission and runtime adoption follow separately.
+Status: approved direction; C3a shape frames and C3b asset headers complete.
+Compiler emission and runtime adoption follow separately.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
 
 ## Authority and ownership
@@ -44,9 +44,13 @@ It accepts canonical nonzero primary geometry and lattice, preserves the existin
 It avoids expanding decoded geometry into per-voxel records. Canonical contracts
 belong in [compiled content](../content/compiled-voxels.md).
 
-Next define the exact bounded asset header/reference contract and compiler
-version, then emit eligible assets through the existing geometry construction
-path. Runtime integration follows through existing loader/registration owners,
+C3b defines a bounded empty-brick C1 header with typed metadata and independent
+shape references. This avoids a new regional pack or TOC. It preserves external
+animation/texture references as dependencies, without loading them. Compiler
+emission must rebase or copy those dependencies coherently before standalone
+shipping is claimed. Emit eligible geometry through the existing construction
+path after the header contract is established. Runtime integration follows
+through existing loader/registration owners,
 with the canonical-base boundary above. Verify source parity, material/pivot and
 hierarchy preservation, malformed content, scoped sharing, edit isolation and
 save/evict/reload before claiming runtime loading gains. Separate tests and

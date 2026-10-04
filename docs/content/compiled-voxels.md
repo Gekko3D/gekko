@@ -307,3 +307,45 @@ These APIs establish the part-frame format only. They do not select compiled
 assets, construct runtime geometry or change authoring/editor loading. Asset
 headers, compiler emission and runtime canonical-base access follow the
 [C3 ownership design](../roadmaps/streamed-rendering-c3.md).
+
+## Compiled ordinary asset headers
+
+`CompiledAssetHeaderDef` is an empty-brick C1 document of kind
+`compiled_asset_header`, explicit schema 1 and compiler version
+`gekko-compiled-asset-v1`. Typed metadata contains `schema_version`,
+`compiler_version`, `asset` and optional `shapes`, in that order. It has no
+normal bake version. The asset metadata retains schema 4, ordered parts,
+hierarchy/transforms/pivots, palettes/materials, skeleton/animation references,
+lights, emitters and markers. Inline voxel arrays must be empty; group parts
+must not carry a voxel-shape payload. Other source kinds and static collapse
+are unsupported in this version.
+
+Asset, item, skeleton bone and joint IDs are explicit nonblank UTF-8. Existing authored validation
+applies without source-file I/O or normalization. Inline parts require explicit
+finite positive ModelScale and voxel resolution. At most 4,096 asset parts and
+shape references are accepted. C1 metadata/body limits independently bound the
+header. External animation and texture references remain shipping dependencies;
+header loading neither reads nor resolves them.
+
+Each inline part has exactly one `CompiledAssetShapeRefDef`; groups have none.
+References contain `part_id`, `path`, `content_id`, `base_identity`,
+`encoded_bytes` and `decoded_bytes`. Paths are canonical relative slash paths,
+without parent traversal, backslashes, colons, NUL or invalid UTF-8. Hashes are
+64 lowercase hexadecimal characters. Encoded size is at least 96 bytes; decoded
+size is positive. Both obey the borrowed codec's corresponding byte ceilings.
+Multiple parts may reference one path only with identical hashes and sizes.
+Encoding sorts an owned reference-list copy by part ID, preserving asset part
+order and caller metadata. Decoding requires byte-canonical typed JSON and owns
+all nested data. No runtime geometry is published by these APIs.
+
+`EncodeCompiledAssetHeader`, `DecodeCompiledAssetHeader`,
+`SaveCompiledAssetHeader` and `LoadCompiledAssetHeader` retain C3a borrowed-codec,
+atomic replacement, bounded frame read and zero-result failure rules. Header
+validation proves reference structure only. Compiler/runtime adoption must
+verify each referenced frame's identity and sizes, lattice and existing base
+projection before publishing geometry. A header alone cannot prove those links.
+
+The header and independent shape frames avoid a new regional pack/index format.
+Explicit runtime selection and coherent dependency emission follow the
+[C3 design](../roadmaps/streamed-rendering-c3.md); existing authoring readers are
+unchanged.
