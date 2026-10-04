@@ -308,6 +308,33 @@ assets, construct runtime geometry or change authoring/editor loading. Asset
 headers, compiler emission and runtime canonical-base access follow the
 [C3 ownership design](../roadmaps/streamed-rendering-c3.md).
 
+## Compiled ordinary model frames
+
+`CompiledAssetModelDef` is a separate canonical post-scale primary geometry
+section for source-model adapters. Schema 1 uses C1 kind `compiled_asset_model`;
+byte-canonical metadata contains `schema_version`, `lattice`, then `dimensions`
+(an explicit three-element uint32 array). Model identity includes declared
+dimensions; `CompiledAssetModelBaseIdentity` projects only primary geometry and
+lattice into the existing `voxel_object_base` domain. This projection does not
+qualify a new source kind for managed edits.
+
+Dimensions are source metadata, not occupied bounds or allocation sizes. Zero,
+mixed-zero and full uint32 dimensions are valid, and occupied geometry may lie
+outside them. Later runtime adoption must preserve declared model dimensions and
+existing all-zero-dimension occupied-bounds fallback. Portable signed brick
+coordinates, primary-only layers, lattice validation, owned decoding, canonical
+ordering and codec limits match the shape-frame contract. Encode/decode/save/load
+APIs borrow explicit codecs and return zero results on failure; save uses atomic
+replacement and load uses bounded frame reads without authoring fallback.
+
+This frame does not preserve raw sample order, duplicates or zero-color rows.
+Legacy VOX/procedural APIs retain their raw-model contracts. Future compiler
+adapters must bake surface/material tables from original inputs before primary
+canonicalization. Compiled-model collapse remains unsupported: any future offline
+collapse must consume original ordered sources before canonicalization. Existing
+shape/header schemas, bytes and APIs are unchanged. Header references, compiler
+emission and runtime adoption are separate dependent batches.
+
 ## Conservative asset LOD geometry construction
 
 The private compiler builder constructs a separate in-memory 2× derivative from

@@ -14,7 +14,7 @@ representation boundary, C3h9 renderer consumer migration and C3h10 full-detail
 upload staging, C3h11 pure qualification guards and C3h12a owned derivative
 packets/accounting, C3h12b ordinary derivative adoption and C3h13a explicit
 instance intent, C3h13b instance qualification, C3h13c runtime activation and
-C3g1 pure primitive extraction complete. Opt-in,
+C3g1 pure primitive extraction and C3g2 canonical model frames complete. Opt-in,
 single-material opaque LOD is approved; compiler
 source-kind adapters remain separate work; mixed-material/transparency reduction stays conditional.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
@@ -525,3 +525,13 @@ owns those invariants. Fourteen frozen baseline models cover fractional and zero
 inputs, including capsule axis and ramp nil geometry. Focused tests, full engine
 tests and five consumer builds passed. This is an offline adapter prerequisite;
 no loading or rendering speed gain is claimed.
+
+## Canonical model frames (C3g2)
+
+A separate typed C1 model frame binds declared dimensions to canonical primary
+geometry without changing existing shape/header formats. The
+[model-frame contract](../content/compiled-voxels.md#compiled-ordinary-model-frames)
+keeps raw history and runtime collapse outside this compact boundary. Focused and
+race content tests, full engine tests and five consumer builds passed. This
+format prerequisite has no runtime performance claim; compiler/header/adoption
+batches remain next.
