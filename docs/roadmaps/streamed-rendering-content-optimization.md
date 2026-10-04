@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-04. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h7 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-04. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h8 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -833,7 +833,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | C3h4 | `a62ea2e` | Explicit compiler/CLI LOD opt-in with per-part opaque qualification and unchanged defaults | [Compiler contract](../content/compiled-voxels.md#ordinary-asset-compiler-emission) |
 | C3h5 | `e620185` | Exact original-source/derivative validation without reduction rebuild or persistent ownership | [Source contract](../assets/runtime-assets.md#compiled-lod-source-validation) |
 | C3h6 | `1e4734f` | Explicit scoped LOD reads through existing decoded ownership and typed cache keys | [Decoded ownership](../assets/runtime-assets.md#decoded-content-lifetime) |
-| C3h7 | This commit | Complete declared derivative verification before runtime publication | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
+| C3h7 | `ec0270d` | Complete declared derivative verification before runtime publication | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
+| C3h8 | This commit | Separate core render representation while preserving level-0 CPU authority | [Renderer contract](../renderer/runtime.md#authoritative-geometry-and-render-representations) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -3067,6 +3068,32 @@ listed in C3f4b passed. Earlier C3g1 RED tests remain preserved outside the pack
 through verification and are restored afterward. No GPU behavior changes; rendered
 LOD quality and performance remain unverified. Existing tests and unrelated
 changes are preserved.
+
+
+
+### C3h8: Core render representation boundary
+
+Added unwired optional render geometry with exact legacy defaults, signed 2×
+matrices, independent coarse bounds and fail-closed tracked invalidation. CPU
+scene geometry and queries retain level-0 authority.
+[Contract](../renderer/runtime.md#authoritative-geometry-and-render-representations).
+User authorized recommended decisions autonomously; cold invalidation briefly
+hides until full upload is ready. GPU consumers and runtime activation follow.
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/core -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/core -run '^TestC3h8' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+```
+
+Focused/race checks and committed engine tests passed. Consumer checks passed:
+`go build ./...` in `gekko-editor`, and `go test ./... -run '^$'` in `actiongame`,
+`spacegame_go`, `spacesim` and `examples/testing-vox`, all with the temporary Go
+cache above. Earlier C3g1 RED tests are preserved outside the package during
+verification and restored afterward. No GPU behavior changes; visual LOD quality
+and performance remain unverified. Existing tests and unrelated changes remain.
 
 
 Existing tests preserved. macOS linker/module stat-cache warnings exited successfully. Notification-only changes needed no new windowed smoke/engine sweep. Unrelated editor/sample baselines not rerun; see S3c/S3d. Publication/compilation verified; incomplete producers still require live extraction.

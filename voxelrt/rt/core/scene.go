@@ -93,6 +93,7 @@ type VoxelObject struct {
 	PlanetTileY              int
 	worldAABBMap             *volume.XBrickMap
 	worldAABBMapRevision     uint64
+	renderRepresentation     *voxelRenderRepresentation
 }
 
 func (obj *VoxelObject) HasTransparency() bool {

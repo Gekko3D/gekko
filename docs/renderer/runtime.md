@@ -666,6 +666,40 @@ derivative frames and explicit compiler opt-in are available; runtime integratio
 remains pending. See the
 [C3 LOD diagnostic and gates](../roadmaps/streamed-rendering-c3.md#asset-lod-diagnostic-c3h0).
 
+### Authoritative geometry and render representations
+
+`VoxelObject.XBrickMap`, `Transform` and `WorldAABB` remain level-0 CPU
+interaction authority. A private optional representation provides
+`RenderVoxelMap`, `RenderObjectToWorld`, `RenderWorldToObject` and
+`RenderWorldBounds`. With no selection, these preserve exact legacy values and
+the existing bounds pointer. Scene object identity and CPU queries do not change.
+
+`SetRenderLOD2` borrows a nonempty, separate coarse map and captures both source
+and coarse map identities/revisions. Its zero-anchored transform is
+`fullObjectToWorld × Scale(2)`; the inverse is `Scale(.5) × fullWorldToObject`.
+Bounds transform all eight corners of the actual occupied coarse bounds. They
+follow current instance transforms, including pointer replacement, without
+changing the authoritative pivot, bounds or dirty flags. Only the coarse map's
+existing AABB cache may refresh.
+
+Tracked geometry changes or loss of the authoritative transform invalidate an
+active representation: render map/bounds become nil until the owner makes an
+explicit transition. `ClearRenderRepresentation` releases representation
+references and restores the legacy path. Rejected setters also clear selection;
+neither operation certifies full geometry readiness. The bridge must check the
+setter result and apply visibility/readiness policy before GPU extraction.
+
+Revision guards do not prove raw mutable aliases, original C1 provenance,
+current material opacity or upload readiness. Those qualifications remain with
+the bridge and existing upload/streaming owners. The approved cold fallback is
+to briefly hide an invalid coarse representation until full geometry is ready;
+CPU interaction authority remains resident. Ordinary updates to an already
+initialized full representation retain the existing dirty-upload behavior.
+
+These accessors are a permanent separation boundary, currently unwired.
+GPU consumers, culling and target readiness migrate before LOD activation;
+no helper scene objects or parallel residency service are introduced.
+
 ### Streamed voxel residency
 
 Ordinary `VoxelRenderHiddenComponent` entities leave renderer residency. Adding
