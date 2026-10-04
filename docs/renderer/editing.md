@@ -172,6 +172,45 @@ copying/indexing cost; structural edits allocate logarithmic index paths. Retain
 views can retain historical paths. This API establishes no renderer admission,
 memory or elapsed-time ceiling.
 
+### Managed geometry views
+
+`ManagedXBrickMap.CaptureGeometry()` returns a read-only historical
+`ManagedGeometryView` and availability. Nil, exposed and unqualified owners
+return an empty view and false. Qualified empty owners return an empty view and
+true. `Len()` and `Coord(index)` use the topology view's signed order and invalid
+index rules. `CopySector(index)` returns an independent mutable sector copy, or
+nil and false for an invalid index. Copies preserve header coordinates, masks,
+packed ordering, primary bytes, occupancy, flags, atlas offsets and auxiliary
+bytes without normalization.
+
+Construction eagerly qualifies copied current geometry: packed cardinality must
+equal mask population and be at most 64; each brick's auxiliary length must be
+at most `volume.VoxelAuxRecordBytes`; zero-length auxiliary slices must have zero
+capacity. Nonnil empty slices remain nonnil. Original base-only geometry does not
+affect qualification. Unsupported copyable inputs permanently use the existing
+snapshot path; sealed forks inherit ineligibility. Exposed forks construct a
+fresh owner and may qualify. Existing constructor behavior for malformed input
+is unchanged; topology capture remains independently available.
+
+Capture is constant time and allocates nothing. It clears exclusive brick
+ownership so subsequent target and normal-halo edits detach captured backing.
+Captured scalar records never borrow mutable sector headers. Earlier views stay
+readable after edits, removals, forks, exposure or owner collection, including
+while independent owners edit concurrently. Length and coordinate reads allocate
+nothing; indexed reads are logarithmic. Each sector copy visits at most 64 bricks
+and copies at most the declared auxiliary bytes per brick. Owner operations
+require exclusive access; capture during an ordered producer is unsupported.
+Material finalization and applied panic prefixes complete before new captures.
+
+Qualified `Snapshot` and `CopyChangedSectors` copy the same private records in a
+linear traversal under exclusive access. Synchronous defensive copying does not
+establish an extra capture barrier. Their identities, bounds, revision tombstones,
+GPU reset, dirty state and previous-sector sharing retain existing semantics.
+Raw and unqualified owners keep exact legacy copying. These operations remain
+atomic. Geometry views freeze no map metadata or GPU assignments. Construction,
+retained historical records, slice capacities and renderer integration establish
+no total-memory or elapsed-time ceiling.
+
 ### Ordinary managed runtime geometry
 
 `AssetServer.RegisterManagedVoxelGeometry(source, sourcePath)` defensively seals

@@ -688,7 +688,7 @@ confirm retained visible/fallback coverage and coherent final publication.
 
 ### S1l1: Managed topology frontier
 
-Completed 2026-10-04 in this entry's implementation commit. The first ownership
+Completed 2026-10-04 in `edea1e6`. The first ownership
 prerequisite adds an immutable coordinate index to sealed managed geometry.
 Historical views support resumable enumeration without an initial key-list copy.
 The lasting API and limits are in
@@ -706,6 +706,30 @@ Engine and consumer verification is recorded in the main roadmap. No visual
 check is needed for this coordinate-only owner API. Construction and existing
 authority/renderer copying remain atomic. Payload-qualified ownership and
 producer integration must precede bounded allocation and lookup publication.
+
+### S1l2: Sealed geometry capture
+
+Completed 2026-10-04 in this entry's implementation commit. Qualified managed
+geometry now captures frozen sectors without copying the whole map. Existing
+authority snapshots use the same private records while preserving synchronous
+publication and exact legacy fallback. The lasting API and limits are in
+[managed geometry views](../renderer/editing.md#managed-geometry-views).
+
+From `gekko/`, focused, volume and ownership race checks passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume -run '^TestS1l' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/volume -run '^(TestS1l|TestP1c|TestP1e)' -count=1
+```
+
+A transient `testing.AllocsPerRun(100, ...)` probe measured zero allocations for
+warmed repeated tracked paint with an occupied negative halo at 2 and 1,025
+sectors. Unchanged scalar/reference records reuse their index paths. Engine and
+consumer verification is recorded in the main roadmap. No native behavior
+changed; no visual or frame-time claim. Full snapshot metadata, producer
+integration, retained-generation accounting, slot ownership and GPU structural
+publication remain separate work.
 
 ## Verification and execution record
 

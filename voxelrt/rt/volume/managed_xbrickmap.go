@@ -22,7 +22,9 @@ type ManagedXBrickMap struct {
 	// Public SectorRevisions continue to describe dense voxel writes only.
 	publicationRevisions map[[3]int]uint64
 	// Immutable coordinate-only membership, shared by captures and sealed forks.
-	topology *managedTopologyNode
+	topology          *managedTopologyNode
+	geometry          *managedIndexNode[*managedSectorRecord]
+	geometryQualified bool
 	// Only these brick pointers are exclusively owned. Fork clears this set
 	// because every current brick becomes shared, including previous edits.
 	exclusive map[*Brick]struct{}
@@ -41,6 +43,7 @@ func NewManagedXBrickMap(source *XBrickMap) *ManagedXBrickMap {
 	owner := &ManagedXBrickMap{current: shareManagedMap(base), base: base}
 	owner.seedGeometryCounts()
 	owner.seedTopology()
+	owner.seedGeometryRecords()
 	return owner
 }
 
@@ -101,6 +104,7 @@ func NewManagedXBrickMapWithBase(base, current *XBrickMap) *ManagedXBrickMap {
 	}
 	owner.seedGeometryCounts()
 	owner.seedTopology()
+	owner.seedGeometryRecords()
 	return owner
 }
 
@@ -271,7 +275,7 @@ func (m *ManagedXBrickMap) ApplyVoxelWrites(writes iter.Seq[VoxelWrite]) {
 		return
 	}
 	var batch voxelEditBatch
-	defer batch.finish(m.current)
+	defer m.finishManagedBatch(&batch)
 	for w := range writes {
 		m.setVoxel(w, &batch)
 	}
@@ -325,6 +329,7 @@ func (m *ManagedXBrickMap) setVoxel(w VoxelWrite, batch *voxelEditBatch) {
 		m.setBrickGeometryCount(bKey, count)
 		m.trackManagedAssignment([3]int{w.X, w.Y, w.Z}, actual)
 	}
+	m.refreshGeometryHalo(w)
 }
 
 func (m *ManagedXBrickMap) markPublicationHalo(w VoxelWrite) {
@@ -360,6 +365,15 @@ func (m *ManagedXBrickMap) detachBrick(sector *Sector, index int) {
 }
 
 func (m *ManagedXBrickMap) detachVoxelHalo(x, y, z int) {
+	// Always protect the target, including integer-edge coordinates where the
+	// existing fitted-halo arithmetic can wrap before enumerating neighbors.
+	sKey, key := sectorBrickKeyForVoxel(x, y, z)
+	if sector := m.current.Sectors[sKey]; sector != nil {
+		flat := key[3] + key[4]*SectorBricks + key[5]*SectorBricks*SectorBricks
+		if sector.BrickMask64&(uint64(1)<<flat) != 0 {
+			m.detachBrick(sector, sector.GetPackedIndex(flat))
+		}
+	}
 	_, minKey := sectorBrickKeyForVoxel(x-VoxelNormalExtendedSurfaceFitRadius, y-VoxelNormalExtendedSurfaceFitRadius, z-VoxelNormalExtendedSurfaceFitRadius)
 	_, maxKey := sectorBrickKeyForVoxel(x+VoxelNormalExtendedSurfaceFitRadius, y+VoxelNormalExtendedSurfaceFitRadius, z+VoxelNormalExtendedSurfaceFitRadius)
 	for bx := minKey[0]*SectorBricks + minKey[3]; bx <= maxKey[0]*SectorBricks+maxKey[3]; bx++ {
@@ -391,6 +405,8 @@ func (m *ManagedXBrickMap) Fork() *ManagedXBrickMap {
 		changedBrickCounts:   maps.Clone(m.changedBrickCounts),
 		publicationRevisions: maps.Clone(m.publicationRevisions),
 		topology:             m.topology,
+		geometry:             m.geometry,
+		geometryQualified:    m.geometryQualified,
 		brickVoxelCounts:     maps.Clone(m.brickVoxelCounts),
 		staleSolid:           maps.Clone(m.staleSolid),
 		currentBricks:        m.currentBricks, currentVoxels: m.currentVoxels,
@@ -402,6 +418,9 @@ func (m *ManagedXBrickMap) Fork() *ManagedXBrickMap {
 // Snapshot returns an independent ordinary map with the existing Copy contract,
 // including fresh identity, preserved CPU data and reset GPU editing state.
 func (m *ManagedXBrickMap) Snapshot() *XBrickMap {
+	if m.geometryQualified {
+		return m.copyGeometrySnapshot()
+	}
 	return m.current.Copy()
 }
 
@@ -414,17 +433,28 @@ func (m *ManagedXBrickMap) Snapshot() *XBrickMap {
 // copy fully because supported raw writes can bypass revision notifications.
 func (m *ManagedXBrickMap) CopyChangedSectors(previous *XBrickMap, sinceRevision uint64) *XBrickMap {
 	if previous == nil || m.base == nil {
-		result := m.current.Copy()
+		result := m.Snapshot()
 		result.ClearDirty()
 		return result
 	}
 	result := NewXBrickMap()
-	for key, sector := range m.current.Sectors {
-		prior := previous.Sectors[key]
-		if prior != nil && m.publicationRevisions[key] <= sinceRevision {
-			result.Sectors[key] = prior
-		} else {
-			result.Sectors[key] = sector.Copy()
+	if m.geometryQualified {
+		walkManagedIndex(m.geometry, func(key [3]int, record *managedSectorRecord) {
+			prior := previous.Sectors[key]
+			if prior != nil && m.publicationRevisions[key] <= sinceRevision {
+				result.Sectors[key] = prior
+			} else {
+				result.Sectors[key] = record.copySector()
+			}
+		})
+	} else {
+		for key, sector := range m.current.Sectors {
+			prior := previous.Sectors[key]
+			if prior != nil && m.publicationRevisions[key] <= sinceRevision {
+				result.Sectors[key] = prior
+			} else {
+				result.Sectors[key] = sector.Copy()
+			}
 		}
 	}
 	result.CachedMin, result.CachedMax = m.current.CachedMin, m.current.CachedMax
@@ -452,6 +482,8 @@ func (m *ManagedXBrickMap) ExposeMutable() *XBrickMap {
 		m.currentBricks, m.currentVoxels = 0, 0
 		m.publicationRevisions = nil
 		m.topology = nil
+		m.geometry = nil
+		m.geometryQualified = false
 		m.exclusive = nil
 	}
 	return m.current
