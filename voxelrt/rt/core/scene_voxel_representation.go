@@ -17,6 +17,7 @@ type voxelRenderRepresentation struct {
 	boundsMatrix                   mgl32.Mat4
 	boundsMin, boundsMax           mgl32.Vec3
 	boundsValid                    bool
+	pendingFullGeneration          uint64
 }
 
 // SetRenderLOD2 selects a zero-anchored 2x display map without changing the

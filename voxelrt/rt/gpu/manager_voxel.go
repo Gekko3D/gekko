@@ -68,11 +68,12 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 	activeMaps := make(map[*volume.XBrickMap]bool)
 	activeObjects := make(map[*core.VoxelObject]bool)
 	for _, obj := range scene.Objects {
-		if obj == nil {
-			continue
+		if obj != nil {
+			activeObjects[obj] = true
 		}
-		activeObjects[obj] = true
-		activeMaps[obj.RenderVoxelMap()] = true
+	}
+	for _, target := range voxelServiceTargets(scene) {
+		activeMaps[target.mapRef] = true
 	}
 	m.evictRetainedVoxelMaps(activeMaps)
 	for xbm, alloc := range m.Allocations {
@@ -146,11 +147,8 @@ func (m *GpuBufferManager) voxelAllocationRequirements(scene *core.Scene) (requi
 	var newSectors uint32
 	seenMaps := make(map[*volume.XBrickMap]bool)
 	seenSectors := make(map[*volume.Sector]bool)
-	for _, obj := range scene.Objects {
-		if obj == nil || obj.RenderVoxelMap() == nil {
-			continue
-		}
-		xbm := obj.RenderVoxelMap()
+	for _, target := range voxelServiceTargets(scene) {
+		xbm := target.mapRef
 		alloc, exists := m.Allocations[xbm]
 		if exists && !xbm.StructureDirty {
 			continue
@@ -190,11 +188,11 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 		m.BrickToAuxSlot = make(map[*volume.Brick]uint32)
 	}
 	seenMaps := make(map[*volume.XBrickMap]bool)
-	for _, obj := range scene.Objects {
-		if obj == nil || obj.RenderVoxelMap() == nil || seenMaps[obj.RenderVoxelMap()] {
+	for _, target := range voxelServiceTargets(scene) {
+		if seenMaps[target.mapRef] {
 			continue
 		}
-		xbm := obj.RenderVoxelMap()
+		xbm := target.mapRef
 		seenMaps[xbm] = true
 		alloc, exists := m.Allocations[xbm]
 		if !exists {
@@ -522,7 +520,7 @@ func (m *GpuBufferManager) writeSectorRecord(sector *volume.Sector, info SectorG
 	mustQueueVoxelWrite(m.Device.GetQueue().WriteBuffer(m.SectorTableBuf, uint64(info.SlotIndex)*32, sData))
 }
 
-func (m *GpuBufferManager) uploadBrick(context func() voxelNormalBakeContext, obj *core.VoxelObject, brick *volume.Brick, slotIdx uint32, brickOrigin [3]int) {
+func (m *GpuBufferManager) uploadBrick(context func() voxelNormalBakeContext, obj *core.VoxelObject, target *volume.XBrickMap, brick *volume.Brick, slotIdx uint32, brickOrigin [3]int) {
 	if brick == nil {
 		return
 	}
@@ -597,7 +595,11 @@ func (m *GpuBufferManager) uploadBrick(context func() voxelNormalBakeContext, ob
 			auxBytes = brick.PrecomputedAux
 		} else {
 			start := time.Now()
-			auxBytes = buildVoxelAuxBytesWithContext(context, obj, brick, brickOrigin)
+			if target == obj.RenderVoxelMap() {
+				auxBytes = buildVoxelAuxBytesWithContext(context, obj, brick, brickOrigin)
+			} else {
+				auxBytes = buildVoxelAuxBytesForTarget(voxelNormalBakeContext{}, obj, target, brick, brickOrigin)
+			}
 			m.VoxelRuntimeNormalBakeDuration += time.Since(start)
 		}
 		mustQueueVoxelWrite(m.Device.GetQueue().WriteBuffer(m.DenseOccupancyBuf, uint64(auxSlot)*VoxelAuxRecordBytes, auxBytes))

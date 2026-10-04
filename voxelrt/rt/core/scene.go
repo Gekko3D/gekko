@@ -94,6 +94,9 @@ type VoxelObject struct {
 	worldAABBMap             *volume.XBrickMap
 	worldAABBMapRevision     uint64
 	renderRepresentation     *voxelRenderRepresentation
+
+	// Monotonic request identity survives representation replacement.
+	pendingFullUploadGeneration uint64
 }
 
 func (obj *VoxelObject) HasTransparency() bool {

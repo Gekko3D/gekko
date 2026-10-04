@@ -35,7 +35,7 @@ func (m *GpuBufferManager) executeVoxelUpload(context func() voxelNormalBakeCont
 		if brick == nil {
 			mustQueueVoxelWrite(m.Device.GetQueue().WriteBuffer(m.BrickTableBuf, uint64(info.BrickTableIndex+uint32(i))*BrickRecordSize, make([]byte, BrickRecordSize)))
 		} else {
-			m.uploadBrick(context, work.object, brick, info.BrickTableIndex+uint32(i), brickOriginForSectorIndex(key, i))
+			m.uploadBrick(context, work.object, xbm, brick, info.BrickTableIndex+uint32(i), brickOriginForSectorIndex(key, i))
 		}
 	}
 	return true

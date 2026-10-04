@@ -394,8 +394,9 @@ snapshots rather than current CPU contents or flags; uniform bricks without a
 payload slot pay no payload charge. Empty/unallocated entries still pay metadata.
 Distinct maps sharing nested sector/brick pointers gain no new ownership guarantee.
 
-Complete updates pin every selected render map in `Scene.Objects`, including
-hidden uploads, and refresh active LRU age without counting hits. Authoritative
+Complete updates pin every selected render map and valid pending full upload in
+`Scene.Objects`, including hidden uploads, and refresh active LRU age without
+counting hits. Authoritative
 CPU geometry does not require GPU allocation when a separate representation is
 selected. Trim runs before
 orphan cleanup and after uploads. Either enabled cap can evict inactive LRU maps
@@ -711,15 +712,38 @@ reuse stale lookup data. Invalid selections emit no GPU records or upload work.
 
 Queued uploads capture selected map identity and revision. Obsolete work cannot
 retarget authoritative geometry or acknowledge newer dirty queues; successful
-writes still consume their budget. Source dirty queues remain untouched while
-coarse geometry is selected. `RenderVoxelObjectReady` checks the exact selected
+writes still consume their budget. Source dirty queues remain untouched during
+coarse-only display; an explicit full staging request permits its uploads without
+changing display. `RenderVoxelObjectReady` checks the exact selected
 target; `VoxelObjectReady` retains its authoritative full-target contract. Check
 readiness after the current selection passes `UpdateScene` (`RtApp.Update`), before
 rendering; these predicates observe queued uploads rather than certify an
 unpublished scene selection.
 
+`SetPendingFullUpload` stages the captured authoritative map behind a valid
+ordinary coarse selection. It changes neither display nor geometry/dirty flags.
+Repeated staging preserves its request generation; cancellation, restart and
+representation replacement cannot reuse an unfinished request identity.
+`PendingFullUploadMap` and `PendingFullUploadGeneration` fail closed and cancel
+staging when representation guards fail. `ClearPendingFullUpload` cancels staging
+without changing display; clearing or replacing the representation drops staging.
+
+Existing GPU ownership services both targets: active pins, capacity, structural
+preparation, shared upload budgets and sector lookup include pending geometry.
+Materials remain per object; culling, records and neighbor adjacency remain
+selected-only. Pending normal baking samples full geometry explicitly. Upload
+work checks captured request generation as well as map/revision before execution
+and acknowledgment. Priority and waiting age precede selected-role tie preference;
+shared-map fallback ordering uses the actual upload map ID.
+
+`PendingFullVoxelObjectReady` checks the current staged target after `UpdateScene`.
+Readiness never promotes display. The owner may clear the representation only
+when full geometry is ready; otherwise valid coarse display remains available.
+Cancelling staging makes full GPU geometry inactive under existing retention and
+orphan cleanup, while resident object material ownership remains unchanged.
+
 This permanent separation introduces no helper scene objects or parallel
-residency service. Runtime qualification, explicit fine staging and LOD activation
+residency service. Current source/material qualification and runtime LOD activation
 remain pending.
 
 ### Streamed voxel residency

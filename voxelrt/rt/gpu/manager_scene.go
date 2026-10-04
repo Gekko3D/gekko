@@ -116,11 +116,8 @@ func buildDirectSectorLookupData(scene *core.Scene, sectorToInfo map[*volume.Sec
 
 	tables := make([]uint32, 0)
 	processedMaps := make(map[*volume.XBrickMap]bool)
-	for _, obj := range scene.Objects {
-		if obj == nil || obj.RenderVoxelMap() == nil {
-			continue
-		}
-		xbm := obj.RenderVoxelMap()
+	for _, target := range voxelServiceTargets(scene) {
+		xbm := target.mapRef
 		if processedMaps[xbm] {
 			continue
 		}
@@ -791,8 +788,8 @@ func (m *GpuBufferManager) sectorGridSelectionChanged(scene *core.Scene) bool {
 	changed := false
 	count := 0
 	if scene != nil {
-		for _, obj := range scene.Objects {
-			xbm := obj.RenderVoxelMap()
+		for _, target := range voxelServiceTargets(scene) {
+			xbm := target.mapRef
 			if xbm == nil {
 				continue
 			}
@@ -821,8 +818,8 @@ func (m *GpuBufferManager) sectorGridSelectionChanged(scene *core.Scene) bool {
 func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 	selectionChanged := m.sectorGridSelectionChanged(scene)
 	totalSectors := 0
-	for _, obj := range scene.Objects {
-		if xbm := obj.RenderVoxelMap(); xbm != nil {
+	for _, target := range voxelServiceTargets(scene) {
+		if xbm := target.mapRef; xbm != nil {
 			totalSectors += len(xbm.Sectors)
 		}
 	}
@@ -840,11 +837,8 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 	// Always ensure buffers exist even if empty to avoid bind group panics
 	if totalSectors == 0 {
 		recreated := false
-		for _, obj := range scene.Objects {
-			if obj == nil || obj.RenderVoxelMap() == nil {
-				continue
-			}
-			if alloc := m.Allocations[obj.RenderVoxelMap()]; alloc != nil {
+		for _, target := range voxelServiceTargets(scene) {
+			if alloc := m.Allocations[target.mapRef]; alloc != nil {
 				alloc.DirectLookup = defaultDirectSectorLookupMetadata()
 			}
 		}
@@ -894,13 +888,13 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 	}
 
 	processedMaps := make(map[*volume.XBrickMap]bool)
-	for _, obj := range scene.Objects {
-		xbm := obj.RenderVoxelMap()
+	for _, target := range voxelServiceTargets(scene) {
+		xbm := target.mapRef
 		if xbm == nil || processedMaps[xbm] {
 			continue
 		}
 		processedMaps[xbm] = true
-		baseIdx := obj.RenderVoxelMap().ID
+		baseIdx := xbm.ID
 
 		for sKey, sector := range xbm.Sectors {
 			sx, sy, sz := int32(sKey[0]), int32(sKey[1]), int32(sKey[2])

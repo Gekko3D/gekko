@@ -667,3 +667,21 @@ func absInt(v int) int {
 func float32Floor(v float32) float32 {
 	return float32(math.Floor(float64(v)))
 }
+
+// Pending ordinary geometry samples its actual full target independently of
+// selected-map neighbor context. Selected geometry retains legacy normal rules.
+func buildVoxelAuxBytesForTarget(ctx voxelNormalBakeContext, obj *core.VoxelObject, target *volume.XBrickMap, brick *volume.Brick, brickOrigin [3]int) []byte {
+	if obj != nil && target == obj.RenderVoxelMap() {
+		return buildVoxelAuxBytes(ctx, obj, brick, brickOrigin)
+	}
+	if brick != nil && len(brick.PrecomputedAux) == VoxelAuxRecordBytes {
+		return brick.PrecomputedAux
+	}
+	opts := volume.VoxelNormalBakeOptions{}
+	if target != nil {
+		opts.BoundsMin, opts.BoundsMax = target.ComputeAABB()
+		opts.HasBounds = true
+		opts.SampleOccupancy = func(p [3]int) bool { occupied, _ := target.GetVoxel(p[0], p[1], p[2]); return occupied }
+	}
+	return volume.BuildVoxelAuxBytes(brick, brickOrigin, opts)
+}

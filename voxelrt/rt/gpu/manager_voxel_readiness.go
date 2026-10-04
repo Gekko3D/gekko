@@ -50,3 +50,16 @@ func (m *GpuBufferManager) voxelTargetAllocationReady(obj *core.VoxelObject, xbm
 		matAlloc.BufferGeneration == m.MaterialBufferGeneration && uint64(matAlloc.MaterialCapacity) >= uint64(capacity)
 	return ready, pendingSectors, pendingBricks
 }
+
+// PendingFullVoxelObjectReady qualifies the current staged full request without
+// promoting display. Call after the current UpdateScene publication.
+func (m *GpuBufferManager) PendingFullVoxelObjectReady(obj *core.VoxelObject, target *volume.XBrickMap, revision uint64) (ready bool, sectors int, bricks int) {
+	if target == nil {
+		return false, 0, 0
+	}
+	sectors, bricks = len(target.DirtySectors), len(target.DirtyBricks)
+	if m == nil || obj == nil || obj.PendingFullUploadMap() != target || target.Revision != revision {
+		return false, sectors, bricks
+	}
+	return m.voxelTargetAllocationReady(obj, target, sectors, bricks)
+}
