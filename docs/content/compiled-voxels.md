@@ -329,9 +329,41 @@ The result retains the unchanged source lattice, sole value, source/coarse voxel
 counts and occupied bounds with inclusive minima and exclusive `int64` maxima.
 Bounds describe their respective coordinate grids. Reduction identity is
 `occupancy-or-zero-anchored-2x-v1`. This result is not an authoritative shape or
-base and has no persisted frame contract yet. Palette opacity, animation
-qualification, explicit compiler opt-in, derivative identity and runtime selection
-remain separate integration work. Level-0 geometry remains authoritative.
+base. A caller must bind it to the original shape identity through the separate
+derivative frame contract below. Palette opacity, animation qualification, explicit
+compiler opt-in and runtime selection remain separate integration work. Level-0
+geometry remains authoritative.
+
+## Compiled ordinary asset LOD frames
+
+`CompiledAssetLODDef` owns C1 kind `compiled_asset_lod`, schema 1, factor 2 and
+reduction version `occupancy-or-zero-anchored-2x-v1`. Canonical metadata binds the
+original shape's C1 `SourceContentID`, unchanged `SourceLattice`, sole nonzero
+`Value`, `SourceVoxelCount` and source/coarse occupied bounds. Minima are inclusive;
+maxima are exclusive `int64` coordinates in their respective grids. Coarse bricks
+contain only primary geometry; secondary or auxiliary layers are invalid,
+including empty nonnil layers. The frame has no normal bake version or E2 base
+projection and cannot be decoded as a shape, header or voxel-object payload.
+
+Source bounds fit the signed-int32 source grid, including exclusive maximum
+`2147483648`. Coarse bounds equal the actual occupied geometry and the signed
+floor mapping of source bounds. Coarse brick coordinates fit
+`[-134217728, 134217727]`. Source count must exceed coarse count and fit the summed
+fine-cell capacity of occupied coarse cells clipped to the declared source bounds.
+This rejects impossible sparse-edge counts without allocating or iterating a
+source bounding volume. Source count is metadata; codec voxel limits apply to
+actual coarse geometry. Structural validation cannot prove absent-source coverage,
+source provenance or palette opacity. Compiler/runtime source and material
+qualification remain required before selection.
+
+`EncodeCompiledAssetLOD` preserves input and shares C1 canonical sorting and
+identity. `DecodeCompiledAssetLOD` owns its decoded geometry and rejects noncanonical
+metadata, unsupported kinds/versions and malformed bounds, counts or layers.
+`SaveCompiledAssetLOD` uses synced atomic replacement; `LoadCompiledAssetLOD` uses
+bounded C1 `ReadFrame` without authoring fallback. Errors return nil data or
+definitions and zero `Info`. Explicit codecs remain borrowed; nil uses the existing
+default profile. Existing shape/header formats and default compilation are unchanged.
+Header references, compiler opt-in and runtime selection follow separately.
 
 ## Compiled ordinary asset headers
 
