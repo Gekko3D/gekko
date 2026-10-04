@@ -349,3 +349,34 @@ The header and independent shape frames avoid a new regional pack/index format.
 Explicit runtime selection and coherent dependency emission follow the
 [C3 design](../roadmaps/streamed-rendering-c3.md); existing authoring readers are
 unchanged.
+
+## Ordinary asset compiler emission
+
+`gekko.CompileAuthoredAsset(inputPath, outputPath, codec)` produces an explicit
+compiled header and its complete inline-shape dependency closure. It supports
+`voxel_shape` and groups with independent parts; VOX/procedural adapters and
+static collapse remain unsupported. Source schema 4 and persisted nonblank IDs
+are required before existing normalization. Existing validation, animation
+resolution and `ModelScale` construction define parity. The compiler leaves
+source files unchanged. Inputs and dependencies must remain stable during a run.
+
+Shapes use `shapes/<encoded-byte-sha256>.gkshape`; references retain C1 logical
+content/base identities and exact frame sizes. Unique identical frames share a
+file; different codec encodings receive different physical paths. Rigs and
+opaque texture bytes are copied exactly into `dependencies`; animation sets
+retain their format with rebased rig references. Asset animation/texture paths
+are rebased into this output closure. External animation documents stay JSON.
+
+All validation and encoding precede publication. Source/output aliases and
+conflicting immutable files fail explicitly. Immutable files use verified reuse
+or atomic no-clobber creation; reused files and directories are synchronized
+before acknowledgment. The header is published atomically last. Existing header
+comparison checks size before reading. A no-op build preserves existing files. Compilation never deletes older artifacts;
+unreferenced immutable files can remain after a failure. Prepublication errors
+preserve the previous header. Final atomic publication errors can leave a
+complete old or new header without a durable acknowledgment.
+
+`CompiledAssetCompileResult` reports header `Info`, `HeaderWrote` and unique
+shape/dependency written/reused counts. Failures return a zero result. Codec
+ownership remains with the caller. This compiler does not select runtime inputs
+or alter existing authoring loading APIs.

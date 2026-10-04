@@ -1,7 +1,7 @@
 # C3: Compiled ordinary assets
 
-Status: approved direction; C3a shape frames and C3b asset headers complete.
-Compiler emission and runtime adoption follow separately.
+Status: approved direction; C3a shape frames, C3b headers and C3c offline
+compiler complete. Runtime adoption follows separately.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
 
 ## Authority and ownership
@@ -55,6 +55,26 @@ with the canonical-base boundary above. Verify source parity, material/pivot and
 hierarchy preservation, malformed content, scoped sharing, edit isolation and
 save/evict/reload before claiming runtime loading gains. Separate tests and
 implementation agents plus independent PRE/POST reviews apply to these boundaries.
+
+## Offline compiler boundary
+
+The first compiler accepts inline shapes and groups, with separate parts and
+existing animation bindings. It rejects unsupported adapters and missing
+persisted IDs before normalization can synthesize IDs. Existing normalization,
+validation and construction define source parity; the compiler does not invent
+new rasterization rules. Authoring and dependency inputs must remain stable
+during compilation.
+
+Compile complete geometry and dependency closure before publishing. Copy rigs
+and textures exactly; rewrite animation-set rig references and asset dependency
+paths into the output closure. Use encoded-byte hashes for physical filenames,
+retaining C1 logical identities for geometry references. Different codec profiles
+therefore cannot overwrite each other's frames. Immutable files require exact
+verification or atomic no-clobber creation; publish the asset header last.
+Validation and dependency failures preserve the previous header. Final atomic
+publication errors may leave a complete old or new header without a durability
+acknowledgment, following existing atomic-save semantics. Unreferenced immutable
+files may remain after failure; compilation does not delete earlier artifacts.
 
 ## Cold-loading evidence
 
