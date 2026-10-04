@@ -48,7 +48,7 @@ func newVoxelNormalBakeContext(scene *core.Scene) voxelNormalBakeContext {
 		return ctx
 	}
 	for _, obj := range scene.Objects {
-		if obj == nil {
+		if obj == nil || obj.RenderVoxelMap() == nil {
 			continue
 		}
 		if group, coord, _, ok := voxelObjectAdjacencyMetadata(obj); ok {
@@ -98,11 +98,11 @@ func markCrossObjectNormalHaloDirtyWithContext(scene *core.Scene, context func()
 	}
 	snapshots := make([]objectDirtyBrickSnapshot, 0)
 	for _, obj := range scene.Objects {
-		if obj == nil || obj.XBrickMap == nil || len(obj.XBrickMap.DirtyBricks) == 0 {
+		if obj == nil || obj.RenderVoxelMap() == nil || len(obj.RenderVoxelMap().DirtyBricks) == 0 {
 			continue
 		}
 		snapshot := objectDirtyBrickSnapshot{obj: obj}
-		for bKey, dirty := range obj.XBrickMap.DirtyBricks {
+		for bKey, dirty := range obj.RenderVoxelMap().DirtyBricks {
 			if dirty {
 				snapshot.bricks = append(snapshot.bricks, bKey)
 			}
@@ -206,7 +206,7 @@ func markPlanetTileNormalHaloDirty(ctx voxelNormalBakeContext, obj *core.VoxelOb
 }
 
 func markObjectBrickDirty(obj *core.VoxelObject, localBrick [3]int) {
-	if obj == nil || obj.XBrickMap == nil {
+	if obj == nil || obj.RenderVoxelMap() == nil {
 		return
 	}
 	if localBrick[0] < 0 || localBrick[1] < 0 || localBrick[2] < 0 {
@@ -220,17 +220,17 @@ func markObjectBrickDirty(obj *core.VoxelObject, localBrick [3]int) {
 	bx := localBrick[0] % volume.SectorBricks
 	by := localBrick[1] % volume.SectorBricks
 	bz := localBrick[2] % volume.SectorBricks
-	if sector := obj.XBrickMap.Sectors[sKey]; sector == nil || sector.GetBrick(bx, by, bz) == nil {
+	if sector := obj.RenderVoxelMap().Sectors[sKey]; sector == nil || sector.GetBrick(bx, by, bz) == nil {
 		return
 	}
-	obj.XBrickMap.MarkBrickNormalDirty([6]int{sKey[0], sKey[1], sKey[2], bx, by, bz})
+	obj.RenderVoxelMap().MarkBrickNormalDirty([6]int{sKey[0], sKey[1], sKey[2], bx, by, bz})
 }
 
 func markAllObjectBricksDirty(obj *core.VoxelObject) {
-	if obj == nil || obj.XBrickMap == nil {
+	if obj == nil || obj.RenderVoxelMap() == nil {
 		return
 	}
-	for sKey, sector := range obj.XBrickMap.Sectors {
+	for sKey, sector := range obj.RenderVoxelMap().Sectors {
 		if sector == nil {
 			continue
 		}
@@ -239,7 +239,7 @@ func markAllObjectBricksDirty(obj *core.VoxelObject) {
 				continue
 			}
 			bx, by, bz := i%4, (i/4)%4, i/16
-			obj.XBrickMap.MarkBrickNormalDirty([6]int{sKey[0], sKey[1], sKey[2], bx, by, bz})
+			obj.RenderVoxelMap().MarkBrickNormalDirty([6]int{sKey[0], sKey[1], sKey[2], bx, by, bz})
 		}
 	}
 }
@@ -269,8 +269,8 @@ func buildVoxelAuxBytes(ctx voxelNormalBakeContext, obj *core.VoxelObject, brick
 		return brick.PrecomputedAux
 	}
 	opts := volume.VoxelNormalBakeOptions{}
-	if obj != nil && obj.XBrickMap != nil {
-		minB, maxB := obj.XBrickMap.ComputeAABB()
+	if obj != nil && obj.RenderVoxelMap() != nil {
+		minB, maxB := obj.RenderVoxelMap().ComputeAABB()
 		opts.BoundsMin = minB
 		opts.BoundsMax = maxB
 		opts.HasBounds = true
@@ -524,10 +524,10 @@ func boolToInt(v bool) int {
 }
 
 func axisTieBreakSign(obj *core.VoxelObject, voxel [3]int, axis int) int {
-	if obj == nil || obj.XBrickMap == nil {
+	if obj == nil || obj.RenderVoxelMap() == nil {
 		return 1
 	}
-	minB, maxB := obj.XBrickMap.ComputeAABB()
+	minB, maxB := obj.RenderVoxelMap().ComputeAABB()
 	center := float32(voxel[axis]) + 0.5
 	if center-minB[axis]+1e-4 < maxB[axis]-center {
 		return -1
@@ -536,11 +536,11 @@ func axisTieBreakSign(obj *core.VoxelObject, voxel [3]int, axis int) int {
 }
 
 func sampleOccupancyForBakedNormal(ctx voxelNormalBakeContext, obj *core.VoxelObject, voxel [3]int) bool {
-	if obj == nil || obj.XBrickMap == nil {
+	if obj == nil || obj.RenderVoxelMap() == nil {
 		return false
 	}
 
-	localOcc, _ := obj.XBrickMap.GetVoxel(voxel[0], voxel[1], voxel[2])
+	localOcc, _ := obj.RenderVoxelMap().GetVoxel(voxel[0], voxel[1], voxel[2])
 	if _, _, _, ok := voxelObjectAdjacencyMetadata(obj); ok {
 		return sampleVoxelAdjacencyOccupancyForBakedNormal(ctx, obj, voxel, localOcc)
 	}
@@ -574,7 +574,7 @@ func sampleVoxelAdjacencyOccupancyForBakedNormal(ctx voxelNormalBakeContext, obj
 			chunkCoord[2] + offset[2],
 		},
 	}]
-	if neighbor == nil || neighbor.XBrickMap == nil {
+	if neighbor == nil || neighbor.RenderVoxelMap() == nil {
 		return false
 	}
 	nv := [3]int{
@@ -582,7 +582,7 @@ func sampleVoxelAdjacencyOccupancyForBakedNormal(ctx voxelNormalBakeContext, obj
 		positiveModInt(voxel[1], chunkSize),
 		positiveModInt(voxel[2], chunkSize),
 	}
-	occ, _ := neighbor.XBrickMap.GetVoxel(nv[0], nv[1], nv[2])
+	occ, _ := neighbor.RenderVoxelMap().GetVoxel(nv[0], nv[1], nv[2])
 	return occ
 }
 
@@ -592,7 +592,7 @@ func samplePlanetTileOccupancyForBakedNormal(ctx voxelNormalBakeContext, obj *co
 		return localOcc
 	}
 
-	worldPos := obj.Transform.ObjectToWorld().Mul4x1(localPos.Vec4(1)).Vec3()
+	worldPos := obj.RenderObjectToWorld().Mul4x1(localPos.Vec4(1)).Vec3()
 	for dy := -1; dy <= 1; dy++ {
 		for dx := -1; dx <= 1; dx++ {
 			if dx == 0 && dy == 0 {
@@ -616,14 +616,14 @@ func samplePlanetTileOccupancyForBakedNormal(ctx voxelNormalBakeContext, obj *co
 }
 
 func samplePlanetTileNeighborOccupancy(worldPos mgl32.Vec3, neighbor *core.VoxelObject) bool {
-	if neighbor == nil || neighbor.XBrickMap == nil {
+	if neighbor == nil || neighbor.RenderVoxelMap() == nil {
 		return false
 	}
-	neighborPos := neighbor.Transform.WorldToObject().Mul4x1(worldPos.Vec4(1)).Vec3()
+	neighborPos := neighbor.RenderWorldToObject().Mul4x1(worldPos.Vec4(1)).Vec3()
 	if !pointInsideLocalBounds(neighborPos, neighbor, 0.75) {
 		return false
 	}
-	occ, _ := neighbor.XBrickMap.GetVoxel(
+	occ, _ := neighbor.RenderVoxelMap().GetVoxel(
 		int(float32Floor(neighborPos.X())),
 		int(float32Floor(neighborPos.Y())),
 		int(float32Floor(neighborPos.Z())),
@@ -632,10 +632,10 @@ func samplePlanetTileNeighborOccupancy(worldPos mgl32.Vec3, neighbor *core.Voxel
 }
 
 func pointInsideLocalBounds(p mgl32.Vec3, obj *core.VoxelObject, padding float32) bool {
-	if obj == nil || obj.XBrickMap == nil {
+	if obj == nil || obj.RenderVoxelMap() == nil {
 		return false
 	}
-	minB, maxB := obj.XBrickMap.ComputeAABB()
+	minB, maxB := obj.RenderVoxelMap().ComputeAABB()
 	return p.X() >= minB.X()-padding && p.Y() >= minB.Y()-padding && p.Z() >= minB.Z()-padding &&
 		p.X() <= maxB.X()+padding && p.Y() <= maxB.Y()+padding && p.Z() <= maxB.Z()+padding
 }

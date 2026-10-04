@@ -211,6 +211,7 @@ type Scene struct {
 	occlusionWarmup           map[*VoxelObject]int
 	occlusionGrace            map[*VoxelObject]int
 	lastOcclusionDirty        map[*VoxelObject]bool
+	lastRenderBounds          map[*VoxelObject]sceneRenderBoundsSnapshot
 }
 
 type sceneSpotShadowCullVolume struct {
@@ -377,6 +378,7 @@ func (s *Scene) RemoveObject(obj *VoxelObject) {
 			delete(s.lastVisibility, obj)
 			delete(s.occlusionWarmup, obj)
 			delete(s.occlusionGrace, obj)
+			delete(s.lastRenderBounds, obj)
 			delete(s.lastOcclusionDirty, obj)
 			return
 		}
@@ -389,16 +391,22 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 
 	// Recompute AABBs
 	for _, obj := range s.Objects {
-		if obj == nil || obj.XBrickMap == nil {
+		if obj == nil {
 			continue
 		}
-		isDirtyForOcclusion := obj.WorldAABB == nil || obj.Transform.Dirty || obj.XBrickMap.AABBDirty || obj.XBrickMap.StructureDirty || len(obj.XBrickMap.DirtySectors) > 0 || len(obj.XBrickMap.DirtyBricks) > 0
-		if isDirtyForOcclusion && !s.lastOcclusionDirty[obj] {
-			s.markOcclusionWarmup(obj)
+		if obj.XBrickMap != nil && obj.Transform != nil {
+			isDirtyForOcclusion := obj.WorldAABB == nil || obj.Transform.Dirty || obj.XBrickMap.AABBDirty || obj.XBrickMap.StructureDirty || len(obj.XBrickMap.DirtySectors) > 0 || len(obj.XBrickMap.DirtyBricks) > 0
+			if isDirtyForOcclusion && !s.lastOcclusionDirty[obj] {
+				s.markOcclusionWarmup(obj)
+			}
+			s.lastOcclusionDirty[obj] = isDirtyForOcclusion
+			if obj.UpdateWorldAABB() {
+				dirtyAABBs[obj] = true
+			}
 		}
-		s.lastOcclusionDirty[obj] = isDirtyForOcclusion
-		if obj.UpdateWorldAABB() {
+		if s.updateRenderBoundsSnapshot(obj) {
 			dirtyAABBs[obj] = true
+			s.markOcclusionWarmup(obj)
 		}
 	}
 	opts.Profiler.EndScope("Commit: AABBs")
@@ -423,13 +431,13 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 	}
 
 	for _, obj := range s.Objects {
-		if obj == nil || !obj.RenderEnabled || obj.WorldAABB == nil {
+		if obj == nil || !obj.RenderEnabled || obj.RenderVoxelMap() == nil || obj.Transform == nil || obj.RenderWorldBounds() == nil {
 			s.lastVisibility[obj] = false
 			continue
 		}
 
 		// 1. Frustum Culling
-		if !AABBInFrustum(*obj.WorldAABB, planes) {
+		if !AABBInFrustum(*obj.RenderWorldBounds(), planes) {
 			s.lastVisibility[obj] = false
 			continue
 		}
@@ -439,7 +447,7 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 		occluded := false
 		if useHiZ && obj.AllowOcclusionCulling {
 			s.OcclusionStats.HiZEligible++
-			occluded = IsOccluded(*obj.WorldAABB, opts.HiZData, opts.HiZW, opts.HiZH, opts.LastViewProj, depthSlack)
+			occluded = IsOccluded(*obj.RenderWorldBounds(), opts.HiZData, opts.HiZW, opts.HiZH, opts.LastViewProj, depthSlack)
 		}
 
 		if occluded {
@@ -473,8 +481,8 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 		if len(s.VisibleObjects) > 0 {
 			aabbs := make([][2]mgl32.Vec3, len(s.VisibleObjects))
 			for i, obj := range s.VisibleObjects {
-				if obj.WorldAABB != nil {
-					aabbs[i] = *obj.WorldAABB
+				if obj.RenderWorldBounds() != nil {
+					aabbs[i] = *obj.RenderWorldBounds()
 				} else {
 					aabbs[i] = [2]mgl32.Vec3{{0, 0, 0}, {0, 0, 0}}
 				}
@@ -494,8 +502,8 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 		if len(s.TransparentVisibleObjects) > 0 {
 			aabbs := make([][2]mgl32.Vec3, len(s.TransparentVisibleObjects))
 			for i, obj := range s.TransparentVisibleObjects {
-				if obj.WorldAABB != nil {
-					aabbs[i] = *obj.WorldAABB
+				if obj.RenderWorldBounds() != nil {
+					aabbs[i] = *obj.RenderWorldBounds()
 				} else {
 					aabbs[i] = [2]mgl32.Vec3{{0, 0, 0}, {0, 0, 0}}
 				}
@@ -537,14 +545,14 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 	grouped := make(map[uint64][]groupedShadowCandidate)
 	groupLimits := make(map[uint64]int)
 	for _, obj := range s.Objects {
-		if obj == nil || !obj.RenderEnabled || obj.WorldAABB == nil || obj.XBrickMap == nil || !obj.CastsShadows {
+		if obj == nil || !obj.RenderEnabled || obj.RenderWorldBounds() == nil || obj.RenderVoxelMap() == nil || !obj.CastsShadows {
 			continue
 		}
-		distance := distancePointToAABB(opts.CameraPosition, *obj.WorldAABB)
+		distance := distancePointToAABB(opts.CameraPosition, *obj.RenderWorldBounds())
 		if obj.ShadowMaxDistance > 0 && distance > obj.ShadowMaxDistance {
 			continue
 		}
-		if !hasDirectionalShadowLight && !intersectsAnySceneLocalShadowVolume(*obj.WorldAABB, localSpotShadowVolumes, localPointShadowVolumes) {
+		if !hasDirectionalShadowLight && !intersectsAnySceneLocalShadowVolume(*obj.RenderWorldBounds(), localSpotShadowVolumes, localPointShadowVolumes) {
 			continue
 		}
 		if obj.ShadowCasterGroupID != 0 && obj.ShadowCasterGroupLimit > 0 {
@@ -572,7 +580,7 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 			candidates := grouped[groupID]
 			sort.Slice(candidates, func(i, j int) bool {
 				if candidates[i].distance == candidates[j].distance {
-					return candidates[i].obj.WorldAABB[0].Z() < candidates[j].obj.WorldAABB[0].Z()
+					return candidates[i].obj.RenderWorldBounds()[0].Z() < candidates[j].obj.RenderWorldBounds()[0].Z()
 				}
 				return candidates[i].distance < candidates[j].distance
 			})
@@ -590,7 +598,7 @@ func (s *Scene) Commit(planes [6]mgl32.Vec4, opts SceneCommitOptions) {
 		if len(s.ShadowObjects) > 0 {
 			aabbs := make([][2]mgl32.Vec3, len(s.ShadowObjects))
 			for i, obj := range s.ShadowObjects {
-				aabbs[i] = *obj.WorldAABB
+				aabbs[i] = *obj.RenderWorldBounds()
 			}
 			builder := &bvh.TLASBuilder{}
 			s.ShadowBVHNodesBytes = builder.Build(aabbs)
@@ -698,7 +706,7 @@ func intersectsSceneSpotShadowVolume(aabb [2]mgl32.Vec3, volume sceneSpotShadowC
 func intersectsScenePointShadowVolume(aabb [2]mgl32.Vec3, volume scenePointShadowCullVolume) bool {
 	center := aabb[0].Add(aabb[1]).Mul(0.5)
 	halfExtents := aabb[1].Sub(center)
-	delta := center.Sub(volume.Position)
+	delta := volume.Position.Sub(center)
 	clamped := mgl32.Vec3{
 		max(-halfExtents.X(), min(delta.X(), halfExtents.X())),
 		max(-halfExtents.Y(), min(delta.Y(), halfExtents.Y())),

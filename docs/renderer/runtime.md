@@ -394,8 +394,10 @@ snapshots rather than current CPU contents or flags; uniform bricks without a
 payload slot pay no payload charge. Empty/unallocated entries still pay metadata.
 Distinct maps sharing nested sector/brick pointers gain no new ownership guarantee.
 
-Complete updates pin every retained map in `Scene.Objects`, including hidden
-staged uploads, and refresh active LRU age without counting hits. Trim runs before
+Complete updates pin every selected render map in `Scene.Objects`, including
+hidden uploads, and refresh active LRU age without counting hits. Authoritative
+CPU geometry does not require GPU allocation when a separate representation is
+selected. Trim runs before
 orphan cleanup and after uploads. Either enabled cap can evict inactive LRU maps
 through the existing slot-release path. Active excess remains pinned. Retention
 map capacity is pruned; eviction preserves CPU geometry and object materials.
@@ -682,6 +684,10 @@ follow current instance transforms, including pointer replacement, without
 changing the authoritative pivot, bounds or dirty flags. Only the coarse map's
 existing AABB cache may refresh.
 
+Terrain, planet tiles and objects with terrain/planet/voxel adjacency group IDs
+reject this ordinary-asset representation. Adding those tags later invalidates
+an existing selection; their lattice and neighbor sampling retain legacy rules.
+
 Tracked geometry changes or loss of the authoritative transform invalidate an
 active representation: render map/bounds become nil until the owner makes an
 explicit transition. `ClearRenderRepresentation` releases representation
@@ -696,9 +702,25 @@ to briefly hide an invalid coarse representation until full geometry is ready;
 CPU interaction authority remains resident. Ordinary updates to an already
 initialized full representation retain the existing dirty-upload behavior.
 
-These accessors are a permanent separation boundary, currently unwired.
-GPU consumers, culling and target readiness migrate before LOD activation;
-no helper scene objects or parallel residency service are introduced.
+Scene frustum/HiZ and shadow selection, render BVHs, GPU records, sector lookup,
+allocation planning, uploads and normal baking consume the selected representation.
+Scene owns value snapshots of render bounds so selection changes rebuild affected
+BVHs even when authoritative bounds stay unchanged. Sector lookup also observes
+selected map identity and mutable map ID; equal-size retained-map swaps cannot
+reuse stale lookup data. Invalid selections emit no GPU records or upload work.
+
+Queued uploads capture selected map identity and revision. Obsolete work cannot
+retarget authoritative geometry or acknowledge newer dirty queues; successful
+writes still consume their budget. Source dirty queues remain untouched while
+coarse geometry is selected. `RenderVoxelObjectReady` checks the exact selected
+target; `VoxelObjectReady` retains its authoritative full-target contract. Check
+readiness after the current selection passes `UpdateScene` (`RtApp.Update`), before
+rendering; these predicates observe queued uploads rather than certify an
+unpublished scene selection.
+
+This permanent separation introduces no helper scene objects or parallel
+residency service. Runtime qualification, explicit fine staging and LOD activation
+remain pending.
 
 ### Streamed voxel residency
 

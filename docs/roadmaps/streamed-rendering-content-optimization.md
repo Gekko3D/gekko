@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-04. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h8 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-04. Status: staged implementation; S1a–S1h, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h9 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -834,7 +834,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | C3h5 | `e620185` | Exact original-source/derivative validation without reduction rebuild or persistent ownership | [Source contract](../assets/runtime-assets.md#compiled-lod-source-validation) |
 | C3h6 | `1e4734f` | Explicit scoped LOD reads through existing decoded ownership and typed cache keys | [Decoded ownership](../assets/runtime-assets.md#decoded-content-lifetime) |
 | C3h7 | `ec0270d` | Complete declared derivative verification before runtime publication | [Preparation contract](../assets/runtime-assets.md#compiled-ordinary-asset-preparation) |
-| C3h8 | This commit | Separate core render representation while preserving level-0 CPU authority | [Renderer contract](../renderer/runtime.md#authoritative-geometry-and-render-representations) |
+| C3h8 | `1a5a2bd` | Separate core render representation while preserving level-0 CPU authority | [Renderer contract](../renderer/runtime.md#authoritative-geometry-and-render-representations) |
+| C3h9 | This commit | Migrate render consumers while preserving CPU authority and source upload queues | [Renderer contract](../renderer/runtime.md#authoritative-geometry-and-render-representations) |
 
 S1/S2/S3 partial. S1c covers v2; v3 selection/cross-layer groups separate. S2 allows live leases/sole oversized pending pressure; temporary builds/other owners remain open. Producer notifications/incremental extraction remain S3.
 
@@ -3094,6 +3095,40 @@ Focused/race checks and committed engine tests passed. Consumer checks passed:
 cache above. Earlier C3g1 RED tests are preserved outside the package during
 verification and restored afterward. No GPU behavior changes; visual LOD quality
 and performance remain unverified. Existing tests and unrelated changes remain.
+
+
+### C3h9: Renderer representation consumers
+
+Migrated culling/BVHs and GPU allocation, uploads, records, lookup and normals.
+Selected readiness preserves the full-target API; stale uploads fail closed.
+Equal-count retained-map swaps rebuild lookup. Point-shadow sphere/AABB distance
+now uses the correct sign in both owners.
+[Contract](../renderer/runtime.md#authoritative-geometry-and-render-representations).
+Fine staging and qualified runtime activation remain next.
+
+Verification:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/core ./voxelrt/rt/gpu -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/core ./voxelrt/rt/gpu -run '^Test(C3h8|C3h9)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-c3-gpu-probe /tmp/gekko-c3-gpu-probe.go
+/tmp/gekko-c3-gpu-probe > /tmp/gekko-c3-gpu-probe-retained-native.log 2>&1
+```
+
+Focused/race and committed engine checks passed. Five consumer checks passed:
+`go build ./...` in `gekko-editor`, and `go test ./... -run '^$'` in `actiongame`,
+`spacegame_go`, `spacesim` and `examples/testing-vox`, all with the temporary cache.
+The native diagnostic required desktop access after sandbox startup failed.
+Depth/normal readback proves coarse-only initial allocation, untouched source
+queues, repeated coarse/full equality, tracked-edit exclusion and unchanged CPU
+picking. A second run retains both allocated maps through repeated swaps and
+verifies the same exact readback equality. Inspected PNGs show approved surface
+thickening and closed opening. Evidence: `/tmp/gekko-c3-gpu-probe-output` and
+`/tmp/gekko-c3-gpu-probe-retained-output`; this is one opaque synthetic view,
+not independent transparent/shadow visual coverage or GPU timing/FPS evidence.
+The earlier C3g1 RED candidate stays preserved outside the package during checks
+and is restored afterward. Existing tests and unrelated changes remain preserved.
 
 
 Existing tests preserved. macOS linker/module stat-cache warnings exited successfully. Notification-only changes needed no new windowed smoke/engine sweep. Unrelated editor/sample baselines not rerun; see S3c/S3d. Publication/compilation verified; incomplete producers still require live extraction.

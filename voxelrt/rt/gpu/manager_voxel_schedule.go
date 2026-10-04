@@ -44,6 +44,29 @@ type voxelUploadWork struct {
 	brickKey        [6]int
 	bytes           uint64
 	sectors, bricks uint32
+	target          *volume.XBrickMap
+	targetRevision  uint64
+}
+
+// Legacy helper work literals resolve their target at use; production queues
+// capture the selected map and revision before sorting or invoking an executor.
+func (w voxelUploadWork) targetMap() *volume.XBrickMap {
+	if w.target != nil {
+		return w.target
+	}
+	return w.object.RenderVoxelMap()
+}
+
+func (w voxelUploadWork) targetCurrent() bool {
+	target := w.targetMap()
+	return target != nil && w.object.RenderVoxelMap() == target && (w.target == nil || target.Revision == w.targetRevision)
+}
+
+func (w voxelUploadWork) uploadOrder() uint64 {
+	if w.object.VoxelUploadOrder != 0 {
+		return w.object.VoxelUploadOrder
+	}
+	return uint64(w.targetMap().ID)
 }
 
 // Identities retain coordinates and first service frame, never encoded payloads.
@@ -56,7 +79,7 @@ type voxelUploadIdentity struct {
 }
 
 func (w voxelUploadWork) identity() voxelUploadIdentity {
-	id := voxelUploadIdentity{kind: w.kind, xbm: w.object.XBrickMap}
+	id := voxelUploadIdentity{kind: w.kind, xbm: w.targetMap()}
 	switch w.kind {
 	case voxelUploadMaterial:
 		id.object = w.object
@@ -94,7 +117,7 @@ func voxelUploadOrder(obj *core.VoxelObject) uint64 {
 	if obj.VoxelUploadOrder != 0 {
 		return obj.VoxelUploadOrder
 	}
-	return uint64(obj.XBrickMap.ID)
+	return uint64(obj.RenderVoxelMap().ID)
 }
 
 // serviceVoxelUploads is the shared production admission/completion path.
@@ -117,14 +140,14 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 	var maps []*volume.XBrickMap
 	if scene != nil {
 		for index, obj := range scene.Objects {
-			if obj == nil || obj.XBrickMap == nil {
+			if obj == nil || obj.RenderVoxelMap() == nil {
 				continue
 			}
 			if _, seen := objectOrder[obj]; seen {
 				continue
 			}
 			objectOrder[obj] = index
-			xbm := obj.XBrickMap
+			xbm := obj.RenderVoxelMap()
 			previous := best[xbm]
 			if previous == nil {
 				maps = append(maps, xbm)
@@ -149,7 +172,7 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 			}
 			ptr, length := materialTableIdentity(obj.MaterialTable)
 			if mat.MaterialTablePtr != ptr || mat.MaterialTableLen != length || mat.BufferGeneration != m.MaterialBufferGeneration {
-				queue = append(queue, voxelUploadWork{kind: voxelUploadMaterial, object: obj, bytes: uint64(rows) * 64})
+				queue = append(queue, voxelUploadWork{kind: voxelUploadMaterial, object: obj, target: xbm, targetRevision: xbm.Revision, bytes: uint64(rows) * 64})
 			}
 		}
 	}
@@ -165,7 +188,7 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 			for i := 0; i < 64; i++ {
 				bytes += brickUploadBytes(sector.GetBrick(i%4, (i/4)%4, i/16))
 			}
-			queue = append(queue, voxelUploadWork{kind: voxelUploadSector, object: obj, sectorKey: key, bytes: bytes, sectors: 1, bricks: 64})
+			queue = append(queue, voxelUploadWork{kind: voxelUploadSector, object: obj, target: xbm, targetRevision: xbm.Revision, sectorKey: key, bytes: bytes, sectors: 1, bricks: 64})
 		}
 		for key, dirty := range xbm.DirtyBricks {
 			sKey := [3]int{key[0], key[1], key[2]}
@@ -177,7 +200,7 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 			if xbm.DirtySectors[sKey] {
 				continue
 			}
-			queue = append(queue, voxelUploadWork{kind: voxelUploadBrick, object: obj, brickKey: key, bytes: brickUploadBytes(sector.GetBrick(key[3], key[4], key[5])), bricks: 1})
+			queue = append(queue, voxelUploadWork{kind: voxelUploadBrick, object: obj, target: xbm, targetRevision: xbm.Revision, brickKey: key, bytes: brickUploadBytes(sector.GetBrick(key[3], key[4], key[5])), bricks: 1})
 		}
 	}
 	ages := make(map[voxelUploadIdentity]uint64, len(queue))
@@ -202,10 +225,10 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 		if fa, fb := ages[a.identity()], ages[b.identity()]; fa != fb {
 			return fa < fb
 		}
-		if oa, ob := voxelUploadOrder(a.object), voxelUploadOrder(b.object); oa != ob {
+		if oa, ob := a.uploadOrder(), b.uploadOrder(); oa != ob {
 			return oa < ob
 		}
-		if ia, ib := a.object.XBrickMap.ID, b.object.XBrickMap.ID; ia != ib {
+		if ia, ib := a.targetMap().ID, b.targetMap().ID; ia != ib {
 			return ia < ib
 		}
 		if a.kind != b.kind {
@@ -221,6 +244,9 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 	})
 	remaining := m.VoxelUploadBudget()
 	for _, w := range queue {
+		if !w.targetCurrent() {
+			continue
+		}
 		if w.bytes > remaining.MaxBytes || w.sectors > remaining.MaxSectors || w.bricks > remaining.MaxBricks {
 			continue
 		}
@@ -236,14 +262,21 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 		m.VoxelUploadBytes += w.bytes
 		m.VoxelSectorsUploaded += int(w.sectors)
 		m.VoxelBricksUploaded += int(w.bricks)
-		xbm := w.object.XBrickMap
+		if w.kind == voxelUploadMaterial {
+			m.VoxelMaterialsUploaded++
+		}
+		// Written bytes consume admission even if execution changed selection or
+		// revision. Such work cannot acknowledge any newer dirty queues.
+		if !w.targetCurrent() {
+			continue
+		}
+		xbm := w.targetMap()
 		switch w.kind {
 		case voxelUploadMaterial:
 			mat := m.MaterialAllocations[w.object]
 			mat.MaterialTablePtr, mat.MaterialTableLen = materialTableIdentity(w.object.MaterialTable)
 			mat.BufferGeneration = m.MaterialBufferGeneration
 			mat.HasTransparency = materialTableHasTransparency(w.object.MaterialTable)
-			m.VoxelMaterialsUploaded++
 		case voxelUploadSector:
 			delete(xbm.DirtySectors, w.sectorKey)
 			for i := 0; i < 64; i++ {
@@ -284,8 +317,8 @@ func (w voxelUploadWork) brickRange() (int, int) {
 func (m *GpuBufferManager) voxelUploadReleases(w voxelUploadWork) (payload, auxiliary map[*volume.Brick]bool) {
 	payload, auxiliary = make(map[*volume.Brick]bool), make(map[*volume.Brick]bool)
 	key := w.sectorCoordinate()
-	sector := w.object.XBrickMap.Sectors[key]
-	pointers := m.Allocations[w.object.XBrickMap].Bricks[key]
+	sector := w.targetMap().Sectors[key]
+	pointers := m.Allocations[w.targetMap()].Bricks[key]
 	targets := make(map[*volume.Brick]bool)
 	for i := 0; i < 64; i++ {
 		if b := sector.GetBrick(i%4, (i/4)%4, i/16); b != nil {
@@ -309,8 +342,8 @@ func (m *GpuBufferManager) voxelUploadReleases(w voxelUploadWork) (payload, auxi
 
 func (m *GpuBufferManager) voxelUploadPayloadFits(w voxelUploadWork) bool {
 	key := w.sectorCoordinate()
-	alloc := m.Allocations[w.object.XBrickMap]
-	sector := w.object.XBrickMap.Sectors[key]
+	alloc := m.Allocations[w.targetMap()]
+	sector := w.targetMap().Sectors[key]
 	if alloc == nil || alloc.Bricks[key] == nil || sector == nil {
 		return false
 	}

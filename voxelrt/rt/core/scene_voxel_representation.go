@@ -26,7 +26,7 @@ func (obj *VoxelObject) SetRenderLOD2(coarse *volume.XBrickMap) bool {
 		return false
 	}
 	obj.ClearRenderRepresentation()
-	if obj.Transform == nil || obj.XBrickMap == nil || coarse == nil || coarse == obj.XBrickMap || obj.XBrickMap.GetVoxelCount() == 0 || coarse.GetVoxelCount() == 0 {
+	if obj.Transform == nil || obj.hasSpecialRenderLattice() || obj.XBrickMap == nil || coarse == nil || coarse == obj.XBrickMap || obj.XBrickMap.GetVoxelCount() == 0 || coarse.GetVoxelCount() == 0 {
 		return false
 	}
 	obj.renderRepresentation = &voxelRenderRepresentation{
@@ -46,11 +46,39 @@ func (obj *VoxelObject) ClearRenderRepresentation() {
 // RenderRepresentationValid reports a selected representation with unchanged
 // tracked geometry. An invalid selection stays selected until explicitly cleared.
 func (obj *VoxelObject) RenderRepresentationValid() bool {
-	if obj == nil || obj.Transform == nil || obj.renderRepresentation == nil {
+	if obj == nil || obj.Transform == nil || obj.hasSpecialRenderLattice() || obj.renderRepresentation == nil {
 		return false
 	}
 	r := obj.renderRepresentation
 	return obj.XBrickMap == r.source && r.source.Revision == r.sourceRevision && r.coarse.Revision == r.coarseRevision
+}
+
+func (obj *VoxelObject) hasSpecialRenderLattice() bool {
+	return obj.IsTerrainChunk || obj.IsPlanetTile || obj.VoxelAdjacencyGroupID != 0 || obj.TerrainGroupID != 0 || obj.PlanetTileGroupID != 0
+}
+
+// Scene owns a value snapshot because derived bounds storage is updated in place.
+type sceneRenderBoundsSnapshot struct {
+	present bool
+	bounds  [2][3]uint32
+}
+
+func (s *Scene) updateRenderBoundsSnapshot(obj *VoxelObject) bool {
+	if s.lastRenderBounds == nil {
+		s.lastRenderBounds = make(map[*VoxelObject]sceneRenderBoundsSnapshot)
+	}
+	var current sceneRenderBoundsSnapshot
+	if bounds := obj.RenderWorldBounds(); obj.Transform != nil && obj.RenderVoxelMap() != nil && bounds != nil {
+		current.present = true
+		for end := range bounds {
+			for axis, value := range bounds[end] {
+				current.bounds[end][axis] = math.Float32bits(value)
+			}
+		}
+	}
+	previous, exists := s.lastRenderBounds[obj]
+	s.lastRenderBounds[obj] = current
+	return !exists || previous != current
 }
 
 // RenderVoxelMap fails closed for invalid active selections; it never implicitly

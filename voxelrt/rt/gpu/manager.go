@@ -484,6 +484,7 @@ type GpuBufferManager struct {
 	lastSceneRevision              uint64
 	sectorTopologyRevision         uint64
 	lastSectorGridTopologyRevision uint64
+	lastSectorGridSelection        []sectorGridMapIdentity
 	gridDataPool                   []byte
 	TileLightTilesX                uint32
 	TileLightTilesY                uint32

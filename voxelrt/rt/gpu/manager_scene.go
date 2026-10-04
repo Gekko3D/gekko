@@ -117,10 +117,10 @@ func buildDirectSectorLookupData(scene *core.Scene, sectorToInfo map[*volume.Sec
 	tables := make([]uint32, 0)
 	processedMaps := make(map[*volume.XBrickMap]bool)
 	for _, obj := range scene.Objects {
-		if obj == nil || obj.XBrickMap == nil {
+		if obj == nil || obj.RenderVoxelMap() == nil {
 			continue
 		}
-		xbm := obj.XBrickMap
+		xbm := obj.RenderVoxelMap()
 		if processedMaps[xbm] {
 			continue
 		}
@@ -192,10 +192,10 @@ func appendUVec4LE(dst []byte, v [4]uint32) []byte {
 }
 
 func writeObjectParamsData(dst []byte, obj *core.VoxelObject, alloc *ObjectGpuAllocation, matAlloc *MaterialGpuAllocation) {
-	if len(dst) < objectParamsSizeBytes || obj == nil || obj.XBrickMap == nil || alloc == nil {
+	if len(dst) < objectParamsSizeBytes || obj == nil || obj.RenderVoxelMap() == nil || alloc == nil {
 		return
 	}
-	binary.LittleEndian.PutUint32(dst[0:4], obj.XBrickMap.ID)
+	binary.LittleEndian.PutUint32(dst[0:4], obj.RenderVoxelMap().ID)
 	binary.LittleEndian.PutUint32(dst[4:8], 0)
 	binary.LittleEndian.PutUint32(dst[8:12], 0)
 	if matAlloc != nil {
@@ -203,7 +203,7 @@ func writeObjectParamsData(dst []byte, obj *core.VoxelObject, alloc *ObjectGpuAl
 	}
 	binary.LittleEndian.PutUint32(dst[16:20], ^uint32(0))
 	binary.LittleEndian.PutUint32(dst[20:24], math.Float32bits(obj.LODThreshold))
-	binary.LittleEndian.PutUint32(dst[24:28], uint32(len(obj.XBrickMap.Sectors)))
+	binary.LittleEndian.PutUint32(dst[24:28], uint32(len(obj.RenderVoxelMap().Sectors)))
 	binary.LittleEndian.PutUint32(dst[28:32], uint32(obj.AmbientOcclusionMode))
 	binary.LittleEndian.PutUint32(dst[32:36], obj.ShadowGroupID)
 	binary.LittleEndian.PutUint32(dst[36:40], math.Float32bits(obj.ShadowSeamWorldEpsilon))
@@ -237,27 +237,28 @@ func writeObjectParamsData(dst []byte, obj *core.VoxelObject, alloc *ObjectGpuAl
 }
 
 func buildInstanceData(objects []*core.VoxelObject, renderOrigin mgl32.Vec3) []byte {
+	objects = filterRenderObjects(objects)
 	if len(objects) == 0 {
 		return make([]byte, 208)
 	}
 
 	instData := make([]byte, 0, len(objects)*208)
 	for i, obj := range objects {
-		o2w := renderRelativeObjectToWorld(obj.Transform.ObjectToWorld(), renderOrigin)
-		w2o := renderRelativeWorldToObject(obj.Transform.WorldToObject(), renderOrigin)
+		o2w := renderRelativeObjectToWorld(obj.RenderObjectToWorld(), renderOrigin)
+		w2o := renderRelativeWorldToObject(obj.RenderWorldToObject(), renderOrigin)
 
 		instData = appendMat4LE(instData, o2w)
 		instData = appendMat4LE(instData, w2o)
 
 		minB, maxB := [3]float32{}, [3]float32{}
-		if obj.WorldAABB != nil {
-			minB = obj.WorldAABB[0].Sub(renderOrigin)
-			maxB = obj.WorldAABB[1].Sub(renderOrigin)
+		if obj.RenderWorldBounds() != nil {
+			minB = obj.RenderWorldBounds()[0].Sub(renderOrigin)
+			maxB = obj.RenderWorldBounds()[1].Sub(renderOrigin)
 		}
 		instData = appendVec3PaddedLE(instData, minB)
 		instData = appendVec3PaddedLE(instData, maxB)
 
-		lMin, lMax := obj.XBrickMap.ComputeAABB()
+		lMin, lMax := obj.RenderVoxelMap().ComputeAABB()
 		instData = appendVec3PaddedLE(instData, [3]float32{lMin.X(), lMin.Y(), lMin.Z()})
 		instData = appendVec3PaddedLE(instData, [3]float32{lMax.X(), lMax.Y(), lMax.Z()})
 
@@ -282,17 +283,18 @@ func renderRelativeWorldToObject(worldToObject mgl32.Mat4, renderOrigin mgl32.Ve
 }
 
 func buildRenderBVHData(objects []*core.VoxelObject, renderOrigin mgl32.Vec3) []byte {
+	objects = filterRenderObjects(objects)
 	if len(objects) == 0 {
 		return make([]byte, 64)
 	}
 	aabbs := make([][2]mgl32.Vec3, len(objects))
 	for i, obj := range objects {
-		if obj == nil || obj.WorldAABB == nil {
+		if obj == nil || obj.RenderWorldBounds() == nil {
 			continue
 		}
 		aabbs[i] = [2]mgl32.Vec3{
-			obj.WorldAABB[0].Sub(renderOrigin),
-			obj.WorldAABB[1].Sub(renderOrigin),
+			obj.RenderWorldBounds()[0].Sub(renderOrigin),
+			obj.RenderWorldBounds()[1].Sub(renderOrigin),
 		}
 	}
 	builder := &bvh.TLASBuilder{}
@@ -300,13 +302,14 @@ func buildRenderBVHData(objects []*core.VoxelObject, renderOrigin mgl32.Vec3) []
 }
 
 func buildObjectParamsData(objects []*core.VoxelObject, allocations map[*volume.XBrickMap]*ObjectGpuAllocation, materialAllocations map[*core.VoxelObject]*MaterialGpuAllocation) []byte {
+	objects = filterRenderObjects(objects)
 	if len(objects) == 0 {
 		return make([]byte, objectParamsSizeBytes)
 	}
 
 	objParams := make([]byte, len(objects)*objectParamsSizeBytes)
 	for i, obj := range objects {
-		geomAlloc := allocations[obj.XBrickMap]
+		geomAlloc := allocations[obj.RenderVoxelMap()]
 		matAlloc := materialAllocations[obj]
 		writeObjectParamsData(objParams[i*objectParamsSizeBytes:], obj, geomAlloc, matAlloc)
 	}
@@ -775,16 +778,57 @@ func (m *GpuBufferManager) UpdateLights(scene *core.Scene, camera *core.CameraSt
 	}
 }
 
+type sectorGridMapIdentity struct {
+	mapRef *volume.XBrickMap
+	mapID  uint32
+}
+
+// Snapshot selected maps by value so equal-count swaps of already allocated or
+// retained maps, and changes to map IDs, cannot reuse stale lookup tables.
+// Ordering follows scene objects; no hash or iteration order defines identity.
+// Removed entries release their references; an empty selection drops storage.
+func (m *GpuBufferManager) sectorGridSelectionChanged(scene *core.Scene) bool {
+	changed := false
+	count := 0
+	if scene != nil {
+		for _, obj := range scene.Objects {
+			xbm := obj.RenderVoxelMap()
+			if xbm == nil {
+				continue
+			}
+			identity := sectorGridMapIdentity{mapRef: xbm, mapID: xbm.ID}
+			if count >= len(m.lastSectorGridSelection) {
+				m.lastSectorGridSelection = append(m.lastSectorGridSelection, identity)
+				changed = true
+			} else if m.lastSectorGridSelection[count] != identity {
+				m.lastSectorGridSelection[count] = identity
+				changed = true
+			}
+			count++
+		}
+	}
+	if count < len(m.lastSectorGridSelection) {
+		clear(m.lastSectorGridSelection[count:])
+		m.lastSectorGridSelection = m.lastSectorGridSelection[:count]
+		changed = true
+	}
+	if count == 0 {
+		m.lastSectorGridSelection = nil
+	}
+	return changed
+}
+
 func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
+	selectionChanged := m.sectorGridSelectionChanged(scene)
 	totalSectors := 0
 	for _, obj := range scene.Objects {
-		if xbm := obj.XBrickMap; xbm != nil {
+		if xbm := obj.RenderVoxelMap(); xbm != nil {
 			totalSectors += len(xbm.Sectors)
 		}
 	}
 
 	// Skip only when object and sector-allocation topology are unchanged.
-	if totalSectors == m.lastTotalSectors &&
+	if !selectionChanged && totalSectors == m.lastTotalSectors &&
 		uint64(scene.StructureRevision) == m.lastSceneRevision &&
 		m.sectorTopologyRevision == m.lastSectorGridTopologyRevision &&
 		m.SectorGridBuf != nil {
@@ -797,10 +841,10 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 	if totalSectors == 0 {
 		recreated := false
 		for _, obj := range scene.Objects {
-			if obj == nil || obj.XBrickMap == nil {
+			if obj == nil || obj.RenderVoxelMap() == nil {
 				continue
 			}
-			if alloc := m.Allocations[obj.XBrickMap]; alloc != nil {
+			if alloc := m.Allocations[obj.RenderVoxelMap()]; alloc != nil {
 				alloc.DirectLookup = defaultDirectSectorLookupMetadata()
 			}
 		}
@@ -851,12 +895,12 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 
 	processedMaps := make(map[*volume.XBrickMap]bool)
 	for _, obj := range scene.Objects {
-		xbm := obj.XBrickMap
+		xbm := obj.RenderVoxelMap()
 		if xbm == nil || processedMaps[xbm] {
 			continue
 		}
 		processedMaps[xbm] = true
-		baseIdx := obj.XBrickMap.ID
+		baseIdx := obj.RenderVoxelMap().ID
 
 		for sKey, sector := range xbm.Sectors {
 			sx, sy, sz := int32(sKey[0]), int32(sKey[1]), int32(sKey[2])

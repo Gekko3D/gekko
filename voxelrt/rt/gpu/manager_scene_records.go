@@ -11,6 +11,25 @@ import (
 
 const sceneInstanceSizeBytes = 208
 
+// Retain caller ordering and storage on the ordinary path. Invalid selected
+// geometry cannot enter any GPU row, even from stale precomputed pass inputs.
+func filterRenderObjects(objects []*core.VoxelObject) []*core.VoxelObject {
+	for i, obj := range objects {
+		if obj != nil && obj.Transform != nil && obj.RenderVoxelMap() != nil {
+			continue
+		}
+		filtered := make([]*core.VoxelObject, 0, len(objects)-1)
+		filtered = append(filtered, objects[:i]...)
+		for _, candidate := range objects[i+1:] {
+			if candidate != nil && candidate.Transform != nil && candidate.RenderVoxelMap() != nil {
+				filtered = append(filtered, candidate)
+			}
+		}
+		return filtered
+	}
+	return objects
+}
+
 // These are borrowed, read-only views until the next preparation or reset.
 type sceneRecordBatch struct{ instances, bvh, params []byte }
 type sceneRecordBatches struct{ visible, transparent, shadow sceneRecordBatch }
@@ -99,21 +118,21 @@ func sceneMatBits(v mgl32.Mat4) (bits [16]uint32) {
 }
 
 func sceneWorldBoundsKey(obj *core.VoxelObject) sceneBoundsKey {
-	if obj.WorldAABB == nil {
+	if obj.RenderWorldBounds() == nil {
 		return sceneBoundsKey{}
 	}
-	return sceneBoundsKey{present: true, min: sceneVecBits(obj.WorldAABB[0]), max: sceneVecBits(obj.WorldAABB[1])}
+	return sceneBoundsKey{present: true, min: sceneVecBits(obj.RenderWorldBounds()[0]), max: sceneVecBits(obj.RenderWorldBounds()[1])}
 }
 
 func (m *GpuBufferManager) sceneObjectParamsKey(obj *core.VoxelObject) sceneParamsKey {
-	alloc := m.Allocations[obj.XBrickMap]
+	alloc := m.Allocations[obj.RenderVoxelMap()]
 	if alloc == nil {
 		// Missing geometry is the canonical zero row, regardless of metadata.
 		return sceneParamsKey{}
 	}
 	key := sceneParamsKey{
 		geometry: true,
-		mapID:    obj.XBrickMap.ID, sectors: uint32(len(obj.XBrickMap.Sectors)),
+		mapID:    obj.RenderVoxelMap().ID, sectors: uint32(len(obj.RenderVoxelMap().Sectors)),
 		lod: math.Float32bits(obj.LODThreshold), ao: uint32(obj.AmbientOcclusionMode),
 		shadowGroup: obj.ShadowGroupID, shadowEpsilon: math.Float32bits(obj.ShadowSeamWorldEpsilon),
 		terrain: obj.IsTerrainChunk, terrainGroup: obj.TerrainGroupID,
@@ -141,8 +160,8 @@ func (m *GpuBufferManager) prepareSceneObject(obj *core.VoxelObject, origin mgl3
 		return
 	}
 	row.seen = true
-	o2w, w2o := obj.Transform.ObjectToWorld(), obj.Transform.WorldToObject()
-	localMin, localMax := obj.XBrickMap.ComputeAABB()
+	o2w, w2o := obj.RenderObjectToWorld(), obj.RenderWorldToObject()
+	localMin, localMax := obj.RenderVoxelMap().ComputeAABB()
 	instanceKey := sceneInstanceKey{
 		objectToWorld: sceneMatBits(o2w), worldToObject: sceneMatBits(w2o),
 		localMin: sceneVecBits(localMin), localMax: sceneVecBits(localMax),
@@ -154,8 +173,8 @@ func (m *GpuBufferManager) prepareSceneObject(obj *core.VoxelObject, origin mgl3
 		data = appendMat4LE(data, renderRelativeObjectToWorld(o2w, origin))
 		data = appendMat4LE(data, renderRelativeWorldToObject(w2o, origin))
 		minB, maxB := mgl32.Vec3{}, mgl32.Vec3{}
-		if obj.WorldAABB != nil {
-			minB, maxB = obj.WorldAABB[0].Sub(origin), obj.WorldAABB[1].Sub(origin)
+		if obj.RenderWorldBounds() != nil {
+			minB, maxB = obj.RenderWorldBounds()[0].Sub(origin), obj.RenderWorldBounds()[1].Sub(origin)
 		}
 		data = appendVec3PaddedLE(data, minB)
 		data = appendVec3PaddedLE(data, maxB)
@@ -170,7 +189,7 @@ func (m *GpuBufferManager) prepareSceneObject(obj *core.VoxelObject, origin mgl3
 	if !row.initialized || row.paramsKey != paramsKey {
 		// The existing writer leaves false flags and missing offsets untouched.
 		clear(row.params[:])
-		writeObjectParamsData(row.params[:], obj, m.Allocations[obj.XBrickMap], m.MaterialAllocations[obj])
+		writeObjectParamsData(row.params[:], obj, m.Allocations[obj.RenderVoxelMap()], m.MaterialAllocations[obj])
 		row.paramsKey = paramsKey
 		row.paramsRevision++
 		m.SceneObjectParamRecordBuildCount++
@@ -275,7 +294,7 @@ func (m *GpuBufferManager) prepareSceneRecords(scene *core.Scene, origin mgl32.V
 	}
 	var visible, transparent, shadow []*core.VoxelObject
 	if scene != nil {
-		visible, transparent, shadow = scene.VisibleObjects, scene.TransparentVisibleObjects, scene.ShadowObjects
+		visible, transparent, shadow = filterRenderObjects(scene.VisibleObjects), filterRenderObjects(scene.TransparentVisibleObjects), filterRenderObjects(scene.ShadowObjects)
 	}
 	for _, objects := range [][]*core.VoxelObject{visible, transparent, shadow} {
 		for _, obj := range objects {

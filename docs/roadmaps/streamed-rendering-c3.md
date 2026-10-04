@@ -9,8 +9,8 @@ C3f4a private palette adoption, C3f4b worker palette integration and C3f4c
 publication accounting complete. C3h0 diagnostics and C3h1 conservative geometry
 construction, C3h2 source-bound derivative frames, C3h3 versioned headers and
 C3h4 compiler opt-in, C3h5 exact source validation and C3h6 scoped derivative
-reads, C3h7 complete-closure source verification and C3h8 core render
-representation boundary complete. Opt-in,
+reads, C3h7 complete-closure source verification, C3h8 core render
+representation boundary and C3h9 renderer consumer migration complete. Opt-in,
 single-material opaque LOD is approved; compiler
 source-kind adapters and production LOD integration remain separate work.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
@@ -397,3 +397,14 @@ Public scene geometry and CPU picking remain authoritative. [Contract](../render
 Recommended cold fallback is approved: hide an invalid coarse representation
 until full upload is ready. GPU migration, current source/material qualification
 and runtime activation remain pending; no rendering performance claim yet.
+
+
+## Renderer consumer migration (C3h9)
+
+Scene selection/BVHs and GPU allocation, uploads, normals, records and lookup now
+use the optional render representation. CPU authority and legacy full readiness
+remain unchanged. Equal-count retained-map swaps invalidate lookup; stale queued
+uploads cannot acknowledge newer targets. Corrected point-shadow distance tests
+in both culling owners. [Contract](../renderer/runtime.md#authoritative-geometry-and-render-representations).
+Fine staging, current source/material qualification and activation follow.
+Verification and native probe limits are recorded in the parent delivery entry.

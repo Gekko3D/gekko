@@ -16,6 +16,23 @@ func (m *GpuBufferManager) VoxelObjectReady(obj *core.VoxelObject, xbm *volume.X
 	if m == nil || obj == nil || obj.XBrickMap != xbm || xbm.Revision != targetRevision {
 		return false, pendingSectors, pendingBricks
 	}
+	return m.voxelTargetAllocationReady(obj, xbm, pendingSectors, pendingBricks)
+}
+
+// RenderVoxelObjectReady qualifies the currently selected display map without
+// changing the existing authoritative full-target readiness API.
+func (m *GpuBufferManager) RenderVoxelObjectReady(obj *core.VoxelObject, xbm *volume.XBrickMap, targetRevision uint64) (ready bool, pendingSectors int, pendingBricks int) {
+	if xbm == nil {
+		return false, 0, 0
+	}
+	pendingSectors, pendingBricks = len(xbm.DirtySectors), len(xbm.DirtyBricks)
+	if m == nil || obj == nil || obj.RenderVoxelMap() != xbm || xbm.Revision != targetRevision {
+		return false, pendingSectors, pendingBricks
+	}
+	return m.voxelTargetAllocationReady(obj, xbm, pendingSectors, pendingBricks)
+}
+
+func (m *GpuBufferManager) voxelTargetAllocationReady(obj *core.VoxelObject, xbm *volume.XBrickMap, pendingSectors, pendingBricks int) (ready bool, sectors int, bricks int) {
 	alloc := m.Allocations[xbm]
 	if alloc == nil || xbm.StructureDirty ||
 		len(alloc.Sectors) != len(xbm.Sectors) || len(alloc.Bricks) != len(xbm.Sectors) ||

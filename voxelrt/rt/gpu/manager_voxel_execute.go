@@ -4,13 +4,16 @@ package gpu
 // complete unit precedes allocation, so a later cleared record can supply an
 // earlier new brick. Service owns dirty/material completion and counters.
 func (m *GpuBufferManager) executeVoxelUpload(context func() voxelNormalBakeContext, work voxelUploadWork) bool {
+	if !work.targetCurrent() {
+		return false
+	}
 	if work.kind == voxelUploadMaterial {
 		mat := m.MaterialAllocations[work.object]
 		mustQueueVoxelWrite(m.Device.GetQueue().WriteBuffer(m.MaterialBuf, uint64(mat.MaterialOffset)*64, buildMaterialData(work.object.MaterialTable)))
 		return true
 	}
 	key := work.sectorCoordinate()
-	xbm := work.object.XBrickMap
+	xbm := work.targetMap()
 	m.markRetainedVoxelMapAccountingDirty(xbm)
 	sector := xbm.Sectors[key]
 	info := m.SectorToInfo[sector]

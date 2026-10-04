@@ -220,7 +220,7 @@ func intersectsSpotShadowVolume(aabb [2]mgl32.Vec3, volume spotShadowCullVolume)
 func intersectsPointShadowVolume(aabb [2]mgl32.Vec3, volume pointShadowCullVolume) bool {
 	center := aabb[0].Add(aabb[1]).Mul(0.5)
 	halfExtents := aabb[1].Sub(center)
-	delta := center.Sub(volume.Position)
+	delta := volume.Position.Sub(center)
 	clamped := mgl32.Vec3{
 		maxf(-halfExtents.X(), minf(delta.X(), halfExtents.X())),
 		maxf(-halfExtents.Y(), minf(delta.Y(), halfExtents.Y())),
@@ -239,20 +239,20 @@ func collectShadowCasters(objects []*core.VoxelObject, directionalVolumes []dire
 	grouped := make(map[uint64][]groupedShadowCandidate)
 	groupLimits := make(map[uint64]int)
 	for _, obj := range objects {
-		if obj == nil || obj.WorldAABB == nil || obj.XBrickMap == nil || !obj.CastsShadows {
+		if obj == nil || obj.RenderWorldBounds() == nil || obj.RenderVoxelMap() == nil || !obj.CastsShadows {
 			continue
 		}
 
 		include := false
 		for _, volume := range directionalVolumes {
-			if intersectsDirectionalShadowVolume(*obj.WorldAABB, volume) {
+			if intersectsDirectionalShadowVolume(*obj.RenderWorldBounds(), volume) {
 				include = true
 				break
 			}
 		}
 		if !include {
 			for _, volume := range spotVolumes {
-				if intersectsSpotShadowVolume(*obj.WorldAABB, volume) {
+				if intersectsSpotShadowVolume(*obj.RenderWorldBounds(), volume) {
 					include = true
 					break
 				}
@@ -260,14 +260,14 @@ func collectShadowCasters(objects []*core.VoxelObject, directionalVolumes []dire
 		}
 		if !include {
 			for _, volume := range pointVolumes {
-				if intersectsPointShadowVolume(*obj.WorldAABB, volume) {
+				if intersectsPointShadowVolume(*obj.RenderWorldBounds(), volume) {
 					include = true
 					break
 				}
 			}
 		}
 		if include {
-			distance := distancePointToAABB(cameraPosition, *obj.WorldAABB)
+			distance := distancePointToAABB(cameraPosition, *obj.RenderWorldBounds())
 			if obj.ShadowMaxDistance > 0 && distance > obj.ShadowMaxDistance {
 				continue
 			}
@@ -300,7 +300,7 @@ func collectShadowCasters(objects []*core.VoxelObject, directionalVolumes []dire
 		candidates := grouped[groupID]
 		sort.Slice(candidates, func(i, j int) bool {
 			if candidates[i].distance == candidates[j].distance {
-				return candidates[i].obj.WorldAABB[0].Z() < candidates[j].obj.WorldAABB[0].Z()
+				return candidates[i].obj.RenderWorldBounds()[0].Z() < candidates[j].obj.RenderWorldBounds()[0].Z()
 			}
 			return candidates[i].distance < candidates[j].distance
 		})
@@ -317,7 +317,11 @@ func collectShadowCasters(objects []*core.VoxelObject, directionalVolumes []dire
 
 func rebuildShadowCasterScene(scene *core.Scene, shadowObjects []*core.VoxelObject) {
 	scene.ShadowObjects = scene.ShadowObjects[:0]
-	scene.ShadowObjects = append(scene.ShadowObjects, shadowObjects...)
+	for _, obj := range shadowObjects {
+		if obj != nil && obj.RenderVoxelMap() != nil && obj.RenderWorldBounds() != nil {
+			scene.ShadowObjects = append(scene.ShadowObjects, obj)
+		}
+	}
 
 	if len(scene.ShadowObjects) == 0 {
 		scene.ShadowBVHNodesBytes = make([]byte, 64)
@@ -326,7 +330,7 @@ func rebuildShadowCasterScene(scene *core.Scene, shadowObjects []*core.VoxelObje
 
 	aabbs := make([][2]mgl32.Vec3, len(scene.ShadowObjects))
 	for i, obj := range scene.ShadowObjects {
-		aabbs[i] = *obj.WorldAABB
+		aabbs[i] = *obj.RenderWorldBounds()
 	}
 	builder := &bvh.TLASBuilder{}
 	scene.ShadowBVHNodesBytes = builder.Build(aabbs)

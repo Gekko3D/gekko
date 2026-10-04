@@ -72,7 +72,7 @@ func (m *GpuBufferManager) UpdateVoxelData(scene *core.Scene) bool {
 			continue
 		}
 		activeObjects[obj] = true
-		activeMaps[obj.XBrickMap] = true
+		activeMaps[obj.RenderVoxelMap()] = true
 	}
 	m.evictRetainedVoxelMaps(activeMaps)
 	for xbm, alloc := range m.Allocations {
@@ -147,10 +147,10 @@ func (m *GpuBufferManager) voxelAllocationRequirements(scene *core.Scene) (requi
 	seenMaps := make(map[*volume.XBrickMap]bool)
 	seenSectors := make(map[*volume.Sector]bool)
 	for _, obj := range scene.Objects {
-		if obj == nil || obj.XBrickMap == nil {
+		if obj == nil || obj.RenderVoxelMap() == nil {
 			continue
 		}
-		xbm := obj.XBrickMap
+		xbm := obj.RenderVoxelMap()
 		alloc, exists := m.Allocations[xbm]
 		if exists && !xbm.StructureDirty {
 			continue
@@ -191,10 +191,10 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 	}
 	seenMaps := make(map[*volume.XBrickMap]bool)
 	for _, obj := range scene.Objects {
-		if obj == nil || obj.XBrickMap == nil || seenMaps[obj.XBrickMap] {
+		if obj == nil || obj.RenderVoxelMap() == nil || seenMaps[obj.RenderVoxelMap()] {
 			continue
 		}
-		xbm := obj.XBrickMap
+		xbm := obj.RenderVoxelMap()
 		seenMaps[xbm] = true
 		alloc, exists := m.Allocations[xbm]
 		if !exists {
