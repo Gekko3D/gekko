@@ -128,7 +128,7 @@ func main() {
 					}
 				}
 			})
-			fmt.Printf("selected=%d workload=%s: %s %s\n", count, workload, result.String(), result.MemString())
+			fmt.Printf("selected=%d workload=%s: %s %s member_storage_bytes=%d\n", count, workload, result.String(), result.MemString(), f.manager.ShadowDependencyMemberStorageBytes())
 		}
 	}
 }

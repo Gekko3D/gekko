@@ -202,3 +202,33 @@ deltas are a long-term extension of current manager-owned snapshots and require
 no producer notifications, shader/layout changes or scheduling policy changes.
 CPU work measurements and native shadow parity verify the step; general scene
 scans, moving-volume work and net gameplay frame-time gains remain separate.
+
+
+## R2k ownership decision
+
+The GPU manager retains exact caster scalar snapshots once in its shared selected
+inventory. Each unchanged snapshot carries a manager-owned change token. Shadow
+volume owners retain compact tokens alongside their sorted member indices instead
+of repeating full snapshots. Every changed scalar snapshot receives a new token,
+including identity and uploaded-content changes; tokens cannot identify different
+snapshots after retirement or reset. Unchanged snapshots retain their tokens across
+selection reorder and source-index shifts, including duplicate placements. Live
+public inputs remain captured each
+preparation, and unknown upload epochs remain a separate conservative invalidator.
+Membership, volume keys, generations and recorded-update acknowledgements preserve
+their current contracts. Structural selection changes use reusable temporary shared
+storage and identity remapping; cleared old snapshots release source references.
+Stable selection needs no identity-map lookup or full-key copy.
+
+`ShadowDependencyMemberStorageBytes()` reports retained backing-capacity bytes for
+volume member indices and dependency records across all shadow families. It excludes
+shared scalar inventory, membership scratch, owner headers, source content and GPU
+storage. The compact representation bounds freshly warmed owner storage without
+turning existing cache budgets into a process-memory ceiling.
+
+Repeated owner snapshots duplicate both scalar comparisons and retained pointers.
+Producer dirty notifications could remove live capture but need broader publication
+contracts. Compact manager-owned tokens extend the existing exact-input architecture
+without changing ECS, shader layout, selection or scheduling policy. CPU timing and
+storage measurements plus native map parity verify this step; full scalar capture,
+moving-volume intersections and gameplay frame-time gains remain separate.

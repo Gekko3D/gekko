@@ -2,6 +2,7 @@ package gpu
 
 import (
 	"math"
+	"unsafe"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
@@ -61,11 +62,25 @@ type localShadowCasterKey struct {
 type localShadowDependency struct {
 	active                   bool
 	light                    localShadowLightKey
-	casters                  []localShadowCasterKey
+	casters                  []uint64
 	generation, unknownEpoch uint64
 	membershipRevision       uint64
 	membershipOrigin         [3]uint32
 	memberIndices            []int
+}
+
+// ShadowDependencyMemberStorageBytes reports retained member payload capacity
+// across spot, point-face and directional owners. Shared caster inventory,
+// structural/membership scratch, owner headers and GPU resources are excluded.
+func (m *GpuBufferManager) ShadowDependencyMemberStorageBytes() uint64 {
+	var bytes uint64
+	for _, owners := range [][]localShadowDependency{m.localShadowDependencies, m.pointShadowDependencies, m.directionalShadowDependencies} {
+		for _, owner := range owners {
+			bytes += uint64(cap(owner.casters)) * uint64(unsafe.Sizeof(uint64(0)))
+			bytes += uint64(cap(owner.memberIndices)) * uint64(unsafe.Sizeof(int(0)))
+		}
+	}
+	return bytes
 }
 
 // Public revisions may also be advanced outside the scheduler. Observe before
@@ -137,6 +152,64 @@ func (m *GpuBufferManager) localShadowCaster(obj *core.VoxelObject) localShadowC
 	return key
 }
 
+func selectedShadowCaster(obj *core.VoxelObject) bool {
+	return obj != nil && obj.Transform != nil && obj.RenderEnabled && obj.CastsShadows && obj.RenderVoxelMap() != nil
+}
+
+// Structural preparation alone uses an occurrence queue for each prior object.
+// The alternate inventory never aliases the prior keys or tokens being matched.
+func (m *GpuBufferManager) remapShadowCasters(scene *core.Scene, count int) {
+	if m.shadowCasterRemap == nil {
+		m.shadowCasterRemap = make(map[*core.VoxelObject]int, len(m.localShadowCasters))
+	}
+	if cap(m.shadowCasterOccurrenceNext) < len(m.localShadowCasters) {
+		m.shadowCasterOccurrenceNext = make([]int, len(m.localShadowCasters))
+	} else {
+		m.shadowCasterOccurrenceNext = m.shadowCasterOccurrenceNext[:len(m.localShadowCasters)]
+	}
+	for i := len(m.localShadowCasters) - 1; i >= 0; i-- {
+		obj := m.localShadowCasters[i].object
+		next, found := m.shadowCasterRemap[obj]
+		if !found {
+			next = -1
+		}
+		m.shadowCasterOccurrenceNext[i] = next
+		m.shadowCasterRemap[obj] = i
+	}
+	keys, tokens := m.shadowCasterKeyScratch[:0], m.shadowCasterTokenScratch[:0]
+	if cap(keys) < count {
+		keys = make([]localShadowCasterKey, 0, count)
+	}
+	if cap(tokens) < count {
+		tokens = make([]uint64, 0, count)
+	}
+	if len(m.ShadowLayerParams) > 0 {
+		for _, obj := range scene.ShadowObjects {
+			if !selectedShadowCaster(obj) {
+				continue
+			}
+			caster := m.localShadowCaster(obj)
+			var token uint64
+			if previous, found := m.shadowCasterRemap[obj]; found && previous >= 0 {
+				m.shadowCasterRemap[obj] = m.shadowCasterOccurrenceNext[previous]
+				if m.localShadowCasters[previous] == caster {
+					token = m.localShadowCasterTokens[previous]
+				}
+			}
+			if token == 0 {
+				m.shadowCasterToken++
+				token = m.shadowCasterToken
+			}
+			keys = append(keys, caster)
+			tokens = append(tokens, token)
+		}
+	}
+	clear(m.shadowCasterRemap)
+	clear(m.localShadowCasters[:cap(m.localShadowCasters)])
+	m.shadowCasterKeyScratch, m.localShadowCasters = m.localShadowCasters[:0], keys
+	m.shadowCasterTokenScratch, m.localShadowCasterTokens = m.localShadowCasterTokens[:0], tokens
+}
+
 func (m *GpuBufferManager) prepareShadowDependencies(scene *core.Scene) {
 	m.observeShadowUploadRevision()
 	count := 0
@@ -160,48 +233,57 @@ func (m *GpuBufferManager) prepareShadowDependencies(scene *core.Scene) {
 		m.directionalShadowDependencies = nil
 		clear(m.localShadowCasters)
 		m.localShadowCasters = nil
+		m.localShadowCasterTokens = nil
+		clear(m.shadowCasterKeyScratch[:cap(m.shadowCasterKeyScratch)])
+		clear(m.shadowCasterRemap)
 		m.shadowMembershipDeltaValid = false
 		m.shadowMembershipChangedBounds = nil
 		m.shadowMembershipMergeScratch = nil
 		return
 	}
-	// Prepare each selected caster's scalar inputs once for all shadow layers.
-	membershipChanged := false
+	// Identity preflight keeps maps and alternate scalar storage off the stable
+	// preparation path. Structural selection changes preserve unchanged tokens
+	// by matching each preceding occurrence of an object exactly once.
 	structuralChange := false
-	// Keep the preceding delta if this preparation leaves membership unchanged.
-	// Gather a candidate separately so scalar-only preparations do not erase it.
-	changedBounds := m.shadowMembershipMergeScratch[:0]
 	n := 0
 	if len(m.ShadowLayerParams) > 0 {
 		for _, obj := range scene.ShadowObjects {
-			if obj == nil || obj.Transform == nil || obj.RenderVoxelMap() == nil || !obj.RenderEnabled || !obj.CastsShadows {
+			if !selectedShadowCaster(obj) {
 				continue
 			}
-			caster := m.localShadowCaster(obj)
-			if n >= len(m.localShadowCasters) {
-				membershipChanged = true
+			if n >= len(m.localShadowCasters) || m.localShadowCasters[n].object != obj {
 				structuralChange = true
-				m.localShadowCasters = append(m.localShadowCasters, caster)
-			} else {
-				previous := m.localShadowCasters[n]
-				structuralChange = structuralChange || previous.object != caster.object
-				if previous.instance.world != caster.instance.world {
-					changedBounds = append(changedBounds, n)
-				}
-				membershipChanged = membershipChanged || previous.object != caster.object || previous.instance.world != caster.instance.world
-				m.localShadowCasters[n] = caster
 			}
 			n++
 		}
 	}
-	if n < len(m.localShadowCasters) {
-		membershipChanged = true
-		structuralChange = true
-		clear(m.localShadowCasters[n:])
-		m.localShadowCasters = m.localShadowCasters[:n]
+	structuralChange = structuralChange || n != len(m.localShadowCasters)
+	membershipChanged := structuralChange
+	// Keep the preceding delta if this preparation leaves membership unchanged.
+	// Gather a candidate separately so scalar-only preparations do not erase it.
+	changedBounds := m.shadowMembershipMergeScratch[:0]
+	if structuralChange {
+		m.remapShadowCasters(scene, n)
 	}
-	if n == 0 {
-		m.localShadowCasters = nil
+	n = 0
+	if !structuralChange && len(m.ShadowLayerParams) > 0 {
+		for _, obj := range scene.ShadowObjects {
+			if !selectedShadowCaster(obj) {
+				continue
+			}
+			caster := m.localShadowCaster(obj)
+			previous := m.localShadowCasters[n]
+			if previous.instance.world != caster.instance.world {
+				changedBounds = append(changedBounds, n)
+				membershipChanged = true
+			}
+			if previous != caster {
+				m.shadowCasterToken++
+				m.localShadowCasterTokens[n] = m.shadowCasterToken
+			}
+			m.localShadowCasters[n] = caster
+			n++
+		}
 	}
 	if membershipChanged {
 		m.shadowMembershipDeltaRevision = m.localShadowMembershipRevision
@@ -288,12 +370,12 @@ func (m *GpuBufferManager) refreshShadowDependency(owner *localShadowDependency,
 		owner.membershipRevision = m.localShadowMembershipRevision
 	}
 	for n, index := range owner.memberIndices {
-		caster := m.localShadowCasters[index]
+		token := m.localShadowCasterTokens[index]
 		if n >= len(owner.casters) {
-			owner.casters = append(owner.casters, caster)
+			owner.casters = append(owner.casters, token)
 			changed = true
-		} else if owner.casters[n] != caster {
-			owner.casters[n] = caster
+		} else if owner.casters[n] != token {
+			owner.casters[n] = token
 			changed = true
 		}
 	}

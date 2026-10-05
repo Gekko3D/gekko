@@ -664,11 +664,24 @@ Ordinary camera rebasing does not force point-map rebuilds. Invalid rebased inpu
 retain casters. This preserves the existing world-input cache contract; it does
 not promise bitwise fresh-map parity across arbitrary coordinate rebasing.
 
-The manager captures all live selected caster scalar inputs once per preparation.
+The manager captures and exactly compares all live selected caster scalar inputs
+once per preparation. Changed snapshots receive unique manager-owned tokens;
+volume owners compare compact member tokens instead of retaining full snapshots.
+Unchanged snapshots preserve their tokens across source-index shifts and structural
+reorder, including duplicate selected occurrences. Retired or reset snapshots cannot
+reuse a token for different inputs. Structural selection changes use reusable
+identity remapping and temporary shared storage; cleared old snapshots release
+source references. Stable selections need no identity-map lookup or full-key copy.
+`GpuBufferManager.ShadowDependencyMemberStorageBytes()` reports the backing-capacity
+bytes of per-owner member indices and dependency records across spot, point-face
+and directional owners. It excludes shared scalar inventory, temporary membership
+and structural storage, owner headers, source content and GPU allocations. Capacity
+may remain at its high-water mark while an owner lives; retired owners release it.
+
 Unchanged volumes reuse sorted membership indices. With stable ordered caster
 identities and count, a bounds change rechecks only changed indices for owners at
 the immediately preceding membership revision. Both entry and removal update
-membership; every retained caster still receives a live scalar comparison.
+membership; every retained member still compares its current shared snapshot token.
 Cold owners, structural selection changes, changed light/projection/layer inputs,
 point-origin changes and missing delta history require full membership scans.
 The delta is manager-owned preparation state, not a producer notification queue.
@@ -676,8 +689,7 @@ The delta is manager-owned preparation state, not a producer notification queue.
 caster-volume predicate evaluations across spot, point-face and directional
 owners, including full fallbacks. It excludes scalar capture and retained-member
 comparisons. Removed casters and lights release snapshot references. This adds
-scoped CPU snapshot storage,
-including approximately 1 KiB of opacity metadata per material allocation;
+scoped CPU snapshot storage, including approximately 1 KiB of opacity metadata per material allocation;
 existing cache budgets do not become a total process-memory ceiling.
 
 Geometry uploads invalidate dependent placements, including shared maps and

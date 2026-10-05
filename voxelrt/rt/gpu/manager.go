@@ -264,7 +264,15 @@ type GpuBufferManager struct {
 	localShadowDependencies       []localShadowDependency
 	pointShadowDependencies       []localShadowDependency
 	directionalShadowDependencies []localShadowDependency
-	localShadowCasters            []localShadowCasterKey
+	// Exact keys are shared; owners retain only the corresponding change tokens.
+	localShadowCasters         []localShadowCasterKey
+	localShadowCasterTokens    []uint64
+	shadowCasterKeyScratch     []localShadowCasterKey
+	shadowCasterTokenScratch   []uint64
+	shadowCasterRemap          map[*core.VoxelObject]int
+	shadowCasterOccurrenceNext []int
+	// Never reset when selected casters or shadow owners retire.
+	shadowCasterToken             uint64
 	localShadowMembershipRevision uint64
 	// Bounds deltas apply only to owners at this immediate source revision.
 	shadowMembershipDeltaRevision uint64
