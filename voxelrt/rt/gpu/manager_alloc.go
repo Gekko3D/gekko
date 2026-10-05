@@ -135,6 +135,7 @@ func nonNilBuffers(buffers []*wgpu.Buffer) []*wgpu.Buffer {
 
 func (m *GpuBufferManager) advanceRetiredBuffers() {
 	m.advanceRetiredBrickRanges()
+	m.advanceRetiredAuxiliaryRanges()
 	if len(m.retiredBuffers) == 0 {
 		return
 	}
@@ -312,6 +313,12 @@ func (m *GpuBufferManager) bindGroupReferencedByLiveState(bindGroup *wgpu.BindGr
 func (m *GpuBufferManager) MarkRetiredBuffersSubmitted(queue *wgpu.Queue, submissionIndex wgpu.SubmissionIndex) {
 	if m == nil || queue == nil {
 		return
+	}
+	for i := range m.retiredAuxiliaryRanges {
+		if m.retiredAuxiliaryRanges[i].queue == nil {
+			m.retiredAuxiliaryRanges[i].queue = queue
+			m.retiredAuxiliaryRanges[i].submission = uint64(submissionIndex)
+		}
 	}
 	for i := range m.retiredBrickRanges {
 		if m.retiredBrickRanges[i].queue == nil {

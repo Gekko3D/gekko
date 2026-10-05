@@ -9,21 +9,25 @@ import (
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 )
 
-type brickRecordInterval struct{ base, size uint64 }
-type brickRecordRanges struct {
+type voxelIndexInterval struct{ base, size uint64 }
+type voxelIndexRanges struct {
 	tail   uint64
-	free   []brickRecordInterval
+	free   []voxelIndexInterval
 	shared bool
 }
 
-func (a *brickRecordRanges) clone() brickRecordRanges { a.shared = true; b := *a; return b }
-func (a *brickRecordRanges) writable() {
+// Shared interval mechanics use caller-selected index coordinates.
+// Brick records and auxiliary words own independent allocator instances.
+type brickRecordRanges = voxelIndexRanges
+
+func (a *voxelIndexRanges) clone() voxelIndexRanges { a.shared = true; b := *a; return b }
+func (a *voxelIndexRanges) writable() {
 	if a.shared {
-		a.free = append([]brickRecordInterval(nil), a.free...)
+		a.free = append([]voxelIndexInterval(nil), a.free...)
 		a.shared = false
 	}
 }
-func (a *brickRecordRanges) alloc(size uint32, limit uint64) (uint32, bool) {
+func (a *voxelIndexRanges) alloc(size uint32, limit uint64) (uint32, bool) {
 	if size == 0 {
 		return 0, true
 	}
@@ -54,12 +58,12 @@ func (a *brickRecordRanges) alloc(size uint32, limit uint64) (uint32, bool) {
 	a.tail += uint64(size)
 	return uint32(base), true
 }
-func (a *brickRecordRanges) release(base, size uint32) {
+func (a *voxelIndexRanges) release(base, size uint32) {
 	if size == 0 {
 		return
 	}
 	a.writable()
-	a.free = append(a.free, brickRecordInterval{uint64(base), uint64(size)})
+	a.free = append(a.free, voxelIndexInterval{uint64(base), uint64(size)})
 	sort.Slice(a.free, func(i, j int) bool { return a.free[i].base < a.free[j].base })
 	out := a.free[:0]
 	for _, r := range a.free {
@@ -159,7 +163,7 @@ type plannedBrickRange struct {
 
 // claim removes exactly the planned span without depending on service order.
 // A later tail claim leaves earlier deferred placements as ordinary free gaps.
-func (a *brickRecordRanges) claim(base, size uint32, limit uint64) bool {
+func (a *voxelIndexRanges) claim(base, size uint32, limit uint64) bool {
 	if size == 0 {
 		return true
 	}
@@ -191,13 +195,13 @@ func (a *brickRecordRanges) claim(base, size uint32, limit uint64) bool {
 		a.writable()
 		left, right := start-r.base, r.base+r.size-end
 		if left > 0 && right > 0 {
-			a.free[i] = brickRecordInterval{r.base, left}
-			a.free = append(a.free, brickRecordInterval{end, right})
+			a.free[i] = voxelIndexInterval{r.base, left}
+			a.free = append(a.free, voxelIndexInterval{end, right})
 			sort.Slice(a.free, func(i, j int) bool { return a.free[i].base < a.free[j].base })
 		} else if left > 0 {
 			a.free[i].size = left
 		} else if right > 0 {
-			a.free[i] = brickRecordInterval{end, right}
+			a.free[i] = voxelIndexInterval{end, right}
 		} else {
 			a.free = append(a.free[:i], a.free[i+1:]...)
 		}

@@ -99,7 +99,7 @@ struct BrickRecord {
     payload_page: u32,
     flags: u32,
     voxel_aux_word_base: u32,
-    padding: u32,
+    padding: u32, // Auxiliary layout: 0 dense, 1 occupancy-ranked normals.
 };
 
 struct Tree64Node {

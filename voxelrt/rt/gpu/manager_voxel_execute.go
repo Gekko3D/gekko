@@ -50,7 +50,11 @@ func (m *GpuBufferManager) executeVoxelUpload(context func() voxelNormalBakeCont
 		if brick == nil {
 			mustQueueVoxelWrite(m.writeVoxelBuffer(m.BrickTableBuf, uint64(recordIndex)*BrickRecordSize, make([]byte, BrickRecordSize)))
 		} else {
-			m.uploadBrick(context, work.object, xbm, brick, recordIndex, brickOriginForSectorIndex(key, i))
+			var captured *capturedVoxelBrick
+			if work.packedAuxiliarySnapshot != nil {
+				captured = work.packedAuxiliarySnapshot.rows[i]
+			}
+			m.uploadBrick(context, work.object, xbm, brick, recordIndex, brickOriginForSectorIndex(key, i), captured)
 		}
 	}
 	if work.kind == voxelUploadSector {

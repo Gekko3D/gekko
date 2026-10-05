@@ -122,7 +122,7 @@ func (m *GpuBufferManager) updateVoxelData(scene *core.Scene, backend voxelNativ
 
 	m.serviceVoxelUploads(scene, func(work voxelUploadWork) bool {
 		return m.executeVoxelUpload(normalBakeContext, work)
-	})
+	}, normalBakeContext)
 	// Upload completion can assign new sectors, aux records and payload slots.
 	activeMaps := make(map[*volume.XBrickMap]bool)
 	for _, target := range voxelServiceTargets(scene) {
@@ -515,6 +515,7 @@ func (m *GpuBufferManager) releaseUnreferencedSector(sector *volume.Sector) {
 		}
 	}
 	if info, ok := m.SectorToInfo[sector]; ok {
+		m.releaseSectorAuxiliaryPackets(sector)
 		m.SectorAlloc.FreeSlot(info.SlotIndex)
 		if info.packed != nil {
 			m.retireBrickRange(info.packed.base, info.packed.capacity)
@@ -596,6 +597,7 @@ type gpuBrickRecord struct {
 	payloadPage      uint32
 	flags            uint32
 	voxelAuxWordBase uint32
+	auxiliaryLayout  uint32
 }
 
 func resolveBrickUploadMode(flags uint32) brickUploadMode {
@@ -633,6 +635,7 @@ func encodeGpuBrickRecord(record gpuBrickRecord) []byte {
 	binary.LittleEndian.PutUint32(buf[16:20], record.payloadPage)
 	binary.LittleEndian.PutUint32(buf[20:24], record.flags)
 	binary.LittleEndian.PutUint32(buf[24:28], record.voxelAuxWordBase)
+	binary.LittleEndian.PutUint32(buf[28:32], record.auxiliaryLayout)
 	return buf
 }
 
@@ -666,7 +669,15 @@ func (m *GpuBufferManager) writeSectorRecord(coords [3]int, mask uint64, info Se
 	mustQueueVoxelWrite(m.writeVoxelBuffer(m.SectorTableBuf, uint64(info.SlotIndex)*32, sData))
 }
 
-func (m *GpuBufferManager) uploadBrick(context func() voxelNormalBakeContext, obj *core.VoxelObject, target *volume.XBrickMap, brick *volume.Brick, slotIdx uint32, brickOrigin [3]int) {
+func (m *GpuBufferManager) uploadBrick(context func() voxelNormalBakeContext, obj *core.VoxelObject, target *volume.XBrickMap, brick *volume.Brick, slotIdx uint32, brickOrigin [3]int, captures ...*capturedVoxelBrick) {
+	identity := brick
+	var captured *capturedVoxelBrick
+	if len(captures) != 0 {
+		captured = captures[0]
+	}
+	if captured != nil {
+		brick = &captured.source
+	}
 	if brick == nil {
 		return
 	}
@@ -676,14 +687,14 @@ func (m *GpuBufferManager) uploadBrick(context func() voxelNormalBakeContext, ob
 	var payloadPage uint32
 	auxWordBase := VoxelAuxInvalidWordBase
 	if mode.usesPayload {
-		payloadSlot, exists := m.BrickToSlot[brick]
+		payloadSlot, exists := m.BrickToSlot[identity]
 		if !exists {
 			var ok bool
 			payloadSlot, ok = m.allocPayloadSlot()
 			if !ok {
 				panic(fmt.Sprintf("voxel payload atlas full: pages=%d bricks_per_page=%d total_capacity=%d", m.VoxelPayloadPageCount, m.voxelPayloadCapacityPerPage(), m.voxelPayloadCapacityPerPage()*m.VoxelPayloadPageCount))
 			}
-			m.BrickToSlot[brick] = payloadSlot
+			m.BrickToSlot[identity] = payloadSlot
 		}
 		payloadPage = payloadSlot.Page
 
@@ -709,7 +720,13 @@ func (m *GpuBufferManager) uploadBrick(context func() voxelNormalBakeContext, ob
 		mustQueueVoxelWrite(m.voxelNative.WritePayload(payloadPage, [3]uint32{uint32(ax), uint32(ay), uint32(az)}, payload))
 	}
 
-	if mode.usesAux {
+	if mode.usesAux && captured != nil {
+		auxWordBase = captured.lease.base
+		mustQueueVoxelWrite(m.writeVoxelBuffer(m.DenseOccupancyBuf, uint64(auxWordBase)*4, captured.packet))
+	} else if mode.usesAux {
+		if m.packedVoxelNormals {
+			panic("packed voxel auxiliary upload requires a complete-unit capture")
+		}
 		auxSlot, exists := m.BrickToAuxSlot[brick]
 		if !exists {
 			auxSlot = m.VoxelAuxAlloc.Alloc()
@@ -734,6 +751,9 @@ func (m *GpuBufferManager) uploadBrick(context func() voxelNormalBakeContext, ob
 	}
 
 	record := buildGpuBrickRecord(brick, mode, payloadOffset, payloadPage, auxWordBase)
+	if captured != nil {
+		record.auxiliaryLayout = 1
+	}
 	bbuf := encodeGpuBrickRecord(record)
 	mustQueueVoxelWrite(m.writeVoxelBuffer(m.BrickTableBuf, uint64(slotIdx)*BrickRecordSize, bbuf))
 }

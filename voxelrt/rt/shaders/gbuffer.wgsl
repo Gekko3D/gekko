@@ -73,7 +73,7 @@ struct BrickRecord {
     payload_page: u32,
     flags: u32,
     voxel_aux_word_base: u32,
-    padding: u32,
+    padding: u32, // Auxiliary layout: 0 dense, 1 occupancy-ranked normals.
 };
 
 struct Tree64Node {
@@ -301,14 +301,27 @@ fn decode_baked_voxel_normal(encoded: u32) -> BakedVoxelNormal {
     );
 }
 
-fn load_baked_voxel_normal_from_brick(brick: BrickRecord, voxel_idx: u32) -> BakedVoxelNormal {
-    if (brick.voxel_aux_word_base == 0xFFFFFFFFu) {
-        return BakedVoxelNormal(vec3<f32>(0.0), false, 0u);
+fn load_baked_voxel_normal_encoded_from_brick(brick: BrickRecord, voxel_idx: u32) -> u32 {
+    if (brick.voxel_aux_word_base == 0xFFFFFFFFu) { return 0u; }
+    var normal_idx = voxel_idx;
+    // Layout zero retains dense raw values, including empty-voxel values.
+    if (brick.padding == 1u) {
+        if (voxel_idx >= 512u) { return 0u; }
+        let occupancy_idx = voxel_idx >> 5u;
+        let occupancy = voxel_aux_words[brick.voxel_aux_word_base + occupancy_idx];
+        let bit = 1u << (voxel_idx & 31u);
+        if ((occupancy & bit) == 0u) { return 0u; }
+        normal_idx = countOneBits(occupancy & (bit - 1u));
+        for (var i = 0u; i < occupancy_idx; i++) {
+            normal_idx += countOneBits(voxel_aux_words[brick.voxel_aux_word_base + i]);
+        }
     }
-    let word_idx = brick.voxel_aux_word_base + VOXEL_AUX_OCCUPANCY_WORD_COUNT + (voxel_idx >> 1u);
-    let word = voxel_aux_words[word_idx];
-    let encoded = (word >> ((voxel_idx & 1u) * 16u)) & 0xFFFFu;
-    return decode_baked_voxel_normal(encoded);
+    let word = voxel_aux_words[brick.voxel_aux_word_base + VOXEL_AUX_OCCUPANCY_WORD_COUNT + (normal_idx >> 1u)];
+    return (word >> ((normal_idx & 1u) * 16u)) & 0xFFFFu;
+}
+
+fn load_baked_voxel_normal_from_brick(brick: BrickRecord, voxel_idx: u32) -> BakedVoxelNormal {
+    return decode_baked_voxel_normal(load_baked_voxel_normal_encoded_from_brick(brick, voxel_idx));
 }
 
 fn brick_is_solid(flags: u32) -> bool {

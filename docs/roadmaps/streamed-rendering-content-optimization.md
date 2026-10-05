@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; other sections are proposals.
+Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals is complete, with P3 remaining partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -17,8 +17,8 @@ Owners: renderer storage/upload and streamed runtime. Consumers: physics, naviga
 ## 2. Current Gekko foundations and gaps
 
 - [CPU brick storage](../../voxelrt/rt/volume/xbrickmap.go): 8³ bricks, 32³ sectors, 2³ micro masks. `Sector.PackedBricks` already uses popcount indexing. `Brick.Payload` still stores 512 bytes for every allocated brick, including uniform bricks.
-- [GPU upload](../../voxelrt/rt/gpu/manager_voxel.go): each sector reserves 64 brick records. Shader indexing uses `sector.brick_table_index + brick_idx_local`, not CPU popcount indexing. Mixed bricks use paged `R8Uint` atlas; uniform bricks already skip color payload.
-- [Auxiliary data](../../voxelrt/rt/volume/voxel_aux.go): 64 bytes of occupancy plus 1,024 bytes of encoded normals per brick. Normal encoding includes validity and two-sided lighting. [G-buffer traversal](../../voxelrt/rt/shaders/gbuffer.wgsl) already rejects empty voxels before loading their material.
+- [GPU upload](../../voxelrt/rt/gpu/manager_voxel.go): P2c packs managed sector brick records with popcount indexing and submission-safe reuse; legacy dense headers remain supported. Mixed bricks use paged `R8Uint` atlas; uniform bricks already skip color payload.
+- [Auxiliary data](../../voxelrt/rt/volume/voxel_aux.go): CPU/default GPU storage uses 64 bytes of occupancy plus 1,024 bytes of encoded normals per brick; P3a optionally packs GPU normals by occupied voxel. Normal encoding includes validity and two-sided lighting. [G-buffer traversal](../../voxelrt/rt/shaders/gbuffer.wgsl) already rejects empty voxels before loading their material.
 - [Streaming](../../streamed_level_runtime.go): worker preparation, generation checks, indexed chunk maps, proxy/full handoff, and separate collision/destruction interest already exist. [S3a selection](../../streamed_level_selection.go) caches idle demand and updates cube differences. Commit limits count chunks and elapsed time; global GPU content budgets are implemented in S1b.
 - [Caching](../../runtime_content_loader.go): S2b adds decoded-content byte budgets, scoped leases, in-flight suppression, and shared pending-result admission. [Prepared geometry](../../streamed_level_geometry_cache.go) has S2a byte accounting and pinned users. S2c bounds CPU material tables; S2d bounds retained assigned GPU geometry slots. Live users/sole oversized pending results expose pressure exceptions; physical GPU capacity and other owners remain separate. These are not total process memory limits.
 - [Imported payloads](../../content/imported_world_chunk_binary.go): binary RLE already exists, with JSON metadata and SHA-256 verification. Decoding expands into voxel records, then [spawning](../../imported_world_spawn.go) builds `XBrickMap` through per-voxel writes. Terrain chunks remain JSON.
@@ -39,7 +39,7 @@ Owners: renderer storage/upload and streamed runtime. Consumers: physics, naviga
 | Q7, D2 | No live probe snapshot path to fix; extend existing immutable snapshots | P1, P5 |
 | Q8 | Camera-focused cascades already present | R2 |
 | B0 | Certified static tables share GPU material blocks; dynamic/raw tables remain private | P4 |
-| B1 | CPU complete; auxiliary capacity follows distinct bricks; GPU brick table still reserves 64 records per sector | P2 |
+| B1 | Managed GPU brick records are packed; auxiliary capacity is independent; density-policy evaluation remains | P2 |
 | B2 | GPU dense occupancy already present | P1, P3 |
 | B3, B4, B7 | Packed payload useful; retain Gekko normal encoding; atlas removal conditional | P3 |
 | B5 | Compact read-only CPU storage strongly applicable | P1 |
@@ -134,6 +134,11 @@ Excluding slack, sector tables and page overhead: current mixed brick `32 + 512 
 Prototype both paths behind one accessor. Remove atlas only after sparse/dense visual parity and favorable traversal. Buffers may lose texture locality; reject slower default. CPU/disk compaction can ship independently.
 
 Owners: voxel pool allocator, upload/bind groups, traversal shaders, normal builder, app pipeline layouts. Acceptance: identical normals, AO, transparency, shadows, particles, and edited seams; no stale allocation reads.
+
+P3a completes an opt-in packed fitted-normal GPU prototype while retaining the
+material atlas and dense default. See the [storage contract](../renderer/runtime.md#packed-fitted-normal-storage)
+and [delivery](#p3a-packed-fitted-normal-gpu-storage). Dense traversal benchmarking,
+packed mixed-material storage and any default policy remain P3 work.
 
 ### P4. Share immutable GPU material blocks
 
@@ -931,7 +936,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | P4 | `cfc07c7` | Share certified static GPU material blocks with isolated instance edits | [Runtime contract](../renderer/runtime.md#immutable-gpu-material-blocks) |
 | P2a | `362f10d` | Size auxiliary buffers by distinct brick demand with safe admission/reuse | [Runtime contract](../renderer/runtime.md#auxiliary-capacity-admission) |
 | P2b | `c2356df` | Upload sparse sector records with captured header publication | [Runtime contract](../renderer/runtime.md#sparse-sector-publication) |
-| P2c | This batch | Pack sector ranges with fenced reuse and shared publication | [Runtime contract](../renderer/runtime.md#packed-sector-brick-ranges) |
+| P2c | `d0e13a6` | Pack sector ranges with fenced reuse and shared publication | [Runtime contract](../renderer/runtime.md#packed-sector-brick-ranges) |
+| P3a | This batch | Opt-in occupancy-ranked fitted normals with fenced packet reuse | [Runtime contract](../renderer/runtime.md#packed-fitted-normal-storage) |
 | S1a | `e3f11cf` | Hidden residency and readiness tickets | [Design](streamed-rendering-s1a.md) |
 | S1b | `a539257` | Global content budgets, ordering and atlas backpressure | [Design](streamed-rendering-s1b.md) |
 | S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
@@ -4489,3 +4495,48 @@ Consumer builds passed with
 FPS, full interactive gameplay/editor appearance, complete particle trajectories
 and exhaustive traversal branches were not measured. Dense/frequently edited
 workload benchmarks and an optional density policy remain P2 evaluation work.
+
+### P3a: Packed fitted-normal GPU storage
+
+This batch adds opt-in occupancy-ranked fitted normals to GPU storage/upload
+and the G-buffer, transparency and particle consumers; shadows retain occupancy
+reads. Dense remains the default and the material atlas remains. The
+[runtime contract](../renderer/runtime.md#packed-fitted-normal-storage) records
+exact normal-bit preservation, physical packet ownership, complete-unit budgets,
+copy-on-write publication and submission-safe reuse.
+
+The paired native sparse fixture (144 records, including dense shape/seam
+samples) reduced initial physical auxiliary capacity from 156,672 to 12,032
+bytes (92.3%), live packet bytes from 156,672 to 11,988, and cumulative content
+uploads from 168,640 to 23,956 bytes (85.8%). Growth to 664 records required
+722,432 versus 48,384 physical bytes. Removal returned live packet demand to
+156,672 versus 11,996 bytes; physical capacity did not shrink. Replacement
+quarantine and capacity slack are included in physical figures, not live bytes.
+These are fixture results, not scene-wide predictions or traversal timings.
+
+Verification from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . ./voxelrt/rt/gpu ./voxelrt/rt/core ./voxelrt/rt/app ./voxelrt/rt/volume -count=1
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/p3a-packed-voxel-normals docs/roadmaps/diagnostics/p3a_packed_voxel_normals.go
+/tmp/p3a-packed-voxel-normals -mode dense -output /tmp/p3a-dense
+/tmp/p3a-packed-voxel-normals -mode packed -output /tmp/p3a-packed -compare /tmp/p3a-dense
+for native_fixture in p2c_packed_sector_ranges p2b_sparse_sector_publication p4_material_sharing r2c_shadow_publication r2d_shadow_batches r2e_shadow_reuse r2f_directional_reuse r2g_camera_shadow_reuse r2h_directional_stability r2i_point_face_reuse; do
+  env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-${native_fixture}-p3a-frozen docs/roadmaps/diagnostics/${native_fixture}.go
+  /tmp/gekko-${native_fixture}-p3a-frozen || exit 1
+done
+git diff --check
+```
+
+Tests and race checks passed. Paired native GPU occupancy/raw-normal/decoded-bit
+probes and rendered depth, normal, material and transparency readbacks matched,
+including edits, normal halos, deferral, growth and removal. All ten freshly
+built native P2c/P2b/P4/R2c–R2i regression diagnostics also passed. Consumer builds
+passed with `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p3a-consumer-N .`
+from `../gekko-editor` (N=0), `../actiongame` (1), `../spacegame_go` (2),
+`../spacesim` (3) and `../examples/testing-vox` (4).
+
+FPS, dense/frequently edited traversal costs, full interactive editor/gameplay,
+complete particle trajectories and exhaustive traversal branches remain
+unverified. Packed mixed-material storage and a default policy remain P3 work.

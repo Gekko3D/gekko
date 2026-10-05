@@ -40,26 +40,27 @@ const (
 )
 
 type voxelUploadWork struct {
-	brickSnapshot      *voxelBrickUploadSnapshot
-	sectorSnapshot     *voxelSectorUploadSnapshot
-	recordMask         uint64
-	sparseRecordSet    bool
-	material           *MaterialGpuAllocation
-	materialBlock      *materialGPUBlock
-	materialData       []byte
-	materialRows       []core.Material
-	materialPtr        uintptr
-	materialLen        int
-	materialGeneration uint64
-	kind               voxelUploadKind
-	object             *core.VoxelObject
-	sectorKey          [3]int
-	brickKey           [6]int
-	bytes              uint64
-	sectors, bricks    uint32
-	target             *volume.XBrickMap
-	targetRevision     uint64
-	pendingGeneration  uint64
+	packedAuxiliarySnapshot *packedAuxiliaryUploadSnapshot
+	brickSnapshot           *voxelBrickUploadSnapshot
+	sectorSnapshot          *voxelSectorUploadSnapshot
+	recordMask              uint64
+	sparseRecordSet         bool
+	material                *MaterialGpuAllocation
+	materialBlock           *materialGPUBlock
+	materialData            []byte
+	materialRows            []core.Material
+	materialPtr             uintptr
+	materialLen             int
+	materialGeneration      uint64
+	kind                    voxelUploadKind
+	object                  *core.VoxelObject
+	sectorKey               [3]int
+	brickKey                [6]int
+	bytes                   uint64
+	sectors, bricks         uint32
+	target                  *volume.XBrickMap
+	targetRevision          uint64
+	pendingGeneration       uint64
 }
 
 // Legacy helper work literals resolve their target at use; production queues
@@ -158,11 +159,16 @@ func brickUploadBytes(brick *volume.Brick) uint64 {
 // staging. Payload textures are shared and remain one write per uploaded brick.
 func (m *GpuBufferManager) voxelBrickUploadBytes(brick *volume.Brick) uint64 {
 	bytes := brickUploadBytes(brick)
+	auxBytes := uint64(VoxelAuxRecordBytes)
+	if m.packedVoxelNormals && brick != nil && resolveBrickUploadMode(brick.Flags).usesAux {
+		auxBytes = uint64(packedAuxiliaryWordCount(brick)) * 4
+		bytes = bytes - VoxelAuxRecordBytes + auxBytes
+	}
 	if m.voxelBufferMirrored(1) {
 		bytes += BrickRecordSize
 	}
 	if brick != nil && resolveBrickUploadMode(brick.Flags).usesAux && m.voxelBufferMirrored(2) {
-		bytes += VoxelAuxRecordBytes
+		bytes += auxBytes
 	}
 	return bytes
 }
@@ -177,7 +183,7 @@ func voxelUploadOrder(obj *core.VoxelObject) uint64 {
 // serviceVoxelUploads is the shared production admission/completion path.
 // An executor may refuse only before writing. Successful execution means writes
 // were queued, not that GPU execution has completed.
-func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(voxelUploadWork) bool) {
+func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(voxelUploadWork) bool, contexts ...func() voxelNormalBakeContext) {
 	m.observeShadowUploadRevision()
 	m.beginVoxelOwnership()
 	defer m.endVoxelOwnership()
@@ -354,6 +360,11 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 		return objectOrder[a.object] < objectOrder[b.object]
 	})
 	remaining := m.VoxelUploadBudget()
+	completedPhysical := make(map[*volume.Sector]voxelUploadWork)
+	var context func() voxelNormalBakeContext
+	if len(contexts) != 0 {
+		context = contexts[0]
+	}
 	for _, w := range queue {
 		if !w.targetCurrent() || (w.kind == voxelUploadMaterial && !m.materialWorkCurrent(w)) {
 			continue
@@ -394,20 +405,50 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 		if w.kind == voxelUploadSector {
 			w = m.qualifySectorUpload(w)
 		}
-		if w.bytes > remaining.MaxBytes || w.sectors > remaining.MaxSectors || w.bricks > remaining.MaxBricks {
+		if (!m.packedVoxelNormals || w.kind == voxelUploadMaterial) && (w.bytes > remaining.MaxBytes || w.sectors > remaining.MaxSectors || w.bricks > remaining.MaxBricks) {
 			continue
 		}
-		if w.kind != voxelUploadMaterial && (!m.voxelUploadPayloadFits(w) || !m.voxelUploadAuxiliaryFits(w) || !m.packedUploadFits(w)) {
+		if !m.packedVoxelNormals && w.kind != voxelUploadMaterial && (!m.voxelUploadPayloadFits(w) || !m.voxelUploadAuxiliaryFits(w) || !m.packedUploadFits(w)) {
 			continue
 		}
 		if w.kind == voxelUploadSector {
 			w.sectorSnapshot = m.captureSectorUpload(w)
-			if !m.assignPackedUpload(w.sectorSnapshot) {
-				continue
-			}
 		}
 		if w.kind == voxelUploadBrick {
 			w.brickSnapshot = m.captureBrickUpload(w)
+		}
+		var auxiliaryBefore voxelIndexRanges
+		auxiliaryClaimed := false
+		if m.packedVoxelNormals && w.kind != voxelUploadMaterial {
+			w = m.capturePackedAuxiliaryUpload(w, context)
+			previous, completed := completedPhysical[w.packedAuxiliarySnapshot.sector]
+			if completed && samePackedPhysicalUpload(previous, w) {
+				if w.targetCurrent() && w.packedAuxiliarySnapshot.current() && (w.sectorSnapshot == nil || w.sectorSnapshot.current(w)) && (w.brickSnapshot == nil || w.brickSnapshot.current(w)) {
+					acknowledgeVoxelGeometryWork(w)
+					delete(ages, w.identity())
+				}
+				continue
+			}
+			if w.bytes > remaining.MaxBytes || w.sectors > remaining.MaxSectors || w.bricks > remaining.MaxBricks {
+				continue
+			}
+			if !m.voxelUploadPayloadFits(w) || !m.packedUploadFits(w) {
+				continue
+			}
+			claimed, ok := m.planCapturedAuxiliaryUpload(w)
+			if !ok {
+				continue
+			}
+			auxiliaryBefore = m.auxiliaryRanges.clone()
+			m.auxiliaryRanges = claimed
+			auxiliaryClaimed = true
+		}
+		brickBefore := m.brickRanges.clone()
+		if w.sectorSnapshot != nil && !m.assignPackedUpload(w.sectorSnapshot) {
+			if auxiliaryClaimed {
+				m.auxiliaryRanges = auxiliaryBefore
+			}
+			continue
 		}
 		snapshot := m.captureVoxelUploadSnapshot(w)
 		geometry := m.Allocations[w.targetMap()]
@@ -424,8 +465,15 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 			}
 		}
 		if execute == nil || !execute(w) {
+			if auxiliaryClaimed {
+				m.auxiliaryRanges = auxiliaryBefore
+			}
 			if w.sectorSnapshot != nil && w.sectorSnapshot.newRange {
-				m.brickRanges.release(w.sectorSnapshot.info.BrickTableIndex, packedBrickCapacity(w.sectorSnapshot.mask))
+				if auxiliaryClaimed {
+					m.brickRanges = brickBefore
+				} else {
+					m.brickRanges.release(w.sectorSnapshot.info.BrickTableIndex, packedBrickCapacity(w.sectorSnapshot.mask))
+				}
 			}
 			continue
 		}
@@ -454,6 +502,15 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 		m.commitVoxelUploadSnapshot(snapshot)
 		if w.kind != voxelUploadMaterial {
 			m.publishPackedUpload(w, geometry)
+			if w.packedAuxiliarySnapshot != nil {
+				m.auxiliaryPackedLeased = true
+				m.publishAuxiliaryUpload(w)
+				physical := w.packedAuxiliarySnapshot.sector
+				_, tracked := completedPhysical[physical]
+				if info := m.SectorToInfo[physical]; tracked || (info.packed != nil && len(info.packed.owners) > 1) {
+					completedPhysical[physical] = w
+				}
+			}
 		}
 		remaining.MaxBytes -= w.bytes
 		remaining.MaxSectors -= w.sectors
@@ -477,7 +534,7 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 				}
 			}
 		} else {
-			if !w.targetCurrent() || (w.kind == voxelUploadMaterial && !m.materialWorkCurrent(w)) || (w.sectorSnapshot != nil && !w.sectorSnapshot.current(w)) || (w.brickSnapshot != nil && !w.brickSnapshot.current(w)) {
+			if !w.targetCurrent() || (w.kind == voxelUploadMaterial && !m.materialWorkCurrent(w)) || (w.sectorSnapshot != nil && !w.sectorSnapshot.current(w)) || (w.brickSnapshot != nil && !w.brickSnapshot.current(w)) || (w.packedAuxiliarySnapshot != nil && !w.packedAuxiliarySnapshot.current()) {
 				continue
 			}
 			xbm := w.targetMap()
@@ -697,4 +754,16 @@ func (m *GpuBufferManager) qualifySectorUpload(w voxelUploadWork) voxelUploadWor
 	}
 	w.bricks = uint32(bits.OnesCount64(w.recordMask))
 	return w
+}
+
+func acknowledgeVoxelGeometryWork(w voxelUploadWork) {
+	xbm := w.targetMap()
+	if w.kind == voxelUploadSector {
+		delete(xbm.DirtySectors, w.sectorKey)
+		for index := 0; index < 64; index++ {
+			delete(xbm.DirtyBricks, [6]int{w.sectorKey[0], w.sectorKey[1], w.sectorKey[2], index % 4, (index / 4) % 4, index / 16})
+		}
+	} else if w.kind == voxelUploadBrick {
+		delete(xbm.DirtyBricks, w.brickKey)
+	}
 }

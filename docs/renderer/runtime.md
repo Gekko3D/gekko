@@ -675,7 +675,7 @@ Current implementation notes:
 
 - The live normal decode path is in `voxelrt/rt/shaders/gbuffer.wgsl`; CPU-side bake/upload lives in `voxelrt/rt/gpu/manager_voxel_normals.go`.
 - Neighbor-derived normals are baked during voxel upload into the voxel auxiliary sidecar. Objects with voxel adjacency metadata sample adjacent chunks across boundaries; terrain metadata remains a compatibility fallback.
-- The sidecar keeps dense occupancy words followed by one 16-bit oct-encoded normal per voxel. G-buffer, transparent overlay, and particle collision paths load the baked normal at the hit voxel instead of sampling six neighbors at hit time.
+- The CPU sidecar keeps dense occupancy words followed by one 16-bit oct-encoded normal per voxel; GPU storage follows the [auxiliary layout contract](#packed-fitted-normal-storage). G-buffer, transparent overlay, and particle collision paths load the baked normal at the hit voxel instead of sampling six neighbors at hit time.
 - Cross-chunk normal seams depend on upload-time dirty propagation: structural dirty state must be prepared before cross-object normal halo propagation so newly loaded chunks rebake already-uploaded neighbor boundary bricks.
 - The degenerate fallback path is occupancy-based and deterministic per voxel; face-entry is only a last resort.
 - Degenerate thin voxels carry a two-sided direct-light flag through the G-buffer so deferred and transparent lighting agree on planes and rods.
@@ -1036,6 +1036,54 @@ layout zero. Ownership bookkeeping fallback cannot reinterpret an established
 packed sector as dense. Arbitrary subsequent derived GPU allocation/allocator
 mutations remain unsupported producers; conflicting legacy address growth must
 fail closed rather than overlap managed ranges.
+
+### Packed fitted-normal storage
+
+Dense GPU normals remain the default. `GpuBufferManager.SetPackedVoxelNormals(true)`
+opts in before geometry or auxiliary allocation and staged growth. Same-value
+calls are idempotent; changing modes after allocation, including after release,
+is rejected. CPU sidecars and authored `PrecomputedAux` remain 1,088 bytes.
+
+BrickRecord byte 28 selects auxiliary layout: zero is dense; one retains the
+first sixteen occupancy words and follows them with two original 16-bit normal
+lanes per word, in ascending occupied voxel order (`x + y*8 + z*64`). The packet
+occupies `16 + ceil(occupied/2)` words, with a zero odd padding lane. Valid
+1,088-byte precomputed data is authoritative, including its occupancy header;
+otherwise the existing normal baker supplies the dense source. Invalid-sized
+precomputed slices are ignored. Encoding, validity and two-sided bits are copied
+exactly, including invalid raw values. This selector is independent of the sector
+header's byte-28 brick-addressing selector.
+
+G-buffer, transparency and particle normal loads rank occupied voxels against
+these occupancy words. Packed empty-voxel loads return zero; dense raw loads
+retain their previous behavior. Shadow traversal uses the unchanged occupancy
+header. Material tables, payload atlas and bindings remain unchanged.
+
+A live packet belongs to a physical sector/local brick index. Shared physical
+sectors share it; sharing a CPU brick between distinct sectors does not share
+normal packets. Every actual packed upload replaces its packet, including
+identical uploads in later updates and normal-only halos. Replaced, removed and
+final-owner packets remain quarantined until an actual queue submission is
+stamped and completed. Admission pays simultaneous old/new capacity, and retained
+map accounting charges committed packet words rather than fixed dense slots.
+
+Admission reserves exact virtual word spans without assigning deferred packets.
+Each service work item captures at most 64 rows, including raw fields and
+valid precomputed bytes, and bakes its packets before native writes. Actual byte
+costs include migration mirrors and are checked with physical capacity and all
+unit claims before execution. Each packet precedes its brick record; all records precede
+the sector header. Source changes during execution leave dirty work pending;
+neighbor inputs retain the existing revision/normal-halo ownership contract.
+Late growth protects other pending spans before claiming spare space.
+
+Within one update, identical shared-sector work can acknowledge an already
+written packet without consuming a second physical unit budget. Equivalence
+uses the latest successful physical publication, captured source/packet bytes,
+topology and allocation identity; an A→B→A sequence therefore writes A again.
+Target revision, pending generation and source checks still guard acknowledgement.
+Existing public dense auxiliary slots keep a reserved legacy prefix; conflicting
+later prefix growth fails closed. Packed allocation uses independent word
+coordinates, with no change to the legacy dense slot API.
 
 ### Normal neighbor preparation
 
@@ -1445,8 +1493,10 @@ Voxel payload uploads follow the same rule. `BrickRecord` is now 32 bytes and us
   - payload atlas page for payload-backed sparse bricks
 - `flags`
   - includes `BrickFlagSolid` and `BrickFlagUniformMaterial`
-- `dense_occupancy_word_base`
-  - exact `8x8x8` occupancy pointer for non-solid bricks
+- `voxel_aux_word_base`
+  - exact `8x8x8` occupancy and fitted-normal packet pointer
+- `auxiliary_layout` (byte 28)
+  - dense zero or packed-normal one; see [storage contract](#packed-fitted-normal-storage)
 
 The live brick-mode contract is:
 

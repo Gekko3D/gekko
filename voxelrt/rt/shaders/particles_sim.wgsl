@@ -86,7 +86,7 @@ struct SpawnRequest {
 
 // Group 2: Voxel Data (Shared with Renderer)
 struct SectorRecord { origin_vox: vec4<i32>, brick_table_index: u32, brick_mask_lo: u32, brick_mask_hi: u32, padding: u32 };
-struct BrickRecord { material_index: u32, payload_offset: u32, occupancy_mask_lo: u32, occupancy_mask_hi: u32, payload_page: u32, flags: u32, voxel_aux_word_base: u32, padding: u32 };
+struct BrickRecord { material_index: u32, payload_offset: u32, occupancy_mask_lo: u32, occupancy_mask_hi: u32, payload_page: u32, flags: u32, voxel_aux_word_base: u32, padding: u32 }; // Auxiliary layout: 0 dense, 1 occupancy-ranked normals.
 struct SectorGridEntry { coords: vec4<i32>, base_idx: u32, sector_idx: i32, padding: vec2<u32> };
 struct SectorGridParams { grid_size: u32, grid_mask: u32, padding0: u32, padding1: u32 };
 struct ObjectParams { sector_table_base: u32, brick_table_base: u32, payload_base: u32, material_table_base: u32, tree64_base: u32, lod_threshold: f32, sector_count: u32, ambient_occlusion_mode: u32, shadow_group_id: u32, shadow_seam_epsilon: f32, is_terrain_chunk: u32, terrain_group_id: u32, terrain_chunk: vec4<i32>, is_planet_tile: u32, planet_tile_group_id: u32, emitter_link_id: u32, padding2: u32, planet_tile: vec4<i32>, direct_lookup_origin_mode: vec4<i32>, direct_lookup_extent_base: vec4<u32> };
@@ -211,6 +211,25 @@ fn decode_baked_voxel_normal(encoded: u32) -> vec3<f32> {
     return normalize(n);
 }
 
+fn load_baked_voxel_normal_encoded_from_brick(brick: BrickRecord, voxel_idx: u32) -> u32 {
+    if (brick.voxel_aux_word_base == 0xFFFFFFFFu) { return 0u; }
+    var normal_idx = voxel_idx;
+    // Layout zero retains dense raw values, including empty-voxel values.
+    if (brick.padding == 1u) {
+        if (voxel_idx >= 512u) { return 0u; }
+        let occupancy_idx = voxel_idx >> 5u;
+        let occupancy = voxel_aux_words[brick.voxel_aux_word_base + occupancy_idx];
+        let bit = 1u << (voxel_idx & 31u);
+        if ((occupancy & bit) == 0u) { return 0u; }
+        normal_idx = countOneBits(occupancy & (bit - 1u));
+        for (var i = 0u; i < occupancy_idx; i++) {
+            normal_idx += countOneBits(voxel_aux_words[brick.voxel_aux_word_base + i]);
+        }
+    }
+    let word = voxel_aux_words[brick.voxel_aux_word_base + VOXEL_AUX_OCCUPANCY_WORD_COUNT + (normal_idx >> 1u)];
+    return (word >> ((normal_idx & 1u) * 16u)) & 0xFFFFu;
+}
+
 fn load_baked_voxel_normal(pos: vec3<f32>, op: ObjectParams) -> vec3<f32> {
     let vox_pos = vec3<i32>(floor(pos));
     let sx = vox_pos.x >> 5; let sy = vox_pos.y >> 5; let sz = vox_pos.z >> 5;
@@ -228,9 +247,7 @@ fn load_baked_voxel_normal(pos: vec3<f32>, op: ObjectParams) -> vec3<f32> {
     }
     let vx = vox_pos.x & 7; let vy = vox_pos.y & 7; let vz = vox_pos.z & 7;
     let voxel_idx = u32(vx + vy*8 + vz*64);
-    let word = voxel_aux_words[brick.voxel_aux_word_base + VOXEL_AUX_OCCUPANCY_WORD_COUNT + (voxel_idx >> 1u)];
-    let encoded = (word >> ((voxel_idx & 1u) * 16u)) & 0xFFFFu;
-    return decode_baked_voxel_normal(encoded);
+    return decode_baked_voxel_normal(load_baked_voxel_normal_encoded_from_brick(brick, voxel_idx));
 }
 
 fn check_voxel_occupancy(pos: vec3<f32>, op: ObjectParams) -> bool {

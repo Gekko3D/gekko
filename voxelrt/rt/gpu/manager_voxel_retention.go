@@ -96,6 +96,18 @@ func (m *GpuBufferManager) retainedVoxelMapBytes(xbm *volume.XBrickMap) uint64 {
 			}
 		}
 	}
+	if m.packedVoxelNormals {
+		seen := make(map[auxiliaryPacketLocation]bool)
+		for _, sector := range alloc.Sectors {
+			for index := 0; index < 64; index++ {
+				location := auxiliaryPacketLocation{sector, index}
+				if receipt, ok := m.auxiliaryPacketReceipts[location]; ok && !seen[location] {
+					seen[location] = true
+					bytes = addRetainedVoxelBytes(bytes, uint64(receipt.words)*4)
+				}
+			}
+		}
+	}
 	auxSlots, payloadSlots := map[uint32]bool{}, map[PayloadSlot]bool{}
 	for _, bricks := range alloc.Bricks {
 		if bricks == nil {

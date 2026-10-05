@@ -493,18 +493,26 @@ type GpuBufferManager struct {
 	PendingUpdates map[*volume.XBrickMap]bool // Maps with pending updates in current batch
 
 	// Allocators for global pools
-	SectorAlloc             SlotAllocator
-	plannedBrickRanges      map[*volume.Sector]plannedBrickRange
-	brickRanges             brickRecordRanges
-	brickRangesInitialized  bool
-	brickPackedLeased       bool
-	voxelPreparationSectors map[*volume.Sector]bool
-	voxelPreparationBricks  map[*volume.Brick]bool
-	brickLegacyPrefix       uint64
-	retiredBrickRanges      []retiredBrickRange
-	BrickAlloc              SlotAllocator                     // Legacy dense-block allocator; managed records use brickRanges.
-	PayloadAlloc            [MaxVoxelAtlasPages]SlotAllocator // Allocates bricks (512 bytes each) per atlas page
-	VoxelAuxAlloc           SlotAllocator                     // Allocates one occupancy/normal record per brick
+	SectorAlloc                SlotAllocator
+	plannedBrickRanges         map[*volume.Sector]plannedBrickRange
+	packedVoxelNormals         bool
+	auxiliaryRanges            voxelIndexRanges
+	auxiliaryRangesInitialized bool
+	auxiliaryPackedLeased      bool
+	auxiliaryLegacyPrefix      uint64
+	plannedAuxiliaryRanges     map[auxiliaryPacketLocation]auxiliaryPacketLease
+	auxiliaryPacketReceipts    map[auxiliaryPacketLocation]auxiliaryPacketLease
+	retiredAuxiliaryRanges     []retiredAuxiliaryRange
+	brickRanges                brickRecordRanges
+	brickRangesInitialized     bool
+	brickPackedLeased          bool
+	voxelPreparationSectors    map[*volume.Sector]bool
+	voxelPreparationBricks     map[*volume.Brick]bool
+	brickLegacyPrefix          uint64
+	retiredBrickRanges         []retiredBrickRange
+	BrickAlloc                 SlotAllocator                     // Legacy dense-block allocator; managed records use brickRanges.
+	PayloadAlloc               [MaxVoxelAtlasPages]SlotAllocator // Allocates bricks (512 bytes each) per atlas page
+	VoxelAuxAlloc              SlotAllocator                     // Allocates one occupancy/normal record per brick
 
 	// Mapping from volume objects to GPU slots
 	SectorToInfo   map[*volume.Sector]SectorGpuInfo
