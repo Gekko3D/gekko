@@ -188,6 +188,41 @@ Chunks:
 
 Manifest entries point to chunk files relative to the manifest path.
 
+### Streaming page contracts and legacy normalization
+
+`StreamPageDef` and `StreamPagePayloadDef` share manifest-local page and leaf
+indices. `ValidateStreamPageForest` checks supported payload metadata, finite
+bounds, strict level descent, containment, unique parents/leaf owners and
+reachability from distinct roots. It returns parent and leaf-owner indexes,
+using `-1` for roots and unowned empty leaves; failures return no partial index.
+Page bounds have positive volume. Caller-qualified payload/leaf bounds may be
+flat, including constant-height surfaces. The owning compiler or decoder supplies
+that coverage; the validator performs no payload I/O and cannot infer height Y
+coverage from sample spacing. Cross-layer coverage-group readiness remains a
+later level/runtime responsibility.
+
+`LoadImportedWorld` accepts schema 1, schema 2 and missing-version legacy files,
+normalizes them to the current v2 defaults and computes a nonserialized,
+read-only `PageIndex`. `NormalizeImportedWorldPages` offers the same metadata
+conversion without mutating its input. Each sector becomes one flat root/leaf
+page; full chunk, PVS and adjacency references become array indices, preserving
+source order. Existing first-LOD eligibility and proxy placement are preserved.
+Optional legacy hashes, byte sizes and grids stay optional; missing proxy grids
+never acquire fabricated coverage. Page bounds union known chunk/proxy coverage,
+while indexed sectors retain authored bounds. Entirely zero legacy sector
+bounds retain their existing unspecified-metadata meaning; page coverage then
+starts from the first referenced chunk, preserving signed placement without
+extending coverage to the origin. Other collapsed/inverted or nonfinite bounds,
+invalid ownership/references and unsafe grid arithmetic fail before publication.
+
+This compatibility index owns its slices/maps and always has `LegacyDistance`
+set. Proxy-less sectors retain distance/PVS behavior; these pages do not promise
+v3 fallback coverage. Cached callers must treat the loaded definition and index
+as read-only, or recompute the index after authoring mutations. The decoded cache
+accounts for the derived storage. Writers remain schema 2 and `.gkchunk` remains
+schema 1. Imported-world v3 admission, page baking and live page selection are
+still pending [I06 and later island slices](island-streaming.md#commit-sized-delivery-slices).
+
 ### Compiled imported chunks
 
 Select `ImportedWorldChunkPayloadBrickZstdBinaryV1` in
@@ -547,7 +582,7 @@ Runtime state should gain:
 
 Verification:
 
-- Schema v1 `.gkworld` files are re-imported to schema v2 before runtime use.
+- Schema v1 and missing-version `.gkworld` files normalize through the v2 compatibility path.
 - Sector manifests load through the sector path.
 - Sector grouping does not change world scale or chunk placement.
 
@@ -558,8 +593,8 @@ Implementation note, 2026-06-08:
 - Sector `full_chunk_refs` are now the runtime-facing imported-world grouping.
 - The streamed runtime indexes imported-world chunks through sectors before
   falling back to chunk preparation/commit.
-- Backward compatibility with schema v1 manifests is intentionally not
-  preserved; re-import old worlds to regenerate schema v2 metadata.
+- I05 restores schema v1/missing-version compatibility through load-time v2
+  normalization; the writer continues to emit v2.
 
 #### Step 5: Generate Coarse Proxy LODs At Import/Bake Time
 

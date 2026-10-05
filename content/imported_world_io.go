@@ -46,10 +46,13 @@ func LoadImportedWorld(path string) (*ImportedWorldDef, error) {
 	if err := json.Unmarshal(data, &def); err != nil {
 		return nil, err
 	}
-	EnsureImportedWorldDefaults(&def)
-	if def.SchemaVersion != CurrentImportedWorldSchemaVersion {
-		return nil, fmt.Errorf("unsupported imported world schema version %d", def.SchemaVersion)
+	index, err := NormalizeImportedWorldPages(&def)
+	if err != nil {
+		return nil, err
 	}
+	def.SchemaVersion = CurrentImportedWorldSchemaVersion
+	EnsureImportedWorldDefaults(&def)
+	def.PageIndex = index
 	return &def, nil
 }
 

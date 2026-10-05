@@ -1093,7 +1093,7 @@ but do not split a row so that it leaves its external contract half-active.
 | I02 | I01 | Stable scheduler, containing-sector PVS, event-driven observer refresh. |
 | I03 | I01 | Staged-hidden renderer object and ticket state/query API. |
 | I04 | I03 | Global byte/sector upload queue and exact readiness predicate. |
-| I05 | - | Shared page types/validator and imported-world v1/v2 normalization. |
+| I05 | - | Complete: shared page types/validator and imported-world v1/v2 normalization; see [runtime contract](streaming-and-worlds.md#streaming-page-contracts-and-legacy-normalization). |
 | I06 | I05 | `.gkworld` v3 reader/writer and deterministic POI page bake. |
 | I07 | I05 | Terrain v3 manifest plus `height_u16_binary_v1` read/write validation. |
 | I08 | I06, I07 | Independent terrain/POI world-space indexes; remove resolution equality. |

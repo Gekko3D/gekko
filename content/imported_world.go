@@ -32,6 +32,9 @@ const (
 )
 
 type ImportedWorldDef struct {
+	// PageIndex is derived once on load and is read-only cached metadata. A
+	// caller that changes authored fields must recompute this compatibility view.
+	PageIndex          *ImportedWorldPageIndex             `json:"-"`
 	WorldID            string                              `json:"world_id"`
 	SchemaVersion      int                                 `json:"schema_version"`
 	Kind               ImportedWorldKind                   `json:"kind"`
