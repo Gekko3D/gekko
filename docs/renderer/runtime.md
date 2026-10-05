@@ -699,6 +699,15 @@ transforms stay paired with their maps until the scheduled rebuild publishes new
 transforms through `PrepareShadowLights`. This does not change scene caster
 selection, shader traversal, GPU layouts or the synchronous recording contract.
 
+### Shadow update publication
+
+`DispatchShadowPass` owns publication of the 24-byte shadow update records.
+`CreateShadowBindGroups` ensures a usable update buffer and binds current resources
+without rewriting queued records. Missing buffers use WebGPU's zero-initialized
+storage; capacity-only setup does not publish a placeholder header. Update-buffer
+growth and explicit scene-resource rebinds therefore preserve the published
+light, layer, cascade, kind, tier and resolution fields.
+
 ### Transparency / WBOIT
 
 - accumulation: `RGBA16Float`

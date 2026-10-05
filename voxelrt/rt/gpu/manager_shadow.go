@@ -151,8 +151,9 @@ func (m *GpuBufferManager) CreateShadowPipeline(code string) error {
 func (m *GpuBufferManager) CreateShadowBindGroups() {
 	var err error
 
-	// Ensure shadow update buffer exists
-	m.ensureBuffer("ShadowUpdatesBuf", &m.ShadowUpdatesBuf, make([]byte, 16), wgpu.BufferUsageStorage, 0)
+	// DispatchShadowPass owns update publication. Rebinding only ensures capacity
+	// and must preserve any update bytes already queued for the current buffer.
+	m.ensureBuffer("ShadowUpdatesBuf", &m.ShadowUpdatesBuf, nil, wgpu.BufferUsageStorage, 0)
 
 	// Group 0: Scene + Lights + Update Indices
 	m.ShadowBindGroup0, err = m.Device.CreateBindGroup(&wgpu.BindGroupDescriptor{

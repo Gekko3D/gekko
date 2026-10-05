@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2b are complete; R2 remains partial; other sections are proposals.
+Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2c are complete; R2 remains partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -803,9 +803,9 @@ Owners: app resources/frame graph, GPU render setup, resolve and feature shaders
 
 ### R2. Narrow shadow invalidation
 
-R2a–R2b completed local point/spot and per-cascade directional dependencies,
-opacity-aware upload attribution and consistent scheduling. Finer spatial work
-remains. [Ownership decision](streamed-rendering-r2.md);
+R2a–R2c completed local point/spot and per-cascade directional dependencies,
+opacity-aware upload attribution, consistent scheduling and growth-safe update
+publication. Finer spatial work remains. [Ownership decision](streamed-rendering-r2.md);
 [runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies).
 
 Retain camera-focused cascades/local-light budgets. Track changed bounds/revisions; dirty intersecting caster volumes only, including removal/streamed activation.
@@ -872,7 +872,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | Step | Commit | Change | Design or canonical contract |
 | --- | --- | --- | --- |
 | R2a | `71a9375` | Local shadow dependencies, stable membership reuse and opacity-aware uploads | [Runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies) |
-| R2b | This batch | Per-cascade directional dependencies with conservative ray membership | [Runtime contract](../renderer/runtime.md#directional-shadow-cache-dependencies) |
+| R2b | `f3d6319` | Per-cascade directional dependencies with conservative ray membership | [Runtime contract](../renderer/runtime.md#directional-shadow-cache-dependencies) |
+| R2c | This batch | Preserve queued shadow records during capacity growth and rebinds | [Runtime contract](../renderer/runtime.md#shadow-update-publication) |
 | S1a | `e3f11cf` | Hidden residency and readiness tickets | [Design](streamed-rendering-s1a.md) |
 | S1b | `a539257` | Global content budgets, ordering and atlas backpressure | [Design](streamed-rendering-s1b.md) |
 | S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
@@ -3746,4 +3747,47 @@ Separate existing issue discovered by native readback: `DispatchShadowPass`
 grows `ShadowUpdatesBuf`, then `CreateShadowBindGroups` writes a zero header over
 the first queued update. A cold directional update can therefore render through
 the wrong projection. Provisioning sufficient capacity before dispatch restores
-byte parity. Production fix and a dedicated regression remain a separate step.
+byte parity. At R2b delivery, the production fix and regression remained a
+separate step; R2c delivers them below.
+
+
+### R2c: Preserve shadow update publication
+
+The GPU manager's bind-group setup now requests capacity without writing a zero
+header over queued shadow updates. Scheduling, cadence, shader layouts and
+map/transform pairing are unchanged. Contract: [shadow update publication](../renderer/runtime.md#shadow-update-publication).
+
+Verification from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu ./voxelrt/rt/core ./voxelrt/rt/app
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/gpu -run '^TestR2[ab]' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2c-native docs/roadmaps/diagnostics/r2c_shadow_publication.go
+/tmp/gekko-r2c-native
+git diff --check
+```
+
+The native regression verifies exact queued records through cold dispatch,
+explicit/repeated rebinds, capacity growth and scene-buffer recreation; empty
+dispatch and missing-buffer creation remain usable. The first cold directional
+map contains the known opaque caster and matches a forced rebuild byte-for-byte,
+without preallocating an oversized update buffer. It requires a desktop WebGPU
+session and is not run by package-only tests. This step fixes correctness and
+removes the redundant header upload; it does not establish an FPS improvement.
+Mixed-resolution submission and full gameplay visual checks remain separate.
+
+
+Consumer builds passed, each from its module directory:
+
+```sh
+# ../gekko-editor
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2c-editor .
+# ../actiongame
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2c-actiongame .
+# ../spacegame_go
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2c-spacegame .
+# ../spacesim
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2c-spacesim .
+# ../examples/testing-vox
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2c-testing-vox .
+```
