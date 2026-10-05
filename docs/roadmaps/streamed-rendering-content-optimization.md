@@ -752,7 +752,14 @@ W3b completes sector stepping in those passes using clipped integer progress; se
 [the sector contract](../renderer/runtime.md#sector-traversal). W3c replaces
 sector-based brick/voxel counters with owning-grid bounds; see the
 [inner grid contract](../renderer/runtime.md#inner-brick-and-voxel-traversal).
-Tree64 and its voxel fallback progress and termination proofs remain.
+Tree64 and its voxel fallback are dormant: managed publication always emits
+an invalid base and has no producer/upload path. See the
+[representation status](../renderer/runtime.md#dormant-tree64-representation).
+Their activation needs a separate producer contract; shader-only loop changes
+would not improve current managed rendering. CPU `RayMarch` still has a
+10,000-iteration cap (`volume/xbrickmap_trace.go`). Particle collision uses
+physical instance-buffer length; live-count coverage needs an audit before
+claiming completion. Lookup coverage remains a separate contract.
 
 CPU BVH uses median splits. Balanced depth does not bound node visits below the
 former 512-node opaque/shadow or 128-node transparent caps.
@@ -956,7 +963,7 @@ This workflow does not independently authorize tests, delegation or commits.
 | P3c | `1acada7` | Independently pack mixed-material bytes with fenced packet ownership and native parity | [Runtime contract](../renderer/runtime.md#packed-mixed-material-storage) |
 | W3a | `57f162c` | Complete generated scene BVH traversal without arbitrary visit limits | [Runtime contract](../renderer/runtime.md#scene-bvh-traversal) |
 | W3b | `c5676cf` | Complete sector traversal and prevent stationary-axis rewinds in nested walks | [Runtime contract](../renderer/runtime.md#sector-traversal) |
-| W3c | This batch | Bound sector-based brick and voxel walks by their owning grids | [Runtime contract](../renderer/runtime.md#inner-brick-and-voxel-traversal) |
+| W3c | `aafa193` | Bound sector-based brick and voxel walks by their owning grids | [Runtime contract](../renderer/runtime.md#inner-brick-and-voxel-traversal) |
 | S1a | `e3f11cf` | Hidden residency and readiness tickets | [Design](streamed-rendering-s1a.md) |
 | S1b | `a539257` | Global content budgets, ordering and atlas backpressure | [Design](streamed-rendering-s1b.md) |
 | S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
@@ -4774,7 +4781,7 @@ work in formerly truncated scenes.
 
 ### W3c: Bound inner walks by their owning grids
 
-Commit: this batch. Sector-based opaque, shadow and transparent brick/voxel
+Commit: `aafa193`. Sector-based opaque, shadow and transparent brick/voxel
 loops terminate at their local grid boundaries without visit counters. This
 prevents numerical oversteps from reaching unsigned voxel indexing. Hit and
 transparency arithmetic, bindings and Tree64 remain unchanged. The
@@ -4811,3 +4818,21 @@ termination invariant, not a rendered material-alias reproduction. Reciprocal
 clamps, biases, extreme float32 geometry accuracy and transparency segment
 clipping remain unchanged. FPS, other adapters and full interactive gameplay
 were not verified.
+
+
+### W3d scope audit: Tree64 is dormant
+
+Commit: this batch (documentation only). No managed producer or upload uses
+`Tree64LOD`; admitted and rejected object parameters always publish the invalid
+Tree64 base. Opaque Tree64 dispatch is unreachable for those objects, and shadow
+scene traversal forces XBrickMap. The [runtime status](../renderer/runtime.md#dormant-tree64-representation)
+records ownership and the missing activation contract. No shader changes or
+performance claim were made.
+
+Verification: inspected publication writers, buffer allocation/binding, shader
+dispatch and all six workspace modules with `rg -n 'Tree64LOD|Tree64Buf|tree64_base'`.
+`git diff --check` passed. Runtime tests and GPU checks were not rerun for this
+documentation-only audit. Tree64 activation is deferred pending representation
+and publication design; W4 bulk surface-brick generation is the next live
+implementation candidate. W3 remains partial for CPU traversal completion and
+the particle live-count audit.

@@ -667,7 +667,7 @@ The voxel renderer intentionally keeps a blocky albedo/material look while allow
 - Single-voxel-thick features need two-sided direct lighting.
   - When a voxel is exposed on both sides of an axis, keep its normal deterministic, but evaluate direct point and spot lighting as two-sided so planes and rods still react to local lights from either side.
 - Normal transforms must be consistent across traversal paths.
-  - `XBrickMap` microvoxels, solid-brick fast paths, and `tree64` LOD hits must all use the same object-space-to-world-space normal rule. Use the inverse-transpose-style transform, especially when non-uniform scale is possible.
+  - `XBrickMap` microvoxels and solid-brick fast paths use the same object-space-to-world-space normal rule. Any future activation of legacy `tree64` LOD must preserve that rule. Use the inverse-transpose-style transform, especially when non-uniform scale is possible.
 - Lighting may vary voxel-to-voxel, but color identity should remain voxel-stable.
   - The renderer can show shape through per-voxel lighting, AO, and shadows, but it should not smear voxel colors into gradients across neighboring voxels.
 
@@ -1005,6 +1005,29 @@ ordinary valid path coverage. Existing biases, reciprocal clamps, hit ordering,
 normal/material reads and transparency integration retain their arithmetic.
 Tiny-direction or extreme-coordinate geometric accuracy, transparency segment
 clipping, and Tree64 traversal require separate work.
+
+### Dormant Tree64 representation
+
+Managed object publication writes `ObjectParams.tree64_base = 0xffffffff` for
+both admitted and rejected objects (`gpu/manager_scene.go` and
+`gpu/manager_material.go`). `VoxelObject.Tree64LOD` has no builder, reader or
+upload path in the workspace. `Tree64Buf` remains allocated and bound for the
+legacy shader layout, but receives no representation data.
+
+The opaque shader retains a Tree64 branch behind the invalid-base check, so
+managed objects use XBrickMap regardless of `LODThreshold`. Shadow scene
+traversal explicitly uses XBrickMap; transparent traversal also uses XBrickMap.
+The legacy Tree64 loops and their voxel fallback therefore have no effect on
+current managed rendering. Their visit caps remain dormant constraints, not
+an active performance target.
+
+Activating this representation requires a producer/publication contract first:
+origin and coordinate domain, hierarchy bounds, child addressing, material
+semantics, readiness and edit invalidation. The legacy shader's modulo-four
+addressing and absent origin metadata do not establish support for arbitrary
+signed or large object coordinates. Synthetic node buffers alone cannot verify
+managed rendering coverage or performance. Retaining these compatibility fields
+and bindings does not imply that Tree64 data is published or supported.
 
 ### Voxel capacity planning
 
