@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2i are complete; R2 remains partial; other sections are proposals.
+Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2j are complete; R2 remains partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -803,11 +803,12 @@ Owners: app resources/frame graph, GPU render setup, resolve and feature shaders
 
 ### R2. Narrow shadow invalidation
 
-R2a–R2i completed local point/spot and per-cascade directional dependencies,
+R2a–R2j completed local point/spot and per-cascade directional dependencies,
 opacity-aware upload attribution, consistent scheduling and growth-safe update
 publication, including encoder-ordered mixed-resolution batches and dependency-driven
 local and directional reuse without camera-history force, plus world-anchored
-directional texel grids and independent point-face reuse. Finer spatial work remains. [Ownership decision](streamed-rendering-r2.md);
+directional texel grids, independent point-face reuse and incremental bounds-only
+membership updates. Full scalar capture and moving-volume scans remain. [Ownership decision](streamed-rendering-r2.md);
 [runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies).
 
 Retain camera-focused cascades/local-light budgets. Track changed bounds/revisions; dirty intersecting caster volumes only, including removal/streamed activation.
@@ -881,7 +882,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | R2f | `23ecc35` | Reuse valid directional cascades without periodic rebuilds | [Runtime contract](../renderer/runtime.md#directional-shadow-cache-dependencies) |
 | R2g | `d2452be` | Let exact dependencies control app shadow dispatch; retain motion diagnostics | [Runtime contract](../renderer/runtime.md#directional-shadow-cache-dependencies) |
 | R2h | `97cbcd9` | Anchor directional texel grids in world light space for sub-cell reuse | [Runtime contract](../renderer/runtime.md#directional-shadow-cache-dependencies) |
-| R2i | This batch | Refresh intersecting point faces while preserving independent acknowledgements | [Runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies) |
+| R2i | `862254b` | Refresh intersecting point faces while preserving independent acknowledgements | [Runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies) |
+| R2j | This batch | Recheck changed bounds for stable shadow volumes with conservative full-scan fallbacks | [Runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies) |
 | S1a | `e3f11cf` | Hidden residency and readiness tickets | [Design](streamed-rendering-s1a.md) |
 | S1b | `a539257` | Global content budgets, ordering and atlas backpressure | [Design](streamed-rendering-s1b.md) |
 | S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
@@ -4106,3 +4108,51 @@ Native diagnostics require desktop WebGPU. Additional face snapshots and
 origin-dependent membership scans add CPU/storage cost; avoided GPU dispatches
 do not establish net frame-time gains. Full gameplay appearance/FPS and bitwise
 fresh-map parity across arbitrary coordinate rebasing remain unverified.
+
+
+### R2j: Incremental shadow membership from bounds deltas
+
+The GPU manager rechecks changed bounds for stable spot, point-face and directional
+volumes, while preserving live scalar comparisons and recorded-update
+acknowledgements. Structural, cold, stale, projection and point-origin changes
+retain full scans. Contract: [shadow cache dependencies](../renderer/runtime.md#local-shadow-cache-dependencies).
+
+In the retained CPU fixture, one bounds edit with 1,000 selected casters and ten
+volumes reduced predicate evaluations from 10,000 to 10 and elapsed time from
+1.494 ms to 0.286 ms. With 32 casters, evaluations fell from 320 to 10 and time
+from 55.571 µs to 15.253 µs. Allocation counts stayed unchanged across all five
+workloads; idle, scalar-only, structural and moving-origin timings showed no
+material regression in this run. These measurements exclude scene selection,
+BVH maintenance and GPU execution; gameplay appearance/FPS remains unverified.
+
+Verification from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu ./voxelrt/rt/core ./voxelrt/rt/app -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/gpu ./voxelrt/rt/app -run '^TestR2' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go run docs/roadmaps/diagnostics/r2j_shadow_membership_cpu.go -test.benchtime=1s
+for entry in r2c:shadow_publication r2d:shadow_batches r2e:shadow_reuse r2f:directional_reuse r2g:camera_shadow_reuse r2h:directional_stability r2i:point_face_reuse; do
+    shadow_step=${entry%%:*}
+    diagnostic_name=${entry#*:}
+    env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-${shadow_step}-native docs/roadmaps/diagnostics/${shadow_step}_${diagnostic_name}.go || exit 1
+    /tmp/gekko-${shadow_step}-native || exit 1
+done
+git diff --check
+```
+
+Package/race checks and rebuilt native shadow diagnostics pass. Native checks
+require desktop WebGPU and verify cached/fresh-map parity after dependency edits.
+Consumer builds pass from their respective module directories:
+
+```sh
+# ../gekko-editor
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2j-consumer-0 .
+# ../actiongame
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2j-consumer-1 .
+# ../spacegame_go
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2j-consumer-2 .
+# ../spacesim
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2j-consumer-3 .
+# ../examples/testing-vox
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2j-consumer-4 .
+```

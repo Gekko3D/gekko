@@ -160,10 +160,17 @@ func (m *GpuBufferManager) prepareShadowDependencies(scene *core.Scene) {
 		m.directionalShadowDependencies = nil
 		clear(m.localShadowCasters)
 		m.localShadowCasters = nil
+		m.shadowMembershipDeltaValid = false
+		m.shadowMembershipChangedBounds = nil
+		m.shadowMembershipMergeScratch = nil
 		return
 	}
 	// Prepare each selected caster's scalar inputs once for all shadow layers.
 	membershipChanged := false
+	structuralChange := false
+	// Keep the preceding delta if this preparation leaves membership unchanged.
+	// Gather a candidate separately so scalar-only preparations do not erase it.
+	changedBounds := m.shadowMembershipMergeScratch[:0]
 	n := 0
 	if len(m.ShadowLayerParams) > 0 {
 		for _, obj := range scene.ShadowObjects {
@@ -173,9 +180,14 @@ func (m *GpuBufferManager) prepareShadowDependencies(scene *core.Scene) {
 			caster := m.localShadowCaster(obj)
 			if n >= len(m.localShadowCasters) {
 				membershipChanged = true
+				structuralChange = true
 				m.localShadowCasters = append(m.localShadowCasters, caster)
 			} else {
 				previous := m.localShadowCasters[n]
+				structuralChange = structuralChange || previous.object != caster.object
+				if previous.instance.world != caster.instance.world {
+					changedBounds = append(changedBounds, n)
+				}
 				membershipChanged = membershipChanged || previous.object != caster.object || previous.instance.world != caster.instance.world
 				m.localShadowCasters[n] = caster
 			}
@@ -184,6 +196,7 @@ func (m *GpuBufferManager) prepareShadowDependencies(scene *core.Scene) {
 	}
 	if n < len(m.localShadowCasters) {
 		membershipChanged = true
+		structuralChange = true
 		clear(m.localShadowCasters[n:])
 		m.localShadowCasters = m.localShadowCasters[:n]
 	}
@@ -191,7 +204,17 @@ func (m *GpuBufferManager) prepareShadowDependencies(scene *core.Scene) {
 		m.localShadowCasters = nil
 	}
 	if membershipChanged {
+		m.shadowMembershipDeltaRevision = m.localShadowMembershipRevision
+		m.shadowMembershipDeltaValid = !structuralChange
 		m.localShadowMembershipRevision++
+		previousDelta := m.shadowMembershipChangedBounds
+		if structuralChange {
+			changedBounds = changedBounds[:0]
+		}
+		m.shadowMembershipChangedBounds = changedBounds
+		m.shadowMembershipMergeScratch = previousDelta[:0]
+	} else {
+		m.shadowMembershipMergeScratch = changedBounds[:0]
 	}
 	for i, light := range scene.Lights {
 		owner := &m.localShadowDependencies[i]
@@ -219,24 +242,48 @@ func (m *GpuBufferManager) refreshShadowDependency(owner *localShadowDependency,
 	// Point callers also rebuild it when the GPU coordinate origin changes.
 	// Other live scalar inputs still compare below.
 	if forceMembership || !owner.active || owner.light != key || owner.membershipRevision != m.localShadowMembershipRevision {
-		n := 0
-		for index, caster := range m.localShadowCasters {
-			if !intersects(caster) {
-				continue
+		if !forceMembership && owner.active && owner.light == key && m.shadowMembershipDeltaValid && owner.membershipRevision == m.shadowMembershipDeltaRevision {
+			// Both lists are sorted. Retain untouched members and evaluate each
+			// changed bound once, observing exits as well as new entries.
+			merged := m.shadowMembershipMergeScratch[:0]
+			old := 0
+			for _, index := range m.shadowMembershipChangedBounds {
+				for old < len(owner.memberIndices) && owner.memberIndices[old] < index {
+					merged = append(merged, owner.memberIndices[old])
+					old++
+				}
+				if old < len(owner.memberIndices) && owner.memberIndices[old] == index {
+					old++
+				}
+				m.ShadowMembershipIntersectionCount++
+				if intersects(m.localShadowCasters[index]) {
+					merged = append(merged, index)
+				}
 			}
-			if n >= len(owner.memberIndices) {
-				owner.memberIndices = append(owner.memberIndices, index)
-			} else {
-				owner.memberIndices[n] = index
+			merged = append(merged, owner.memberIndices[old:]...)
+			m.shadowMembershipMergeScratch = owner.memberIndices[:0]
+			owner.memberIndices = merged
+		} else {
+			n := 0
+			for index, caster := range m.localShadowCasters {
+				m.ShadowMembershipIntersectionCount++
+				if !intersects(caster) {
+					continue
+				}
+				if n >= len(owner.memberIndices) {
+					owner.memberIndices = append(owner.memberIndices, index)
+				} else {
+					owner.memberIndices[n] = index
+				}
+				n++
 			}
-			n++
-		}
-		if n < len(owner.memberIndices) {
-			clear(owner.memberIndices[n:])
-			owner.memberIndices = owner.memberIndices[:n]
-		}
-		if n == 0 {
-			owner.memberIndices = nil
+			if n < len(owner.memberIndices) {
+				clear(owner.memberIndices[n:])
+				owner.memberIndices = owner.memberIndices[:n]
+			}
+			if n == 0 {
+				owner.memberIndices = nil
+			}
 		}
 		owner.membershipRevision = m.localShadowMembershipRevision
 	}

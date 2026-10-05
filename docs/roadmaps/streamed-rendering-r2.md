@@ -176,3 +176,29 @@ change index needs broader producer contracts. Independent exact snapshots fit
 the current live-input architecture without shader, GPU-layout or ECS changes.
 CPU scans and retained per-face snapshots add cost; native scheduling/readback
 parity proves avoided map work, while gameplay frame-time gains need measurement.
+
+
+## R2j ownership decision
+
+The GPU manager incrementally refreshes membership for unchanged shadow volumes.
+One preparation still captures all live selected caster scalar inputs. When the
+ordered identities and count remain stable, changed world-bound indices form a
+delta from the preceding membership revision. An owner at that revision rechecks
+only those indices, preserving sorted membership and live comparisons of every
+retained caster. Removal from an old volume and entry into a new one are both
+observed; dependency acknowledgement remains owned by recorded map updates.
+
+Cold owners, structural selection changes, changed light/projection keys, point
+origin changes and missing delta history retain full scans. The delta applies
+only to its immediate source revision; it is not a retained producer event queue.
+Invalid bounds and unsupported projections retain existing conservative behavior.
+The cumulative `ShadowMembershipIntersectionCount` reports caster-volume predicate
+evaluations, including full fallbacks, so avoided work can be measured directly.
+It does not count the full live scalar capture or retained-member comparisons.
+
+Full rescans repeat intersection math for untouched casters. A spatial index or
+producer dirty queue needs broader publication and retention contracts. Bounds
+deltas are a long-term extension of current manager-owned snapshots and require
+no producer notifications, shader/layout changes or scheduling policy changes.
+CPU work measurements and native shadow parity verify the step; general scene
+scans, moving-volume work and net gameplay frame-time gains remain separate.

@@ -266,10 +266,18 @@ type GpuBufferManager struct {
 	directionalShadowDependencies []localShadowDependency
 	localShadowCasters            []localShadowCasterKey
 	localShadowMembershipRevision uint64
+	// Bounds deltas apply only to owners at this immediate source revision.
+	shadowMembershipDeltaRevision uint64
+	shadowMembershipDeltaValid    bool
+	shadowMembershipChangedBounds []int
+	shadowMembershipMergeScratch  []int
 	localShadowGeneration         uint64
 	shadowObservedUploadRevision  uint64
 	shadowUnknownUploadEpoch      uint64
-	SceneBindingRevision          uint64
+	// ShadowMembershipIntersectionCount is the cumulative number of caster-volume
+	// predicate evaluations, excluding live scalar capture and member comparisons.
+	ShadowMembershipIntersectionCount uint64
+	SceneBindingRevision              uint64
 	// Cumulative scene-record compilation and successful queue publication work.
 	SceneInstanceRecordBuildCount    uint64
 	SceneObjectParamRecordBuildCount uint64

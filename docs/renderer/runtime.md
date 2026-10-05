@@ -664,10 +664,19 @@ Ordinary camera rebasing does not force point-map rebuilds. Invalid rebased inpu
 retain casters. This preserves the existing world-input cache contract; it does
 not promise bitwise fresh-map parity across arbitrary coordinate rebasing.
 
-Unchanged ordered caster identities/world bounds and light inputs reuse volume
-membership when the point coordinate origin is also unchanged; other render
-inputs remain live comparisons. Removed casters and
-lights release snapshot references. This adds scoped CPU snapshot storage,
+The manager captures all live selected caster scalar inputs once per preparation.
+Unchanged volumes reuse sorted membership indices. With stable ordered caster
+identities and count, a bounds change rechecks only changed indices for owners at
+the immediately preceding membership revision. Both entry and removal update
+membership; every retained caster still receives a live scalar comparison.
+Cold owners, structural selection changes, changed light/projection/layer inputs,
+point-origin changes and missing delta history require full membership scans.
+The delta is manager-owned preparation state, not a producer notification queue.
+`GpuBufferManager.ShadowMembershipIntersectionCount` cumulatively counts actual
+caster-volume predicate evaluations across spot, point-face and directional
+owners, including full fallbacks. It excludes scalar capture and retained-member
+comparisons. Removed casters and lights release snapshot references. This adds
+scoped CPU snapshot storage,
 including approximately 1 KiB of opacity metadata per material allocation;
 existing cache budgets do not become a total process-memory ceiling.
 
