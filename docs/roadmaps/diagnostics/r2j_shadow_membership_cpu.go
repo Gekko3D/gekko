@@ -108,6 +108,31 @@ func (f *fixture) change(workload string) {
 	}
 }
 
+// Keep a single-face resolution workload separate: UpdateLights would restore
+// the assigned resolution before the changed face reaches dependency preparation.
+func benchmarkSingleFaceResolution(count int) {
+	f := newFixture(count)
+	face := f.scene.Lights[0].ShadowMeta[0] + 5
+	result := testing.Benchmark(func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			f.moved = !f.moved
+			f.frame++
+			resolution := uint32(128)
+			if f.manager.ShadowLayerParams[face].EffectiveResolution == 128 {
+				resolution = 256
+			}
+			f.manager.ShadowLayerParams[face].EffectiveResolution = resolution
+			updates := f.manager.BuildShadowUpdates(f.scene, f.camera, f.frame, false)
+			if len(updates) != 1 || updates[0].CascadeIndex != 5 {
+				panic("single-face fixture scheduled wrong maps")
+			}
+			f.manager.RecordShadowUpdates(updates, f.frame, f.scene.ShadowRevision())
+		}
+	})
+	fmt.Printf("selected=%d workload=single_face_resolution (direct Build/Record): %s %s\n", count, result.String(), result.MemString())
+}
+
 func main() {
 	testing.Init()
 	flag.Parse() // Allows -test.benchtime=1s (the default) for repeatable runs.
@@ -130,5 +155,6 @@ func main() {
 			})
 			fmt.Printf("selected=%d workload=%s: %s %s member_storage_bytes=%d\n", count, workload, result.String(), result.MemString(), f.manager.ShadowDependencyMemberStorageBytes())
 		}
+		benchmarkSingleFaceResolution(count)
 	}
 }

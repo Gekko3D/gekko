@@ -664,6 +664,19 @@ Ordinary camera rebasing does not force point-map rebuilds. Invalid rebased inpu
 retain casters. This preserves the existing world-input cache contract; it does
 not promise bitwise fresh-map parity across arbitrary coordinate rebasing.
 
+Within one preparation, supported point faces share a caster/light footprint
+classification by selected source index. Only faces needing membership work enter
+the requested mask; world bounds normalize once, and packed bounds normalize only
+for requested bits not already covered by the world footprint. Scratch is lazy and
+scoped to that point light and preparation, including distinct duplicate indices.
+It cannot reuse footprints after light, origin, selection or bounds changes.
+`GpuBufferManager.ShadowPointMembershipClassificationCount` cumulatively counts
+actual footprint classifications, including invalid-input fallbacks. Unsupported
+face assignments retain casters without classification. The existing intersection
+counter still counts each consuming face predicate, so classifier sharing does not
+change membership or acknowledgements. Mask and grouping scratch add reusable CPU
+capacity beyond the per-owner member-storage diagnostic.
+
 The manager captures and exactly compares all live selected caster scalar inputs
 once per preparation. Changed snapshots receive unique manager-owned tokens;
 volume owners compare compact member tokens instead of retaining full snapshots.

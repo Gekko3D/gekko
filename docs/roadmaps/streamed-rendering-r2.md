@@ -232,3 +232,31 @@ contracts. Compact manager-owned tokens extend the existing exact-input architec
 without changing ECS, shader layout, selection or scheduling policy. CPU timing and
 storage measurements plus native map parity verify this step; full scalar capture,
 moving-volume intersections and gameplay frame-time gains remain separate.
+
+
+## R2l ownership decision
+
+The GPU manager shares point-light caster classification within one dependency
+preparation. A conservative six-face mask normalizes each selected caster's world
+and float32 render-relative bounds once per point light when membership work is
+needed. Only faces requiring membership work enter the mask; packed normalization
+only checks bits not already covered by the world footprint. Individual face
+owners consume mask bits while preserving their sorted
+membership, exact keys, scalar tokens and recorded-update acknowledgements.
+Masks include the union of world and rebased footprints, existing numerical guards,
+seams and unbounded downstream cones. Invalid inputs retain conservative coverage.
+
+Preparation-local, index-addressed scratch cannot survive a light or preparation
+boundary. Duplicate selected occurrences remain distinct indices. Owners may be
+grouped by point light for preparation without changing scheduling priority or
+face budgets. Idle/scalar-only preparation does not classify casters. The cumulative
+`ShadowPointMembershipClassificationCount` counts actual caster/light footprint
+classifications; `ShadowMembershipIntersectionCount` still counts each consuming
+caster-volume membership predicate.
+
+Repeated per-face normalization adds CPU work when bounds, point inputs or camera
+rebasing require membership scans. Cross-frame footprint caching needs additional
+retention/invalidation contracts; shared preparation-local masks extend current
+manager-owned snapshots without changing ECS, shader layout, selection or cache
+policy. CPU work/timing and native map parity verify this step. Full live scalar
+capture, moving-volume predicate counts and gameplay FPS remain separate limits.

@@ -279,13 +279,20 @@ type GpuBufferManager struct {
 	shadowMembershipDeltaValid    bool
 	shadowMembershipChangedBounds []int
 	shadowMembershipMergeScratch  []int
-	localShadowGeneration         uint64
-	shadowObservedUploadRevision  uint64
-	shadowUnknownUploadEpoch      uint64
+	// Scalar preparation scratch, shared by one point light at a time.
+	shadowPointLightHeads        []int
+	shadowPointLayerNext         []int
+	shadowPointFaceMasks         []uint8
+	localShadowGeneration        uint64
+	shadowObservedUploadRevision uint64
+	shadowUnknownUploadEpoch     uint64
 	// ShadowMembershipIntersectionCount is the cumulative number of caster-volume
 	// predicate evaluations, excluding live scalar capture and member comparisons.
 	ShadowMembershipIntersectionCount uint64
-	SceneBindingRevision              uint64
+	// ShadowPointMembershipClassificationCount cumulatively counts point caster/light
+	// footprint classifications, including conservative invalid-input fallbacks.
+	ShadowPointMembershipClassificationCount uint64
+	SceneBindingRevision                     uint64
 	// Cumulative scene-record compilation and successful queue publication work.
 	SceneInstanceRecordBuildCount    uint64
 	SceneObjectParamRecordBuildCount uint64

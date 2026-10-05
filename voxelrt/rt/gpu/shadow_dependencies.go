@@ -312,18 +312,22 @@ func (m *GpuBufferManager) prepareShadowDependencies(scene *core.Scene) {
 			viewProj: sceneMatBits(mgl32.Mat4(light.ViewProj)), invViewProj: sceneMatBits(mgl32.Mat4(light.InvViewProj)), meta: light.ShadowMeta,
 			resolution: layer.EffectiveResolution,
 		}
-		m.refreshShadowDependency(owner, key, false, func(caster localShadowCasterKey) bool { return localShadowIntersects(caster.object, light) })
+		m.refreshShadowDependency(owner, key, false, func(_ int, caster localShadowCasterKey) bool { return localShadowIntersects(caster.object, light) })
 	}
 	m.preparePointShadowDependencies(scene)
 	m.prepareDirectionalShadowDependencies(scene)
 }
 
-func (m *GpuBufferManager) refreshShadowDependency(owner *localShadowDependency, key localShadowLightKey, forceMembership bool, intersects func(localShadowCasterKey) bool) {
+func (m *GpuBufferManager) shadowDependencyNeedsMembership(owner *localShadowDependency, key localShadowLightKey, forceMembership bool) bool {
+	return forceMembership || !owner.active || owner.light != key || owner.membershipRevision != m.localShadowMembershipRevision
+}
+
+func (m *GpuBufferManager) refreshShadowDependency(owner *localShadowDependency, key localShadowLightKey, forceMembership bool, intersects func(int, localShadowCasterKey) bool) {
 	changed := !owner.active || owner.light != key || owner.unknownEpoch != m.shadowUnknownUploadEpoch
 	// Volume membership uses light inputs and ordered caster identities/bounds.
 	// Point callers also rebuild it when the GPU coordinate origin changes.
 	// Other live scalar inputs still compare below.
-	if forceMembership || !owner.active || owner.light != key || owner.membershipRevision != m.localShadowMembershipRevision {
+	if m.shadowDependencyNeedsMembership(owner, key, forceMembership) {
 		if !forceMembership && owner.active && owner.light == key && m.shadowMembershipDeltaValid && owner.membershipRevision == m.shadowMembershipDeltaRevision {
 			// Both lists are sorted. Retain untouched members and evaluate each
 			// changed bound once, observing exits as well as new entries.
@@ -338,7 +342,7 @@ func (m *GpuBufferManager) refreshShadowDependency(owner *localShadowDependency,
 					old++
 				}
 				m.ShadowMembershipIntersectionCount++
-				if intersects(m.localShadowCasters[index]) {
+				if intersects(index, m.localShadowCasters[index]) {
 					merged = append(merged, index)
 				}
 			}
@@ -349,7 +353,7 @@ func (m *GpuBufferManager) refreshShadowDependency(owner *localShadowDependency,
 			n := 0
 			for index, caster := range m.localShadowCasters {
 				m.ShadowMembershipIntersectionCount++
-				if !intersects(caster) {
+				if !intersects(index, caster) {
 					continue
 				}
 				if n >= len(owner.memberIndices) {
@@ -415,9 +419,9 @@ func (m *GpuBufferManager) localShadowLayerValid(layer ShadowLayerParams, state 
 // Point faces follow fixed world axes. Reject an AABB only when one of the
 // cone's five planes separates its entire bounds. There is no range/far plane:
 // shadow traversal includes every downstream selected caster.
-func pointShadowFaceIntersects(caster localShadowCasterKey, position [4]float32, origin mgl32.Vec3, face uint32) bool {
-	if face >= 6 || !caster.instance.world.present {
-		return true
+func pointShadowCasterFaceMask(caster localShadowCasterKey, position [4]float32, origin mgl32.Vec3, requested uint8) uint8 {
+	if !caster.instance.world.present {
+		return requested
 	}
 	var bounds [2]mgl32.Vec3
 	for axis := 0; axis < 3; axis++ {
@@ -425,26 +429,31 @@ func pointShadowFaceIntersects(caster localShadowCasterKey, position [4]float32,
 		bounds[1][axis] = math.Float32frombits(caster.instance.world.max[axis])
 	}
 	if !finiteShadowBounds(&bounds) {
-		return true
+		return requested
 	}
 	lightPosition := mgl32.Vec3{position[0], position[1], position[2]}
 	// Scene instance bounds and light positions are rebased separately in
 	// float32 before GPU publication. Their rounding can add a face footprint;
 	// retain both the world cone and the actual packed-input cone.
 	packedBounds := [2]mgl32.Vec3{bounds[0].Sub(origin), bounds[1].Sub(origin)}
-	return pointShadowConeIntersects(bounds, lightPosition, face) || pointShadowConeIntersects(packedBounds, lightPosition.Sub(origin), face)
+	mask := pointShadowConeFaceMask(bounds, lightPosition, requested)
+	remaining := requested &^ mask
+	if remaining != 0 {
+		mask |= pointShadowConeFaceMask(packedBounds, lightPosition.Sub(origin), remaining)
+	}
+	return mask
 }
 
-func pointShadowConeIntersects(bounds [2]mgl32.Vec3, position mgl32.Vec3, face uint32) bool {
+func pointShadowConeFaceMask(bounds [2]mgl32.Vec3, position mgl32.Vec3, requested uint8) uint8 {
 	if !finiteShadowBounds(&bounds) {
-		return true
+		return requested
 	}
 	var relative [2][3]float64
 	guard := 1e-5
 	for axis := 0; axis < 3; axis++ {
 		p := float64(position[axis])
 		if math.IsNaN(p) || math.IsInf(p, 0) {
-			return true
+			return requested
 		}
 		for end := 0; end < 2; end++ {
 			relative[end][axis] = float64(bounds[end][axis]) - p
@@ -453,28 +462,40 @@ func pointShadowConeIntersects(bounds [2]mgl32.Vec3, position mgl32.Vec3, face u
 			guard = math.Max(guard, math.Abs(relative[end][axis])*1e-6)
 		}
 	}
-	major := int(face / 2)
-	sign := 1.0
-	if face%2 != 0 {
-		sign = -1
-	}
-	majorMaximum := relative[1][major]
-	if sign < 0 {
-		majorMaximum = -relative[0][major]
-	}
-	if majorMaximum < -guard {
-		return false
-	}
-	for axis := 0; axis < 3; axis++ {
-		if axis == major {
+	var mask uint8
+	for face := uint32(0); face < 6; face++ {
+		bit := uint8(1 << face)
+		if requested&bit == 0 {
 			continue
 		}
-		// Max support of signed-major - other and signed-major + other.
-		if majorMaximum-relative[0][axis] < -guard || majorMaximum+relative[1][axis] < -guard {
-			return false
+		major := int(face / 2)
+		sign := 1.0
+		if face%2 != 0 {
+			sign = -1
+		}
+		majorMaximum := relative[1][major]
+		if sign < 0 {
+			majorMaximum = -relative[0][major]
+		}
+		if majorMaximum < -guard {
+			continue
+		}
+		intersects := true
+		for axis := 0; axis < 3; axis++ {
+			if axis == major {
+				continue
+			}
+			// Preserve the old signed-major support tests and numerical guard.
+			if majorMaximum-relative[0][axis] < -guard || majorMaximum+relative[1][axis] < -guard {
+				intersects = false
+				break
+			}
+		}
+		if intersects {
+			mask |= bit
 		}
 	}
-	return true
+	return mask
 }
 
 func (m *GpuBufferManager) preparePointShadowDependencies(scene *core.Scene) {
@@ -493,7 +514,23 @@ func (m *GpuBufferManager) preparePointShadowDependencies(scene *core.Scene) {
 		m.pointShadowDependencies = nil
 		return
 	}
-	for i, layer := range m.ShadowLayerParams {
+	if cap(m.shadowPointLightHeads) < len(scene.Lights) {
+		m.shadowPointLightHeads = make([]int, len(scene.Lights))
+	} else {
+		m.shadowPointLightHeads = m.shadowPointLightHeads[:len(scene.Lights)]
+	}
+	for i := range m.shadowPointLightHeads {
+		m.shadowPointLightHeads[i] = -1
+	}
+	if cap(m.shadowPointLayerNext) < count {
+		m.shadowPointLayerNext = make([]int, count)
+	} else {
+		m.shadowPointLayerNext = m.shadowPointLayerNext[:count]
+	}
+	// Reverse insertion preserves ascending layer order within each light,
+	// without assuming contiguous faces or any public layer assignment order.
+	for i := count - 1; i >= 0; i-- {
+		layer := m.ShadowLayerParams[i]
 		owner := &m.pointShadowDependencies[i]
 		if layer.Kind != core.ShadowUpdateKindPoint || int(layer.LightIndex) >= len(scene.Lights) {
 			*owner = localShadowDependency{}
@@ -504,18 +541,64 @@ func (m *GpuBufferManager) preparePointShadowDependencies(scene *core.Scene) {
 			*owner = localShadowDependency{}
 			continue
 		}
-		key := localShadowLightKey{
-			position: shadowVec4Bits(light.Position), direction: shadowVec4Bits(light.Direction), params: shadowVec4Bits(light.Params), meta: light.ShadowMeta,
-			viewProj: sceneMatBits(mgl32.Mat4(light.ViewProj)), invViewProj: sceneMatBits(mgl32.Mat4(light.InvViewProj)),
-			resolution: layer.EffectiveResolution, assignment: [3]uint32{layer.LightIndex, layer.CascadeIndex, layer.Layer},
+		m.shadowPointLayerNext[i] = m.shadowPointLightHeads[layer.LightIndex]
+		m.shadowPointLightHeads[layer.LightIndex] = i
+	}
+	origin := sceneVecBits(m.RenderOrigin)
+	for lightIndex, head := range m.shadowPointLightHeads {
+		if head < 0 {
+			continue
 		}
-		origin := sceneVecBits(m.RenderOrigin)
-		m.refreshShadowDependency(owner, key, owner.membershipOrigin != origin, func(caster localShadowCasterKey) bool {
-			return pointShadowFaceIntersects(caster, light.Position, m.RenderOrigin, layer.CascadeIndex)
-		})
-		// Origin affects membership preparation only. Stable membership keeps
-		// its world-owned map generation and recorded acknowledgement.
-		owner.membershipOrigin = origin
+		light := scene.Lights[lightIndex]
+		var requested uint8
+		for i := head; i >= 0; i = m.shadowPointLayerNext[i] {
+			layer := m.ShadowLayerParams[i]
+			owner := &m.pointShadowDependencies[i]
+			key := pointShadowDependencyKey(light, layer)
+			if layer.CascadeIndex < 6 && m.shadowDependencyNeedsMembership(owner, key, owner.membershipOrigin != origin) {
+				requested |= 1 << layer.CascadeIndex
+			}
+		}
+		initialized := false
+		for i := head; i >= 0; i = m.shadowPointLayerNext[i] {
+			layer := m.ShadowLayerParams[i]
+			owner := &m.pointShadowDependencies[i]
+			key := pointShadowDependencyKey(light, layer)
+			m.refreshShadowDependency(owner, key, owner.membershipOrigin != origin, func(index int, caster localShadowCasterKey) bool {
+				if layer.CascadeIndex >= 6 {
+					return true
+				}
+				// Initialize only on actual membership work. No selected-caster
+				// scratch walk or allocation is needed by idle/scalar-only owners.
+				if !initialized {
+					if cap(m.shadowPointFaceMasks) < len(m.localShadowCasters) {
+						m.shadowPointFaceMasks = make([]uint8, len(m.localShadowCasters))
+					} else {
+						m.shadowPointFaceMasks = m.shadowPointFaceMasks[:len(m.localShadowCasters)]
+						clear(m.shadowPointFaceMasks)
+					}
+					initialized = true
+				}
+				mask := m.shadowPointFaceMasks[index]
+				if mask&64 == 0 {
+					m.ShadowPointMembershipClassificationCount++
+					mask = 64 | pointShadowCasterFaceMask(caster, light.Position, m.RenderOrigin, requested)
+					m.shadowPointFaceMasks[index] = mask
+				}
+				return mask&(1<<layer.CascadeIndex) != 0
+			})
+			// Origin affects membership preparation only. Stable membership keeps
+			// its world-owned map generation and recorded acknowledgement.
+			owner.membershipOrigin = origin
+		}
+	}
+}
+
+func pointShadowDependencyKey(light core.Light, layer ShadowLayerParams) localShadowLightKey {
+	return localShadowLightKey{
+		position: shadowVec4Bits(light.Position), direction: shadowVec4Bits(light.Direction), params: shadowVec4Bits(light.Params), meta: light.ShadowMeta,
+		viewProj: sceneMatBits(mgl32.Mat4(light.ViewProj)), invViewProj: sceneMatBits(mgl32.Mat4(light.InvViewProj)),
+		resolution: layer.EffectiveResolution, assignment: [3]uint32{layer.LightIndex, layer.CascadeIndex, layer.Layer},
 	}
 }
 
@@ -631,7 +714,7 @@ func (m *GpuBufferManager) prepareDirectionalShadowDependencies(scene *core.Scen
 		if !owner.active || owner.light != key || owner.membershipRevision != m.localShadowMembershipRevision {
 			prism = buildDirectionalShadowRayPrism(cascade.InvViewProj)
 		}
-		m.refreshShadowDependency(owner, key, false, prism.intersects)
+		m.refreshShadowDependency(owner, key, false, func(_ int, caster localShadowCasterKey) bool { return prism.intersects(caster) })
 	}
 }
 
