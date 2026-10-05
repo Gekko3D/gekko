@@ -25,8 +25,8 @@ broader producer/publication and retention decisions. Exact snapshots are the
 chosen boundary; no new ECS extraction architecture or total-memory ceiling is
 introduced. Local snapshots still add CPU and retained-memory cost.
 
-Face-specific point dependencies, clipmap scrolling, dirty texels and removal of
-directional periodic cadence remain separate steps. R2e removes periodic local
+Face-specific point dependencies, clipmap scrolling, dirty texels and
+camera-force refinement remain separate steps. R2e removes periodic local
 refresh after dependency-driven reuse is established.
 Automated scheduling checks alone do not prove visual parity or net frame gains.
 Native shadow readback and a CPU diagnostic are retained in the
@@ -80,3 +80,19 @@ local reuse is the next step within the existing ownership boundary. Continuous
 dirty-light priority is unchanged; this step does not redesign fairness or caster
 selection. Scheduler tests and native cached-map parity validate the change; full
 application frame timing requires separate measurement.
+
+
+## R2f ownership decision
+
+Directional maps follow the same dependency-driven validity contract as local
+maps. Age alone does not change a cascade's projection or caster inputs, so valid
+cascades remain cached. Each cascade acknowledges its generation independently.
+Explicit forced refresh and the app's camera-motion force path remain available;
+cached transforms publish together with their scheduled maps.
+
+Keeping periodic rebuilds repeats GPU work with identical inputs. Removing the
+camera force path simultaneously would broaden verification to moving-camera
+behavior, so it remains separate. This step changes only GPU-manager scheduling;
+projection generation, caster selection, shader traversal and publication remain
+with their current owners. CPU scheduling and native fresh-reference parity
+validate idle reuse and dependent changes; frame-time gains require measurement.

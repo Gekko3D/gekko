@@ -396,7 +396,7 @@ func TestBuildDirectionalShadowCascadeTightensAgainstCameraSphereFit(t *testing.
 	}
 }
 
-func TestBuildShadowUpdatesUsesCadenceAndInvalidation(t *testing.T) {
+func TestBuildShadowUpdatesUsesDependenciesAndInvalidation(t *testing.T) {
 	scene := &core.Scene{
 		Lights: []core.Light{
 			{
@@ -423,34 +423,13 @@ func TestBuildShadowUpdatesUsesCadenceAndInvalidation(t *testing.T) {
 	manager.RecordShadowUpdates(initial, 0, scene.ShadowRevision())
 
 	next := manager.BuildShadowUpdates(scene, camera, 1, false)
-	if len(next) != 1 {
-		t.Fatalf("expected only the hero directional cascade at frame 1, got %d", len(next))
+	if len(next) != 0 {
+		t.Fatalf("expected unchanged shadows to stay cached at frame 1, got %d", len(next))
 	}
-	directionalCount := 0
-	directionalCascade0 := 0
-	directionalCascade1 := 0
-	for _, update := range next {
-		if update.Kind == core.ShadowUpdateKindDirectional {
-			directionalCount++
-			if update.CascadeIndex == 0 {
-				directionalCascade0++
-			}
-			if update.CascadeIndex == 1 {
-				directionalCascade1++
-			}
-		}
-	}
-	if directionalCount != 1 {
-		t.Fatalf("expected only one directional cascade refresh at frame 1, got %d updates", directionalCount)
-	}
-	if directionalCascade0 != 1 || directionalCascade1 != 0 {
-		t.Fatalf("expected only directional cascade 0 to refresh at frame 1, got c0=%d c1=%d", directionalCascade0, directionalCascade1)
-	}
-
 	manager.RecordShadowUpdates(next, 1, scene.ShadowRevision())
 	third := manager.BuildShadowUpdates(scene, camera, 2, false)
-	if len(third) != 2 {
-		t.Fatalf("expected only both directional cascades at frame 2, got %d", len(third))
+	if len(third) != 0 {
+		t.Fatalf("expected unchanged shadows to stay cached at frame 2, got %d", len(third))
 	}
 
 	manager.VoxelUploadRevision++

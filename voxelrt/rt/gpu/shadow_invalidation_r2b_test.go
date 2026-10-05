@@ -7,7 +7,7 @@ import (
 )
 
 // Scheduling at the recording frame isolates invalidation from periodic work.
-// The following frame separately checks that the far cascade keeps its cadence.
+// Following frames separately check that unchanged cascades remain cached.
 const r2bFrame = uint64(32)
 
 func r2bObject(id uint32, p mgl32.Vec3) *core.VoxelObject {
@@ -274,14 +274,14 @@ func TestR2bExactDirectionalInputs(t *testing.T) {
 	}
 }
 
-func TestR2bDirectionalCadenceAndForce(t *testing.T) {
+func TestR2bDirectionalReuseAndForce(t *testing.T) {
 	m, s, c := r2bFixture(t)
 	s.Objects[2].XBrickMap.DirtyBricks[[6]int{}] = true
 	scheduleRun(t, m, s)
 	r2aCommit(m, s, c)
 	r2bAssert(t, m, s, c, r2bFrame, nil)
-	r2bAssert(t, m, s, c, r2bFrame+1, []uint32{0})
-	r2bAssert(t, m, s, c, r2bFrame+2, []uint32{0, 1})
+	r2bAssert(t, m, s, c, r2bFrame+1, nil)
+	r2bAssert(t, m, s, c, r2bFrame+2, nil)
 	u := m.BuildShadowUpdates(s, c, r2bFrame, true)
 	seen := map[uint32]bool{}
 	for _, v := range u {

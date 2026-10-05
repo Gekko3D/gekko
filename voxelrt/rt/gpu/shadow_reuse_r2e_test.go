@@ -253,7 +253,7 @@ func TestR2eLongIdleDependencyChangesStillInvalidate(t *testing.T) {
 	}
 }
 
-func TestR2eDirectionalCadenceAndForceDoNotWakeValidLocals(t *testing.T) {
+func TestR2eDirectionalReuseAndForceDoNotWakeValidLocals(t *testing.T) {
 	m, s, c := r2eFixture(t, core.LightTypeSpot, 40, 1)
 	s.Lights = append(s.Lights, core.Light{Direction: [4]float32{0, -1, 0, 0}, Params: [4]float32{0, 0, float32(core.LightTypeDirectional), 1}})
 	r2aCommit(m, s, c)
@@ -263,7 +263,7 @@ func TestR2eDirectionalCadenceAndForceDoNotWakeValidLocals(t *testing.T) {
 		frame uint64
 		force bool
 		want  int
-	}{{1001, false, 1}, {1002, false, 2}, {1002, true, 2}, {1000000, false, 2}} {
+	}{{1001, false, 0}, {1002, false, 0}, {1002, true, 2}, {1000000, false, 0}} {
 		u = m.BuildShadowUpdates(s, c, tc.frame, tc.force)
 		if len(u) != tc.want {
 			t.Errorf("frame %d force=%v scheduled %d, want %d directional only", tc.frame, tc.force, len(u), tc.want)

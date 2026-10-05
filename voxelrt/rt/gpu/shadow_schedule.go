@@ -33,27 +33,15 @@ func shadowTierBudget(tier uint32) int {
 	}
 }
 
-func (m *GpuBufferManager) shadowNeedsRefresh(layer ShadowLayerParams, shadowRevision, frameIndex uint64) (invalidated bool, cadenceDue bool) {
+func (m *GpuBufferManager) shadowNeedsRefresh(layer ShadowLayerParams) bool {
 	if int(layer.Layer) >= len(m.shadowCacheStates) {
-		return true, true
+		return true
 	}
 	state := m.shadowCacheStates[layer.Layer]
-	if !state.Initialized {
-		return true, true
+	if layer.Kind == core.ShadowUpdateKindDirectional {
+		return !m.directionalShadowLayerValid(layer, state)
 	}
-	if layer.Kind != core.ShadowUpdateKindDirectional {
-		if !m.localShadowLayerValid(layer, state) {
-			return true, true
-		}
-		// Recorded local dependencies define map validity; age adds no work.
-		return false, false
-	} else if !m.directionalShadowLayerValid(layer, state) {
-		return true, true
-	}
-	if layer.CadenceFrames == 0 {
-		return false, false
-	}
-	return false, frameIndex-state.LastUpdatedFrame >= uint64(layer.CadenceFrames)
+	return !m.localShadowLayerValid(layer, state)
 }
 
 func spotLightDistance(light core.Light, camPos mgl32.Vec3) float32 {
@@ -139,14 +127,12 @@ func (m *GpuBufferManager) BuildShadowUpdates(scene *core.Scene, camera *core.Ca
 	if len(m.ShadowLayerParams) == 0 {
 		return updates
 	}
-	shadowRevision := scene.ShadowRevision()
 
 	for _, layer := range m.ShadowLayerParams {
 		if layer.Kind != core.ShadowUpdateKindDirectional {
 			continue
 		}
-		invalidated, cadenceDue := m.shadowNeedsRefresh(layer, shadowRevision, frameIndex)
-		if !forceDirectionalRefresh && !invalidated && !cadenceDue {
+		if !forceDirectionalRefresh && !m.shadowNeedsRefresh(layer) {
 			continue
 		}
 		updates = append(updates, core.ShadowUpdate{
@@ -184,7 +170,7 @@ func (m *GpuBufferManager) BuildShadowUpdates(scene *core.Scene, camera *core.Ca
 			if int(layer) >= len(m.ShadowLayerParams) {
 				continue
 			}
-			layerInvalidated, _ := m.shadowNeedsRefresh(m.ShadowLayerParams[layer], shadowRevision, frameIndex)
+			layerInvalidated := m.shadowNeedsRefresh(m.ShadowLayerParams[layer])
 			invalidated = invalidated || layerInvalidated
 		}
 		if !invalidated {

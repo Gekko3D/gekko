@@ -678,7 +678,7 @@ light priority and point-face budgets/rotation. Pending work remains invalid unt
 recorded; a second dependency change during partial point refresh requires all six
 faces of the new generation. Once current work completes, local dispatch stops
 until inputs change. This does not redesign priority among continuously dirty
-lights. Directional cascades use the per-layer dependencies and cadence below.
+lights. Directional cascades use the per-layer dependencies below.
 See [R2 ownership decision](../roadmaps/streamed-rendering-r2.md).
 
 ### Directional shadow cache dependencies
@@ -698,12 +698,14 @@ singular or poorly conditioned inverse projections conservatively retain casters
 Scalar comparisons remain live while unchanged membership reuses indices.
 Removed layers release retained caster references.
 
-Periodic cadence and forced camera refresh remain unchanged. The first cascade
-still refreshes every frame and the second every two frames; scoped invalidation
-can avoid extra second-cascade updates between cadence frames. Cached cascade
-transforms stay paired with their maps until the scheduled rebuild publishes new
-transforms through `PrepareShadowLights`. This does not change scene caster
-selection, shader traversal, GPU layouts or the synchronous recording contract.
+Valid cascades remain cached regardless of age. `CadenceFrames` remains metadata
+for compatibility but does not schedule periodic work. Initial or changed inputs
+schedule the affected cascades; only recorded updates acknowledge their content.
+Explicit forced refresh and the app's camera-motion force path still schedule both
+cascades. Cached cascade transforms stay paired with their maps until the scheduled
+rebuild publishes new transforms through `PrepareShadowLights`. This does not
+change projection generation, scene caster selection, shader traversal, GPU
+layouts or the synchronous recording contract.
 
 ### Shadow update publication
 
