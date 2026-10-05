@@ -250,19 +250,25 @@ type GpuBufferManager struct {
 	VolumetricHistoryValid bool
 
 	// Shadow Map Resources
-	ShadowMapArray           *wgpu.Texture
-	ShadowMapView            *wgpu.TextureView
-	ShadowMapLayers          uint32
-	DirectionalShadowArrays  [core.DirectionalShadowCascadeCount]*wgpu.Texture
-	DirectionalShadowViews   [core.DirectionalShadowCascadeCount]*wgpu.TextureView
-	DirectionalShadowLayers  uint32
-	ShadowLayerParams        []ShadowLayerParams
-	shadowCacheStates        []shadowCacheState
-	shadowCachedCascades     []core.DirectionalShadowCascade
-	shadowTierOffsets        [shadowTierCount]int
-	MaterialBufferGeneration uint64
-	VoxelUploadRevision      uint64
-	SceneBindingRevision     uint64
+	ShadowMapArray                *wgpu.Texture
+	ShadowMapView                 *wgpu.TextureView
+	ShadowMapLayers               uint32
+	DirectionalShadowArrays       [core.DirectionalShadowCascadeCount]*wgpu.Texture
+	DirectionalShadowViews        [core.DirectionalShadowCascadeCount]*wgpu.TextureView
+	DirectionalShadowLayers       uint32
+	ShadowLayerParams             []ShadowLayerParams
+	shadowCacheStates             []shadowCacheState
+	shadowCachedCascades          []core.DirectionalShadowCascade
+	shadowTierOffsets             [shadowTierCount]int
+	MaterialBufferGeneration      uint64
+	VoxelUploadRevision           uint64
+	localShadowDependencies       []localShadowDependency
+	localShadowCasters            []localShadowCasterKey
+	localShadowMembershipRevision uint64
+	localShadowGeneration         uint64
+	shadowObservedUploadRevision  uint64
+	shadowUnknownUploadEpoch      uint64
+	SceneBindingRevision          uint64
 	// Cumulative scene-record compilation and successful queue publication work.
 	SceneInstanceRecordBuildCount    uint64
 	SceneObjectParamRecordBuildCount uint64
@@ -570,6 +576,7 @@ type retiredBindGroup struct {
 
 // ObjectGpuAllocation tracks the GPU memory regions assigned to a specific object.
 type ObjectGpuAllocation struct {
+	shadowUploadEpoch    uint64
 	ownerToken           *voxelAllocationOwnerToken
 	ownerMap             *volume.XBrickMap
 	Sectors              map[[3]int]*volume.Sector     // Track which sector is at which coordinate
@@ -582,12 +589,14 @@ type ObjectGpuAllocation struct {
 }
 
 type MaterialGpuAllocation struct {
-	MaterialOffset   uint32 // In elements (64 bytes each)
-	MaterialCapacity uint32 // In elements
-	MaterialTablePtr uintptr
-	MaterialTableLen int
-	BufferGeneration uint64
-	HasTransparency  bool
+	shadowOpacity     materialShadowOpacity
+	shadowUploadEpoch uint64
+	MaterialOffset    uint32 // In elements (64 bytes each)
+	MaterialCapacity  uint32 // In elements
+	MaterialTablePtr  uintptr
+	MaterialTableLen  int
+	BufferGeneration  uint64
+	HasTransparency   bool
 }
 
 type SectorGpuInfo struct {

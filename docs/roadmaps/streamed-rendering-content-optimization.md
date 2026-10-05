@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; other sections are proposals.
+Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a is complete; R2 remains partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -25,7 +25,7 @@ Owners: renderer storage/upload and streamed runtime. Consumers: physics, naviga
 - [Assets](../../assets/voxel_assets.go): geometry and palette assets are separate; shared geometry and copy-on-edit already exist. There is no equivalent to Rust's compiled fragment package in this path. [Geometry registration](../../asset_vox_model.go) deep-copies prepared maps. [Inline shapes](../../asset_voxel_shape.go) serialize geometry into JSON cache key. [Entity LOD assets](../../entity_lod_runtime_assets.go) already generate simplified geometry and impostors at runtime; offline compilation can remove that work.
 - [Physics](../../mod_vox_physics.go): collision already reads voxel geometry; asset grids are shared. `CopyChangedSectors` supplies immutable changed-sector snapshots to physics and [navigation](../../navigation_graph_runtime.go). There is no equivalent bulk JSON collision-box package to eliminate.
 - [Destruction](../../mod_destruction.go): queue already holds sphere events, grouped per entity. [Sphere application](../../voxelrt/rt/volume/primitives.go) still calls `SetVoxel` per voxel. Connectivity already uses brick components, but scans whole map when splitting runs.
-- [Scene sync](../../mod_voxelrt_client_systems.go): transform/material comparisons and conditional BVH rebuilds already exist. ECS gathering still scans entities. [Shadow scheduling](../../voxelrt/rt/gpu/shadow_schedule.go) already budgets local lights, but global scene/upload revisions invalidate unrelated layers. [Directional cascades](../../voxelrt/rt/gpu/shadow_metadata.go) already follow camera slices and snap to texels.
+- [Scene sync](../../mod_voxelrt_client_systems.go): transform/material comparisons and conditional BVH rebuilds already exist. ECS gathering still scans entities. [Shadow scheduling](../../voxelrt/rt/gpu/shadow_schedule.go) already budgets local lights. R2a gives point/spot lights local caster and uploaded-content dependencies; directional layers retain global scene/upload invalidation. [Directional cascades](../../voxelrt/rt/gpu/shadow_metadata.go) already follow camera slices and snap to texels.
 
 ## 3. Transfer map
 
@@ -803,6 +803,11 @@ Owners: app resources/frame graph, GPU render setup, resolve and feature shaders
 
 ### R2. Narrow shadow invalidation
 
+R2a completed local point/spot dependencies, opacity-aware upload attribution and
+consistent scheduling/readiness. Directional invalidation and finer spatial work
+remain. [Ownership decision](streamed-rendering-r2.md);
+[runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies).
+
 Retain camera-focused cascades/local-light budgets. Track changed bounds/revisions; dirty intersecting caster volumes only, including removal/streamed activation.
 
 Prevent `VoxelUploadRevision` invalidating unrelated lights. Retain cached cascade transforms until map rebuild. Later consider scrolling clipmaps/dirty texels. Per-pixel sun rays need separate visual/cost review.
@@ -866,6 +871,7 @@ This workflow does not independently authorize tests, delegation or commits.
 
 | Step | Commit | Change | Design or canonical contract |
 | --- | --- | --- | --- |
+| R2a | This batch | Local shadow dependencies, stable membership reuse and opacity-aware uploads | [Runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies) |
 | S1a | `e3f11cf` | Hidden residency and readiness tickets | [Design](streamed-rendering-s1a.md) |
 | S1b | `a539257` | Global content budgets, ordering and atlas backpressure | [Design](streamed-rendering-s1b.md) |
 | S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
@@ -3639,3 +3645,48 @@ User authorized functionality tests/tests-first subagents for this implementatio
 Other test changes follow [workspace instructions](/Users/ddevidch/code/go/gekko3d/AGENTS.md).
 
 Related Gekko plans: [island streaming](../content/island-streaming.md), [XBrickMap hot path](../renderer/xbrickmap-hotpath-optimization-plan.md), [uniform materials](../renderer/xbrickmap-uniform-material-plan.md), [quality-preserving optimization](../renderer/quality-preserving-optimization-plan.md), and [renderer change guide](../renderer/change-guide.md).
+
+
+### R2a: Local shadow dependency invalidation
+
+Point/spot caches now retain unaffected shadows during unrelated scene changes,
+geometry uploads and identical palette reuploads. Unknown external revisions,
+including changes during execution, remain conservative invalidations.
+[Contract](../renderer/runtime.md#local-shadow-cache-dependencies).
+
+Verification commands from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu -run '^TestR2a' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/gpu -run '^TestR2a' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu ./voxelrt/rt/core ./voxelrt/rt/app
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2a-native docs/roadmaps/diagnostics/r2a_shadow.go
+/tmp/gekko-r2a-native
+env GOCACHE=/tmp/gekko3d-gocache go run docs/roadmaps/diagnostics/r2a_shadow_cpu.go
+```
+
+Consumer builds from `gekko-editor`, `actiongame`, `spacegame_go`, `spacesim`
+and `examples/testing-vox`, respectively:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2a-editor .
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2a-actiongame .
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2a-spacegame .
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2a-spacesim .
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2a-testing-vox .
+```
+
+Native 256-pixel spot readback skipped two unrelated updates despite material
+buffer growth. Carve and transparency each refreshed only one map. Unaffected
+bytes remained exact; affected caches matched forced rebuilds. Depth PNGs were
+inspected. This covers two synthetic spot lights; no independent point/cascade
+visual, full gameplay scene, GPU timing or FPS claim.
+
+CPU-only idle `UpdateLights` plus `BuildShadowUpdates`, eight spot lights,
+`GOMAXPROCS=1`: 32 casters changed from 2.688 to 9.934 microseconds; 1,000 from
+2.849 to 213.169 microseconds. Both retain 960 B and nine allocations per call.
+Stable membership reuse reduced the initial 1,000-caster candidate from 843.498
+microseconds. These single-run diagnostics expose added CPU cost, not net frame
+performance. Dependency scans, periodic cadence and directional global
+invalidation remain.

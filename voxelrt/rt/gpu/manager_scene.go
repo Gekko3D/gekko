@@ -378,6 +378,9 @@ func (m *GpuBufferManager) shadowLayerCacheValid(layer uint32, shadowRevision ui
 	}
 	state := m.shadowCacheStates[layer]
 	params := m.ShadowLayerParams[layer]
+	if params.Kind != core.ShadowUpdateKindDirectional {
+		return m.localShadowLayerValid(params, state)
+	}
 	return state.Initialized &&
 		state.LastLightSignature == params.LightSignature &&
 		state.LastSceneRevision == shadowRevision &&
@@ -399,6 +402,7 @@ func (m *GpuBufferManager) localShadowCacheReady(light core.Light, shadowRevisio
 }
 
 func (m *GpuBufferManager) buildLightsDataForGPU(lights []core.Light, shadowRevision uint64) []byte {
+	m.observeShadowUploadRevision()
 	gpuLights := make([]core.Light, len(lights))
 	copy(gpuLights, lights)
 	for i := range gpuLights {
@@ -483,13 +487,6 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 		m.invalidateShadowCache()
 		recreated = true
 	}
-	lightsData := m.buildLightsDataForGPU(scene.Lights, scene.ShadowRevision())
-	if m.ensureBuffer("LightsBuf", &m.LightsBuf, lightsData, wgpu.BufferUsageStorage, 0) {
-		recreated = true
-	}
-	if m.ensureBuffer("ShadowLayerParamsBuf", &m.ShadowLayerParamsBuf, buildShadowLayerParamsData(m.ShadowLayerParams), wgpu.BufferUsageStorage, 0) {
-		recreated = true
-	}
 
 	// Voxel Data (Incremental / Paged)
 	m.Profiler.BeginScope("Scene: Voxel")
@@ -511,6 +508,15 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 		recreated = true
 	}
 	m.Profiler.EndScope("Scene: Grid")
+
+	m.prepareLocalShadowDependencies(scene)
+	lightsData := m.buildLightsDataForGPU(scene.Lights, scene.ShadowRevision())
+	if m.ensureBuffer("LightsBuf", &m.LightsBuf, lightsData, wgpu.BufferUsageStorage, 0) {
+		recreated = true
+	}
+	if m.ensureBuffer("ShadowLayerParamsBuf", &m.ShadowLayerParamsBuf, buildShadowLayerParamsData(m.ShadowLayerParams), wgpu.BufferUsageStorage, 0) {
+		recreated = true
+	}
 
 	// Record inputs now include admitted material offsets and current lookup
 	// metadata. Earlier maintenance does not consume these nine buffers.
@@ -783,6 +789,7 @@ func (m *GpuBufferManager) UpdateLights(scene *core.Scene, camera *core.CameraSt
 			})
 		}
 	}
+	m.prepareLocalShadowDependencies(scene)
 }
 
 type sectorGridMapIdentity struct {

@@ -42,9 +42,11 @@ func (m *GpuBufferManager) shadowNeedsRefresh(layer ShadowLayerParams, shadowRev
 	if !state.Initialized {
 		return true, true
 	}
-	if state.LastLightSignature != layer.LightSignature ||
-		state.LastSceneRevision != shadowRevision ||
-		state.LastVoxelUploadRevision != m.VoxelUploadRevision {
+	if layer.Kind != core.ShadowUpdateKindDirectional {
+		if !m.localShadowLayerValid(layer, state) {
+			return true, true
+		}
+	} else if state.LastLightSignature != layer.LightSignature || state.LastSceneRevision != shadowRevision || state.LastVoxelUploadRevision != m.VoxelUploadRevision {
 		return true, true
 	}
 	if layer.CadenceFrames == 0 {
@@ -131,6 +133,7 @@ func localLightShadowUpdates(light core.Light, params []ShadowLayerParams, cache
 }
 
 func (m *GpuBufferManager) BuildShadowUpdates(scene *core.Scene, camera *core.CameraState, frameIndex uint64, forceDirectionalRefresh bool) []core.ShadowUpdate {
+	m.prepareLocalShadowDependencies(scene)
 	updates := make([]core.ShadowUpdate, 0, len(m.ShadowLayerParams))
 	if len(m.ShadowLayerParams) == 0 {
 		return updates
@@ -252,6 +255,10 @@ func (m *GpuBufferManager) RecordShadowUpdates(updates []core.ShadowUpdate, fram
 		state.LastLightSignature = m.ShadowLayerParams[layer].LightSignature
 		state.LastSceneRevision = shadowRevision
 		state.LastVoxelUploadRevision = m.VoxelUploadRevision
+		params := m.ShadowLayerParams[layer]
+		if params.Kind != core.ShadowUpdateKindDirectional && int(params.LightIndex) < len(m.localShadowDependencies) {
+			state.LastLocalGeneration = m.localShadowDependencies[params.LightIndex].generation
+		}
 	}
 }
 

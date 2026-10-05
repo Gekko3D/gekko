@@ -144,6 +144,7 @@ func voxelUploadOrder(obj *core.VoxelObject) uint64 {
 // An executor may refuse only before writing. Successful execution means writes
 // were queued, not that GPU execution has completed.
 func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(voxelUploadWork) bool) {
+	m.observeShadowUploadRevision()
 	m.beginVoxelOwnership()
 	defer m.endVoxelOwnership()
 	m.VoxelUploadBytes = 0
@@ -310,8 +311,25 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 			continue
 		}
 		snapshot := m.captureVoxelUploadSnapshot(w)
+		geometry := m.Allocations[w.targetMap()]
+		material := m.MaterialAllocations[w.object]
+		var opacity materialShadowOpacity
+		if w.kind == voxelUploadMaterial {
+			opacity = captureMaterialShadowOpacity(material, w.object.MaterialTable)
+		}
 		if execute == nil || !execute(w) {
 			continue
+		}
+		// Epochs describe written allocations, even when selection changed during execution.
+		if w.kind == voxelUploadMaterial {
+			if material != nil {
+				if material.shadowOpacity != opacity {
+					material.shadowUploadEpoch++
+				}
+				material.shadowOpacity = opacity
+			}
+		} else if geometry != nil {
+			geometry.shadowUploadEpoch++
 		}
 		m.commitVoxelUploadSnapshot(snapshot)
 		remaining.MaxBytes -= w.bytes
@@ -350,8 +368,11 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 		m.VoxelDirtySectorsPending += len(xbm.DirtySectors)
 		m.VoxelDirtyBricksPending += len(xbm.DirtyBricks)
 	}
+	// Catch unknown writes made by an executor before attributing our own increment.
+	m.observeShadowUploadRevision()
 	if m.VoxelUploadBytes != 0 {
 		m.VoxelUploadRevision++
+		m.shadowObservedUploadRevision = m.VoxelUploadRevision
 	}
 }
 

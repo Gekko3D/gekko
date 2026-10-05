@@ -642,6 +642,39 @@ Current implementation notes:
   - `LightingQualityConfig.Shadow` still controls cascade distances and local-light tier bands.
   - Deprecated shadow-softness fields are ignored so a receiving voxel keeps one discrete shadow response.
 
+### Local shadow cache dependencies
+
+Point and spot layers use GPU-manager-owned local dependencies instead of global
+scene/upload revisions. Exact scalar snapshots include selected caster membership,
+render-map identity/revision, matrices, bounds, object metadata, allocation
+identity and successful content uploads. Source radius and emitter links are
+part of light identity. Existing conservative light volumes operate on the
+selected `Scene.ShadowObjects`, including off-screen and grouped casters.
+
+Unchanged ordered caster identities/world bounds and light inputs reuse volume
+membership; other render inputs remain live comparisons. Removed casters and
+lights release snapshot references. This adds scoped CPU snapshot storage,
+including approximately 1 KiB of opacity metadata per material allocation;
+existing cache budgets do not become a total process-memory ceiling.
+
+Geometry uploads invalidate dependent placements, including shared maps and
+written work whose source becomes stale afterward. Material uploads compare exact
+transparency float bits and written row coverage. Identical palette reuploads
+caused by buffer growth preserve local shadows; pointer identity alone cannot
+hide an opacity change. Opacity captures precede execution and publish only after
+successful writes, preserving unwritten tails and empty-table zero uploads.
+Unattributed public `VoxelUploadRevision` changes conservatively invalidate all
+local lights, including changes during a tracked executor.
+
+`UpdateScene` prepares local dependencies and serializes light readiness after
+voxel upload and lookup maintenance. Scheduling uses the same dependency
+revision. `BuildShadowUpdates` and `RecordShadowUpdates` retain their synchronous
+render-thread contract. Only recorded updates acknowledge dependencies. A point
+light remains disabled until all six faces acknowledge current content; unrelated
+uploads do not restart partial face progress. Cadence, tier budgets and rotation
+remain unchanged. Directional cascades retain global invalidation and cached
+projection behavior. See [R2 ownership decision](../roadmaps/streamed-rendering-r2.md).
+
 ### Transparency / WBOIT
 
 - accumulation: `RGBA16Float`

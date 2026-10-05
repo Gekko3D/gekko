@@ -34,6 +34,7 @@ type shadowCacheState struct {
 	LastLightSignature      uint64
 	LastSceneRevision       uint64
 	LastVoxelUploadRevision uint64
+	LastLocalGeneration     uint64
 }
 
 func shadowTierName(tier uint32) string {
