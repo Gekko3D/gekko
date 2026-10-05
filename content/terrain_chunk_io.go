@@ -14,8 +14,13 @@ func SaveTerrainChunkManifest(path string, def *TerrainChunkManifestDef) error {
 	if def.SchemaVersion == 0 {
 		def.SchemaVersion = CurrentTerrainChunkManifestSchemaVersion
 	}
-	if def.SchemaVersion != CurrentTerrainChunkManifestSchemaVersion {
+	if def.SchemaVersion != CurrentTerrainChunkManifestSchemaVersion && def.SchemaVersion != TerrainHeightTileManifestSchemaVersion {
 		return fmt.Errorf("unsupported terrain chunk manifest schema version %d", def.SchemaVersion)
+	}
+	if def.SchemaVersion == TerrainHeightTileManifestSchemaVersion {
+		if err := validateTerrainHeightTileManifest(def); err != nil {
+			return err
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
@@ -40,8 +45,13 @@ func LoadTerrainChunkManifest(path string) (*TerrainChunkManifestDef, error) {
 	if def.SchemaVersion == 0 {
 		def.SchemaVersion = CurrentTerrainChunkManifestSchemaVersion
 	}
-	if def.SchemaVersion != CurrentTerrainChunkManifestSchemaVersion {
+	if def.SchemaVersion != CurrentTerrainChunkManifestSchemaVersion && def.SchemaVersion != TerrainHeightTileManifestSchemaVersion {
 		return nil, fmt.Errorf("unsupported terrain chunk manifest schema version %d", def.SchemaVersion)
+	}
+	if def.SchemaVersion == TerrainHeightTileManifestSchemaVersion {
+		if err := validateTerrainHeightTileManifest(&def); err != nil {
+			return nil, err
+		}
 	}
 	return &def, nil
 }

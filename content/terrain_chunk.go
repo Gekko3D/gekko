@@ -19,6 +19,10 @@ type TerrainChunkColumnDef struct {
 }
 
 type TerrainChunkEntryDef struct {
+	WorldOrigin        [3]float32           `json:"world_origin,omitzero"`
+	PayloadKind        string               `json:"payload_kind,omitempty"`
+	PayloadHash        string               `json:"payload_hash,omitempty"`
+	PayloadSizeBytes   int                  `json:"payload_size_bytes,omitempty"`
 	Coord              TerrainChunkCoordDef `json:"coord"`
 	ChunkSize          int                  `json:"chunk_size"`
 	VoxelResolution    float32              `json:"voxel_resolution"`

@@ -410,7 +410,16 @@ func (l *RuntimeContentLoader) LoadLevel(path string) (*content.LevelDef, error)
 	return loadRuntimeContent(l, "level", path, content.LoadLevel)
 }
 func (l *RuntimeContentLoader) LoadTerrainChunkManifest(path string) (*content.TerrainChunkManifestDef, error) {
-	return loadRuntimeContent(l, "terrain-manifest", path, content.LoadTerrainChunkManifest)
+	return loadRuntimeContent(l, "terrain-manifest", path, func(path string) (*content.TerrainChunkManifestDef, error) {
+		manifest, err := content.LoadTerrainChunkManifest(path)
+		if err != nil {
+			return nil, err
+		}
+		if manifest.SchemaVersion == content.TerrainHeightTileManifestSchemaVersion {
+			return nil, fmt.Errorf("terrain height tile runtime requires resident height collision support")
+		}
+		return manifest, nil
+	})
 }
 func (l *RuntimeContentLoader) LoadTerrainChunk(path string) (*content.TerrainChunkDef, error) {
 	return loadRuntimeContent(l, "terrain-chunk", path, content.LoadTerrainChunk)

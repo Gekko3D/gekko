@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals, P3b native workload evaluation and P3c packed mixed materials are complete, with P3 remaining partial; W3a scene BVH, W3b sector and W3c inner grid traversal are complete, with W3 remaining partial; W4a terrain brick-run construction and W4b ordered mixed-material construction are complete, with W4 remaining partial; other sections are proposals.
+Date: 2026-10-06. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals, P3b native workload evaluation and P3c packed mixed materials are complete, with P3 remaining partial; W3a scene BVH, W3b sector and W3c inner grid traversal are complete, with W3 remaining partial; W4a terrain brick-run construction, W4b ordered mixed-material construction and W4c1 tiled height source content are complete, with W4 remaining partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -12,7 +12,7 @@ Preserve [island streaming architecture](../content/island-streaming.md): separa
 
 Two Rust choices do not transfer: Gekko retains fitted encoded normals, not 6-bit neighbor normals; island plan retains manifests/payload compatibility. Deleting all legacy readers is not approved migration policy.
 
-Owners: renderer storage/upload and streamed runtime. Consumers: physics, navigation, assets, editor, importers, ActionGame and SpaceSim. Confidence: high for applicability/structure; medium for gains/formats. Individual designs required; no terrain architecture change approved.
+Owners: renderer storage/upload and streamed runtime. Consumers: physics, navigation, assets, editor, importers, ActionGame and SpaceSim. Confidence: high for applicability/structure; medium for gains/formats. Individual designs required. W4c follows the approved island split: height-tile natural-ground collision and private voxel edit patches; live ownership integration remains pending.
 
 ## 2. Current Gekko foundations and gaps
 
@@ -776,6 +776,9 @@ preserving full-column geometry and publication semantics; see the
 W4b accelerates existing ordered mixed-material construction with bounded lookup
 and exact halo-region caches; see the
 [ordered construction contract](../renderer/editing.md#fresh-ordered-voxel-construction).
+W4c1 adds validated tiled height source content and bake/load round trips; the
+current voxel-terrain runtime rejects this v3 content until height collision is
+ready. See the [source contract](../content/streaming-and-worlds.md#tiled-terrain-source-content-v3).
 Distant surface-band rendering and its heightfield collision/edit-frontier
 authority remain separate steps.
 
@@ -974,7 +977,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | W3b | `c5676cf` | Complete sector traversal and prevent stationary-axis rewinds in nested walks | [Runtime contract](../renderer/runtime.md#sector-traversal) |
 | W3c | `aafa193` | Bound sector-based brick and voxel walks by their owning grids | [Runtime contract](../renderer/runtime.md#inner-brick-and-voxel-traversal) |
 | W4a | `748ab8f` | Bulk uniform terrain column construction with ordered revision and halo parity | [Construction contract](../renderer/editing.md#fresh-uniform-column-construction) |
-| W4b | This batch | Cache ordered mixed-material construction with exact dirty/revision parity | [Construction contract](../renderer/editing.md#fresh-ordered-voxel-construction) |
+| W4b | `a73813b` | Cache ordered mixed-material construction with exact dirty/revision parity | [Construction contract](../renderer/editing.md#fresh-ordered-voxel-construction) |
+| W4c1 | This batch | Validated tiled height source codec, bake and manifest load; legacy runtime boundary retained | [Source contract](../content/streaming-and-worlds.md#tiled-terrain-source-content-v3) |
 | S1a | `e3f11cf` | Hidden residency and readiness tickets | [Design](streamed-rendering-s1a.md) |
 | S1b | `a539257` | Global content budgets, ordering and atlas backpressure | [Design](streamed-rendering-s1b.md) |
 | S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
@@ -4887,7 +4891,7 @@ other machines and full interactive gameplay were not checked.
 
 ### W4b: Ordered mixed-material construction caches
 
-Commit: this batch. Volume-owned `BuildXBrickMap` caches the current sector/brick
+Commit: `a73813b`. Volume-owned `BuildXBrickMap` caches the current sector/brick
 and exact normal-halo classes without sorting or buffering writes. Runtime
 imported chunks and offline normal-bake input retain source filtering, material
 conversion, auxiliary ownership and publication state. Ordered writes, revisions,
@@ -4926,3 +4930,39 @@ fixtures add four allocations and 144 allocated bytes per construction.
 W4 remains partial for surface bands with collision/backing/edit-frontier
 authority. These local construction measurements do not establish GPU/FPS gains;
 native visuals, other machines and full interactive gameplay were not checked.
+
+
+### W4c1: Tiled height source content
+
+Commit: this batch. Approved the island height-tile collision/private voxel-patch
+architecture and implemented its first source-content slice. Content-owned
+`TerrainHeightTileDef`, bounded `height_u16_binary_v1` I/O, immutable legacy
+heightfield baking and validated v3 manifest references now round-trip. Complete
+reference identity, payload hashes, signed sample centers, quantization, validity
+padding and optional navigation masks retain the
+[canonical contract](../content/streaming-and-worlds.md#tiled-terrain-source-content-v3).
+Legacy defaults remain v2. The runtime loader explicitly rejects v3 until its
+height-collision owner exists, preventing accidental voxel-column admission.
+
+Verification passed from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./content . -run W4c -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./content . -run 'W4c|Terrain|RuntimeContentLoader' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+git diff --check
+```
+
+Consumer builds passed using
+`env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-w4c1-editor .`
+from `../gekko-editor` and
+`env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-w4c1-actiongame .`
+from `../actiongame`. Editor
+`env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1` was attempted and still
+cannot compile `base_world_import_test.go` because its existing
+`collectUIButtonLabelsForTest` and `containsButtonOrLabel` helpers are missing.
+
+W4 remains partial: resident height sampling/collision, private edit-patch
+ownership/persistence, surface page generation, boundary filtering and atomic
+terrain/POI handoffs remain. No live rendering/collision behavior changed; GPU
+visuals, frame performance and interactive edit/reload handoffs were not checked.

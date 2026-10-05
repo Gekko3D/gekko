@@ -307,6 +307,11 @@ manifest's source hash and are never stored in saves or world deltas.
 
 ### Terrain Payloads
 
+W4c1 implements the source tile codec, legacy heightfield-to-tile bake and v3
+manifest tooling. The current runtime still rejects v3 until height collision
+and edit-patch ownership are ready. See the
+[implemented source contract](streaming-and-worlds.md#tiled-terrain-source-content-v3).
+
 Terrain v3 adds one required payload kind,
 `height_u16_binary_v1`. Reuse the existing binary-chunk framing: 8-byte
 `GKHTIL1\n` magic, little-endian `uint32` JSON-metadata length, JSON metadata,

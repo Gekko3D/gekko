@@ -94,6 +94,44 @@ authority, terrain backing and synchronous hooks. See
 [terrain asset ownership](../assets/runtime-assets.md#streamed-terrain-registration)
 for adoption, pending charges and unload/Stop cleanup.
 
+### Tiled terrain source content (v3)
+
+The approved [island terrain split](island-streaming.md#terrain-payloads) starts
+with source content. Explicit schema-3 `.gkterrainmanifest` entries reference
+`height_u16_binary_v1` `.gkchunk` tiles. Legacy defaults and column manifests
+remain schema 2. The current voxel-terrain runtime rejects schema 3 until resident
+height collision and edit-patch ownership are implemented; content tooling can
+save and load it. Render-page hierarchy, collision and excavation handoffs follow
+this source-content step.
+
+`TerrainHeightTileDef` stores up to 128 by 128 row-major `uint16` samples. A
+sample center is `WorldOrigin + (local + 0.5) * SampleSpacing` in X/Z; its world
+height is `HeightOffset + sample / 65535 * HeightScale`. An omitted surface mask
+means every sample is valid. Otherwise one row-major bit means present natural
+ground, and unused tail bits are zero. These validity bits reserve the content
+representation for cutouts; this step does not activate POI replacements.
+
+The binary frame is `GKHTIL1\n`, a little-endian uint32 metadata length, JSON
+metadata, then little-endian heights, optional validity bytes and optional
+outdoor-navigation exclusion bytes. Metadata is bounded to 64 KiB; dimensions,
+exact body lengths and SHA-256 are checked before a tile is returned. Payload
+hash and size describe the body, excluding frame and metadata. Manifest-entry
+loading verifies the complete decoded identity and lattice against the reference.
+Optional navigation data uses the island contract: a 128 by 128 tile at 2 m,
+1 m navigation cells and exactly 8,192 exclusion bytes. No navigation policy is
+inferred when the mask is omitted.
+
+`BakeTerrainHeightTiles` resamples immutable legacy heightfields onto a signed
+global tile lattice. Options default to 128 samples, 2 m spacing and a 4,096-tile
+allocation limit; callers may set that limit explicitly. Entries are ordered
+by Z then X and use manifest-relative paths. Bilinear sampling retains legacy
+float32 arithmetic; encoding rounds `(height / HeightScale) * 65535` to the
+nearest uint16. Centers outside the half-open source extent have zero height and
+an invalid bit. Every geometrically intersecting tile is emitted, including tiles
+whose centers all fall outside a small source extent. Source hashes retain the
+legacy source identity; entry dimensions, spacing and payload hashes identify
+the tiled representation.
+
 ## Imported Worlds
 
 Imported worlds are chunked voxel worlds, usually baked from VOX data.
