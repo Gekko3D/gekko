@@ -263,6 +263,7 @@ type GpuBufferManager struct {
 	MaterialBufferGeneration      uint64
 	VoxelUploadRevision           uint64
 	localShadowDependencies       []localShadowDependency
+	directionalShadowDependencies []localShadowDependency
 	localShadowCasters            []localShadowCasterKey
 	localShadowMembershipRevision uint64
 	localShadowGeneration         uint64

@@ -672,8 +672,32 @@ revision. `BuildShadowUpdates` and `RecordShadowUpdates` retain their synchronou
 render-thread contract. Only recorded updates acknowledge dependencies. A point
 light remains disabled until all six faces acknowledge current content; unrelated
 uploads do not restart partial face progress. Cadence, tier budgets and rotation
-remain unchanged. Directional cascades retain global invalidation and cached
-projection behavior. See [R2 ownership decision](../roadmaps/streamed-rendering-r2.md).
+remain unchanged. Directional cascades use the per-layer dependencies below.
+See [R2 ownership decision](../roadmaps/streamed-rendering-r2.md).
+
+### Directional shadow cache dependencies
+
+Each directional cascade has its own dependency generation. It shares the selected
+caster snapshots, allocation-owned upload epochs and conservative unknown-upload
+fallback described above. Exact keys additionally include cascade projection,
+inverse projection, parameters, effective resolution and light/cascade/layer
+assignment. Emitter links participate in light identity. Only recorded updates
+acknowledge a cascade's current generation; recording another cascade cannot
+acknowledge its pending content.
+
+Membership follows the actual inverse-projection ray prism: orthographic XY and
+the near-plane origin, with no downstream far-plane cutoff. The shader continues
+traversal beyond its depth projection. Invalid bounds or unsupported, nonfinite,
+singular or poorly conditioned inverse projections conservatively retain casters.
+Scalar comparisons remain live while unchanged membership reuses indices.
+Removed layers release retained caster references.
+
+Periodic cadence and forced camera refresh remain unchanged. The first cascade
+still refreshes every frame and the second every two frames; scoped invalidation
+can avoid extra second-cascade updates between cadence frames. Cached cascade
+transforms stay paired with their maps until the scheduled rebuild publishes new
+transforms through `PrepareShadowLights`. This does not change scene caster
+selection, shader traversal, GPU layouts or the synchronous recording contract.
 
 ### Transparency / WBOIT
 

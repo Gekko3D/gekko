@@ -381,10 +381,7 @@ func (m *GpuBufferManager) shadowLayerCacheValid(layer uint32, shadowRevision ui
 	if params.Kind != core.ShadowUpdateKindDirectional {
 		return m.localShadowLayerValid(params, state)
 	}
-	return state.Initialized &&
-		state.LastLightSignature == params.LightSignature &&
-		state.LastSceneRevision == shadowRevision &&
-		state.LastVoxelUploadRevision == m.VoxelUploadRevision
+	return m.directionalShadowLayerValid(params, state)
 }
 
 func (m *GpuBufferManager) localShadowCacheReady(light core.Light, shadowRevision uint64) bool {
@@ -509,7 +506,7 @@ func (m *GpuBufferManager) UpdateScene(scene *core.Scene, camera *core.CameraSta
 	}
 	m.Profiler.EndScope("Scene: Grid")
 
-	m.prepareLocalShadowDependencies(scene)
+	m.prepareShadowDependencies(scene)
 	lightsData := m.buildLightsDataForGPU(scene.Lights, scene.ShadowRevision())
 	if m.ensureBuffer("LightsBuf", &m.LightsBuf, lightsData, wgpu.BufferUsageStorage, 0) {
 		recreated = true
@@ -789,7 +786,7 @@ func (m *GpuBufferManager) UpdateLights(scene *core.Scene, camera *core.CameraSt
 			})
 		}
 	}
-	m.prepareLocalShadowDependencies(scene)
+	m.prepareShadowDependencies(scene)
 }
 
 type sectorGridMapIdentity struct {

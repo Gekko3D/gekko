@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a is complete; R2 remains partial; other sections are proposals.
+Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2b are complete; R2 remains partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -25,7 +25,7 @@ Owners: renderer storage/upload and streamed runtime. Consumers: physics, naviga
 - [Assets](../../assets/voxel_assets.go): geometry and palette assets are separate; shared geometry and copy-on-edit already exist. There is no equivalent to Rust's compiled fragment package in this path. [Geometry registration](../../asset_vox_model.go) deep-copies prepared maps. [Inline shapes](../../asset_voxel_shape.go) serialize geometry into JSON cache key. [Entity LOD assets](../../entity_lod_runtime_assets.go) already generate simplified geometry and impostors at runtime; offline compilation can remove that work.
 - [Physics](../../mod_vox_physics.go): collision already reads voxel geometry; asset grids are shared. `CopyChangedSectors` supplies immutable changed-sector snapshots to physics and [navigation](../../navigation_graph_runtime.go). There is no equivalent bulk JSON collision-box package to eliminate.
 - [Destruction](../../mod_destruction.go): queue already holds sphere events, grouped per entity. [Sphere application](../../voxelrt/rt/volume/primitives.go) still calls `SetVoxel` per voxel. Connectivity already uses brick components, but scans whole map when splitting runs.
-- [Scene sync](../../mod_voxelrt_client_systems.go): transform/material comparisons and conditional BVH rebuilds already exist. ECS gathering still scans entities. [Shadow scheduling](../../voxelrt/rt/gpu/shadow_schedule.go) already budgets local lights. R2a gives point/spot lights local caster and uploaded-content dependencies; directional layers retain global scene/upload invalidation. [Directional cascades](../../voxelrt/rt/gpu/shadow_metadata.go) already follow camera slices and snap to texels.
+- [Scene sync](../../mod_voxelrt_client_systems.go): transform/material comparisons and conditional BVH rebuilds already exist. ECS gathering still scans entities. [Shadow scheduling](../../voxelrt/rt/gpu/shadow_schedule.go) already budgets local lights. R2a–R2b give point/spot lights and directional cascades scoped caster and uploaded-content dependencies. [Directional cascades](../../voxelrt/rt/gpu/shadow_metadata.go) already follow camera slices and snap to texels.
 
 ## 3. Transfer map
 
@@ -803,9 +803,9 @@ Owners: app resources/frame graph, GPU render setup, resolve and feature shaders
 
 ### R2. Narrow shadow invalidation
 
-R2a completed local point/spot dependencies, opacity-aware upload attribution and
-consistent scheduling/readiness. Directional invalidation and finer spatial work
-remain. [Ownership decision](streamed-rendering-r2.md);
+R2a–R2b completed local point/spot and per-cascade directional dependencies,
+opacity-aware upload attribution and consistent scheduling. Finer spatial work
+remains. [Ownership decision](streamed-rendering-r2.md);
 [runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies).
 
 Retain camera-focused cascades/local-light budgets. Track changed bounds/revisions; dirty intersecting caster volumes only, including removal/streamed activation.
@@ -871,7 +871,8 @@ This workflow does not independently authorize tests, delegation or commits.
 
 | Step | Commit | Change | Design or canonical contract |
 | --- | --- | --- | --- |
-| R2a | This batch | Local shadow dependencies, stable membership reuse and opacity-aware uploads | [Runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies) |
+| R2a | `71a9375` | Local shadow dependencies, stable membership reuse and opacity-aware uploads | [Runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies) |
+| R2b | This batch | Per-cascade directional dependencies with conservative ray membership | [Runtime contract](../renderer/runtime.md#directional-shadow-cache-dependencies) |
 | S1a | `e3f11cf` | Hidden residency and readiness tickets | [Design](streamed-rendering-s1a.md) |
 | S1b | `a539257` | Global content budgets, ordering and atlas backpressure | [Design](streamed-rendering-s1b.md) |
 | S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
@@ -3688,5 +3689,61 @@ CPU-only idle `UpdateLights` plus `BuildShadowUpdates`, eight spot lights,
 2.849 to 213.169 microseconds. Both retain 960 B and nine allocations per call.
 Stable membership reuse reduced the initial 1,000-caster candidate from 843.498
 microseconds. These single-run diagnostics expose added CPU cost, not net frame
-performance. Dependency scans, periodic cadence and directional global
-invalidation remain.
+performance. At R2a delivery, dependency scans, periodic cadence and directional
+global invalidation remained; R2b replaces directional invalidation below.
+
+### R2b: Directional shadow dependency invalidation
+
+The GPU manager now invalidates each directional cascade from its selected caster
+and successful upload dependencies. Local-light behavior, periodic cadence,
+forced camera refresh, cached map/transform pairing and shader layouts are
+preserved. Editor, actiongame, spacegame, spacesim and the voxel demo consume the
+renderer; their builds passed. Contract: [directional shadow cache dependencies](../renderer/runtime.md#directional-shadow-cache-dependencies).
+
+Verification from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu -run '^TestR2[ab]' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/gpu -run '^TestR2[ab]' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu ./voxelrt/rt/core ./voxelrt/rt/app
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2b-native docs/roadmaps/diagnostics/r2b_shadow.go
+/tmp/gekko-r2b-native
+env GOCACHE=/tmp/gekko3d-gocache go run docs/roadmaps/diagnostics/r2b_shadow_cpu.go
+git diff --check
+```
+
+Consumer builds, each from its module directory:
+
+```sh
+# ../gekko-editor
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2b-editor .
+# ../actiongame
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2b-actiongame .
+# ../spacegame_go
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2b-spacegame .
+# ../spacesim
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2b-spacesim .
+# ../examples/testing-vox
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2b-testing-vox .
+```
+
+The retained native probe uses GLFW/WebGPU with fixed cadence time to isolate
+invalidation. An unrelated resident upload skipped both 1024² cascade updates;
+a far-only carve and opacity upload each refreshed only the second cascade.
+The first map remained byte-identical; both cached maps matched forced rebuilds.
+Readback images are written under `/tmp/gekko-r2b-native-*.png`. The probe provisions
+update-buffer capacity before dispatch to isolate the existing cold-start issue
+below. It does not establish full-frame visual parity or an FPS gain.
+
+The CPU probe holds cadence time fixed and measures idle `UpdateLights` plus
+`BuildShadowUpdates` with two directional cascades, `GOMAXPROCS=1`. Single runs:
+32 selected casters, 1.829 to 8.004 µs; 1,000 casters, 1.904 to 190.521 µs.
+Allocations remain 240 B / 3 allocations per operation. Stable membership avoids
+repeated intersection work but exact scalar snapshots still add CPU and retained
+memory. First-cascade periodic work and camera-motion refresh remain.
+
+Separate existing issue discovered by native readback: `DispatchShadowPass`
+grows `ShadowUpdatesBuf`, then `CreateShadowBindGroups` writes a zero header over
+the first queued update. A cold directional update can therefore render through
+the wrong projection. Provisioning sufficient capacity before dispatch restores
+byte parity. Production fix and a dedicated regression remain a separate step.

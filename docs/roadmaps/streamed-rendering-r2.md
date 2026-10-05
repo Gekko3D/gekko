@@ -1,4 +1,4 @@
-# R2: Local shadow dependency invalidation
+# R2: Shadow dependency invalidation
 
 ## R2a ownership decision
 
@@ -25,8 +25,23 @@ broader producer/publication and retention decisions. Exact snapshots are the
 chosen boundary; no new ECS extraction architecture or total-memory ceiling is
 introduced. Local snapshots still add CPU and retained-memory cost.
 
-Directional volume invalidation, face-specific point dependencies, clipmap
-scrolling, dirty texels and removal of periodic cadence remain separate steps.
+Face-specific point dependencies, clipmap scrolling, dirty texels and removal of
+periodic cadence remain separate steps.
 Automated scheduling checks alone do not prove visual parity or net frame gains.
 Native shadow readback and a CPU diagnostic are retained in the
 [delivery record](streamed-rendering-content-optimization.md#r2a-local-shadow-dependency-invalidation).
+
+## R2b ownership decision
+
+Directional dependencies extend the same GPU-manager-owned snapshots per cascade.
+The projection, inverse projection, cascade parameters, effective resolution and
+emitter/owner metadata define each layer's inputs. Dependencies use current
+selected casters and the same allocation-owned upload epochs as local shadows.
+
+Membership must follow the shader's actual orthographic rays. Those rays begin
+at the inverse projection's near plane and continue downstream without a far
+plane cap. Finite directional selection volumes cannot safely bound dependencies
+when the selected scene also contains downstream casters. Unsupported or invalid
+projection/bounds inputs must retain conservative membership. Periodic cadence,
+forced camera refresh, scene caster selection and cached map/transform publication
+keep their existing owners. No shader traversal or ECS changes are required.
