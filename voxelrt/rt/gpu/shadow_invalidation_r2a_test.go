@@ -180,7 +180,7 @@ func TestR2aCasterGroupSelectionChangesDependency(t *testing.T) {
 	r2aAssert(t, m, scene, camera, r2aWarmFrame+1, []int{0})
 }
 
-func TestR2aUnrelatedUploadPreservesCadence(t *testing.T) {
+func TestR2aUnrelatedUploadPreservesCachedShadow(t *testing.T) {
 	m, scene, camera := r2aFixture(t, core.LightTypeSpot)
 	scene.Objects[0].XBrickMap.DirtyBricks[[6]int{}] = true
 	scheduleRun(t, m, scene)
@@ -191,13 +191,13 @@ func TestR2aUnrelatedUploadPreservesCadence(t *testing.T) {
 	if cadence < 2 {
 		t.Fatal("fixture must give unaffected light a delayed cadence")
 	}
-	for _, frame := range []uint64{r2aWarmFrame + uint64(cadence) - 1, r2aWarmFrame + uint64(cadence)} {
+	for _, frame := range []uint64{r2aWarmFrame + uint64(cadence) - 1, r2aWarmFrame + uint64(cadence), r2aWarmFrame + uint64(cadence)*1000} {
 		found := false
 		for _, update := range m.BuildShadowUpdates(scene, camera, frame, false) {
 			found = found || update.LightIndex == 1
 		}
-		if want := frame == r2aWarmFrame+uint64(cadence); found != want {
-			t.Errorf("unaffected light scheduled at frame %d=%v, want %v", frame, found, want)
+		if found {
+			t.Errorf("unaffected cached light scheduled at frame %d", frame)
 		}
 	}
 }

@@ -8,9 +8,8 @@ import (
 )
 
 type shadowCandidate struct {
-	Update      core.ShadowUpdate
-	Distance    float32
-	Invalidated bool
+	Update   core.ShadowUpdate
+	Distance float32
 }
 
 type pointShadowFaceCandidate struct {
@@ -46,6 +45,8 @@ func (m *GpuBufferManager) shadowNeedsRefresh(layer ShadowLayerParams, shadowRev
 		if !m.localShadowLayerValid(layer, state) {
 			return true, true
 		}
+		// Recorded local dependencies define map validity; age adds no work.
+		return false, false
 	} else if !m.directionalShadowLayerValid(layer, state) {
 		return true, true
 	}
@@ -162,8 +163,7 @@ func (m *GpuBufferManager) BuildShadowUpdates(scene *core.Scene, camera *core.Ca
 	if camera != nil {
 		camPos = camera.Position
 	}
-	invalidatedByTier := [shadowTierCount][]shadowCandidate{}
-	dueByTier := [shadowTierCount][]shadowCandidate{}
+	dirtyByTier := [shadowTierCount][]shadowCandidate{}
 	for lightIndex, light := range scene.Lights {
 		lightType := uint32(light.Params[2])
 		if lightType != core.LightTypeSpot && lightType != core.LightTypePoint {
@@ -179,17 +179,15 @@ func (m *GpuBufferManager) BuildShadowUpdates(scene *core.Scene, camera *core.Ca
 		}
 		tier := m.ShadowLayerParams[baseLayer].Tier
 		invalidated := false
-		cadenceDue := false
 		for layerOffset := uint32(0); layerOffset < layerCount; layerOffset++ {
 			layer := baseLayer + layerOffset
 			if int(layer) >= len(m.ShadowLayerParams) {
 				continue
 			}
-			layerInvalidated, layerCadenceDue := m.shadowNeedsRefresh(m.ShadowLayerParams[layer], shadowRevision, frameIndex)
+			layerInvalidated, _ := m.shadowNeedsRefresh(m.ShadowLayerParams[layer], shadowRevision, frameIndex)
 			invalidated = invalidated || layerInvalidated
-			cadenceDue = cadenceDue || layerCadenceDue
 		}
-		if !invalidated && !cadenceDue {
+		if !invalidated {
 			continue
 		}
 		candidate := shadowCandidate{
@@ -197,25 +195,17 @@ func (m *GpuBufferManager) BuildShadowUpdates(scene *core.Scene, camera *core.Ca
 				LightIndex: uint32(lightIndex),
 				Tier:       tier,
 			},
-			Distance:    spotLightDistance(light, camPos),
-			Invalidated: invalidated,
+			Distance: spotLightDistance(light, camPos),
 		}
-		if invalidated {
-			invalidatedByTier[tier] = append(invalidatedByTier[tier], candidate)
-		} else if cadenceDue {
-			dueByTier[tier] = append(dueByTier[tier], candidate)
-		}
+		dirtyByTier[tier] = append(dirtyByTier[tier], candidate)
 	}
 
 	for tier := uint32(0); tier < shadowTierCount; tier++ {
-		sort.Slice(invalidatedByTier[tier], func(i, j int) bool {
-			return invalidatedByTier[tier][i].Distance < invalidatedByTier[tier][j].Distance
-		})
-		sort.Slice(dueByTier[tier], func(i, j int) bool {
-			return dueByTier[tier][i].Distance < dueByTier[tier][j].Distance
+		sort.Slice(dirtyByTier[tier], func(i, j int) bool {
+			return dirtyByTier[tier][i].Distance < dirtyByTier[tier][j].Distance
 		})
 		budget := shadowTierBudget(tier)
-		for _, candidate := range invalidatedByTier[tier] {
+		for _, candidate := range dirtyByTier[tier] {
 			if budget == 0 {
 				break
 			}
@@ -223,21 +213,6 @@ func (m *GpuBufferManager) BuildShadowUpdates(scene *core.Scene, camera *core.Ca
 			updates = append(updates, localLightShadowUpdates(light, m.ShadowLayerParams, m.shadowCacheStates)...)
 			budget--
 		}
-		if budget == 0 || len(dueByTier[tier]) == 0 {
-			continue
-		}
-		offset := 0
-		if len(dueByTier[tier]) > 0 {
-			offset = m.shadowTierOffsets[tier] % len(dueByTier[tier])
-		}
-		selected := 0
-		for selected < budget && selected < len(dueByTier[tier]) {
-			idx := (offset + selected) % len(dueByTier[tier])
-			light := scene.Lights[dueByTier[tier][idx].Update.LightIndex]
-			updates = append(updates, localLightShadowUpdates(light, m.ShadowLayerParams, m.shadowCacheStates)...)
-			selected++
-		}
-		m.shadowTierOffsets[tier] = offset + selected
 	}
 
 	return updates

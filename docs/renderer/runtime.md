@@ -671,8 +671,14 @@ voxel upload and lookup maintenance. Scheduling uses the same dependency
 revision. `BuildShadowUpdates` and `RecordShadowUpdates` retain their synchronous
 render-thread contract. Only recorded updates acknowledge dependencies. A point
 light remains disabled until all six faces acknowledge current content; unrelated
-uploads do not restart partial face progress. Cadence, tier budgets and rotation
-remain unchanged. Directional cascades use the per-layer dependencies below.
+uploads do not restart partial face progress. Valid point/spot layers remain
+cached regardless of age: local `CadenceFrames` metadata does not trigger rebuilds.
+Initial and invalidated lights retain the existing per-tier light budgets, nearest
+light priority and point-face budgets/rotation. Pending work remains invalid until
+recorded; a second dependency change during partial point refresh requires all six
+faces of the new generation. Once current work completes, local dispatch stops
+until inputs change. This does not redesign priority among continuously dirty
+lights. Directional cascades use the per-layer dependencies and cadence below.
 See [R2 ownership decision](../roadmaps/streamed-rendering-r2.md).
 
 ### Directional shadow cache dependencies
@@ -720,7 +726,7 @@ the resource. Existing storage and bind-group retirement rules remain in force.
 
 This adds one transient packet allocation per nonempty supported call and one
 copy command per bucket. Shader bindings, 24-byte records, resolution-specific
-work sizes, scheduling, cadence and cached map/transform pairing are unchanged.
+work sizes and cached map/transform pairing are unchanged by record publication.
 
 ### Transparency / WBOIT
 

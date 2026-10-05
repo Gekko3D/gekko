@@ -259,7 +259,6 @@ type GpuBufferManager struct {
 	ShadowLayerParams             []ShadowLayerParams
 	shadowCacheStates             []shadowCacheState
 	shadowCachedCascades          []core.DirectionalShadowCascade
-	shadowTierOffsets             [shadowTierCount]int
 	MaterialBufferGeneration      uint64
 	VoxelUploadRevision           uint64
 	localShadowDependencies       []localShadowDependency

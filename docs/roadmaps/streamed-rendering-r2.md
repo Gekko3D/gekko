@@ -26,7 +26,8 @@ chosen boundary; no new ECS extraction architecture or total-memory ceiling is
 introduced. Local snapshots still add CPU and retained-memory cost.
 
 Face-specific point dependencies, clipmap scrolling, dirty texels and removal of
-periodic cadence remain separate steps.
+directional periodic cadence remain separate steps. R2e removes periodic local
+refresh after dependency-driven reuse is established.
 Automated scheduling checks alone do not prove visual parity or net frame gains.
 Native shadow readback and a CPU diagnostic are retained in the
 [delivery record](streamed-rendering-content-optimization.md#r2a-local-shadow-dependency-invalidation).
@@ -62,3 +63,20 @@ calls. Shader base-index or dynamic-offset designs add a broader layout contract
 ordered copies fit the existing resource manager. Native parity is verified by the R2d diagnostic; recording cost remains comparable
 in the measured fixture. Transient packet allocation is a tradeoff; GPU timing and
 full gameplay visual checks remain unverified.
+
+
+## R2e ownership decision
+
+The GPU manager schedules local maps from dependency validity, not age. Once all
+current point/spot inputs are acknowledged, periodic work cannot improve the map.
+Local tier budgets and point-face rotation still bound dirty and initial work;
+only recorded updates acknowledge dependencies. Unknown uploads retain the
+conservative fallback. Directional cadence and forced camera refresh stay intact.
+
+Keeping periodic local refresh spends GPU work after the same inputs have already
+been rendered. Removing directional cadence together would broaden the change;
+spatial change queues require a separate publication contract. Dependency-driven
+local reuse is the next step within the existing ownership boundary. Continuous
+dirty-light priority is unchanged; this step does not redesign fairness or caster
+selection. Scheduler tests and native cached-map parity validate the change; full
+application frame timing requires separate measurement.
