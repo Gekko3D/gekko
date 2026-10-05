@@ -126,6 +126,8 @@ Keep animated palettes/overrides private or copy shared block on first mutation.
 
 Owners: material allocation in `manager_voxel.go`, bridge material sync, `AssetServer`, compiled asset tables.
 
+Next selected area after R2a–R2m. [P4 scope and ownership alternatives](streamed-rendering-p4.md) record the immutable-binding prerequisite and integrated sharing boundary; implementation awaits that boundary decision.
+
 ### P5. Build immutable upload packets on workers
 
 Replace RLE/JSON voxel structs plus `SetVoxel` reconstruction with direct brick decode. Prepare occupancy, normals, tight bounds and uploads off main thread. Importers/terrain generators use bulk builders too.
@@ -817,6 +819,25 @@ Retain camera-focused cascades/local-light budgets. Track changed bounds/revisio
 Prevent `VoxelUploadRevision` invalidating unrelated lights. Retain cached cascade transforms until map rebuild. Later consider scrolling clipmaps/dirty texels. Per-pixel sun rays need separate visual/cost review.
 
 Acceptance: edits update affected shadows, unrelated streaming preserves cached shadows, and delayed layers retain coherent transforms.
+
+Current milestone: R2a–R2m cover scoped invalidation, dependency-driven reuse and
+native cached/fresh-map parity. Further R2 implementation is deferred while GPU
+material sharing (P4) is scoped. R2 remains partial; remaining work is:
+
+- Measure CPU preparation, GPU shadow work and frame time in representative
+  gameplay, including camera movement, streaming and edits; native parity and
+  isolated CPU diagnostics do not establish gameplay FPS gains.
+- Reduce full live scalar capture only after defining mutation/publication
+  ownership compatible with public in-place edits. Producer versions or change
+  journals must not silently miss legacy mutations.
+- Spatially accelerate full membership scans for moving lights/cascades while
+  preserving old/new footprint coverage, selected ordering, invalid-input
+  fallback and unbounded directional rays.
+- Treat scrolling directional maps/dirty texels as a separate architectural
+  milestone, with retained map/projection coherence, safe publication and native
+  visual/GPU-cost review. Per-pixel sun rays remain a separate experiment.
+
+These are follow-ups, not identified defects in the completed cache contract.
 
 ### R3. Conservative coarse beam prepass
 
