@@ -96,6 +96,8 @@ func TestC3h10PendingSharedBudgetDedupeAndReadiness(t *testing.T) {
 			t.Fatal("pending geometry did not use actual full target and best owner", w)
 		}
 	}
+	// Simulate UpdateScene publishing the newly successful full-sector headers.
+	m.lastSectorGridTopologyRevision = m.sectorTopologyRevision
 	if ready, s, b := m.PendingFullVoxelObjectReady(obj, full, full.Revision); !ready || s != 0 || b != 0 {
 		t.Fatal("queued exact pending full target not ready", ready, s, b)
 	}
@@ -251,6 +253,17 @@ func TestC3h10PendingLookupPublicationIncludesFullWhileRecordsStayCoarse(t *test
 	}
 	m.prepareVoxelStructureDirtyState(scene)
 	data := buildDirectSectorLookupData(scene, m.SectorToInfo, m.Allocations, 9)
+	meta := m.Allocations[full].DirectLookup
+	for coordinate := range full.Sectors {
+		local := [3]uint32{uint32(int32(coordinate[0]) - meta.Origin[0]), uint32(int32(coordinate[1]) - meta.Origin[1]), uint32(int32(coordinate[2]) - meta.Origin[2])}
+		index := meta.TableBase - 9 + flattenDirectSectorLookupIndex(local, meta.Extent)
+		if binary.LittleEndian.Uint32(data[index*4:]) != DirectSectorLookupInvalid {
+			t.Fatal("unpublished pending header entered direct lookup")
+		}
+	}
+	// The fake executor models successful header writes before lookup publication.
+	scheduleRun(t, m, scene)
+	data = buildDirectSectorLookupData(scene, m.SectorToInfo, m.Allocations, 9)
 	for _, target := range []*volume.XBrickMap{coarse, full} {
 		meta := m.Allocations[target].DirectLookup
 		if meta.LookupMode == 0 || meta.TableBase < 9 {

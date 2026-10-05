@@ -95,6 +95,9 @@ func buildDirectSectorLookupForMap(xbm *volume.XBrickMap, sectorToInfo map[*volu
 		if !ok {
 			return meta, nil, false
 		}
+		if info.pending {
+			continue
+		}
 		local := [3]uint32{
 			uint32(int32(sKey[0]) - minCoord[0]),
 			uint32(int32(sKey[1]) - minCoord[1]),
@@ -962,6 +965,9 @@ func (m *GpuBufferManager) buildSectorGridData(scene *core.Scene) ([]byte, uint3
 				continue
 			}
 
+			if info.pending {
+				continue
+			}
 			h := hash(sx, sy, sz, baseIdx)
 			inserted := false
 			for i := 0; i < 128; i++ {

@@ -965,6 +965,31 @@ allocation headers retain conservative compatibility handling. The brick record
 layout, auxiliary word offsets, fitted normals and shader indexing are unchanged;
 packed sector brick ranges remain subsequent P2 work.
 
+### Sparse sector publication
+
+Manager-owned full-sector uploads select current occupied brick records plus
+explicit clears of previously committed records. Inactive holes need no write.
+The sector retains its fixed 64-record stride; only content traffic is sparse.
+Foreign/manual allocation snapshots use the conservative dense upload path.
+
+Upload service captures sector membership before execution. Selected records,
+payloads and auxiliary bytes queue before that captured sector header. A topology
+edit during execution remains dirty for a later unit; it cannot expose a skipped
+record through a newer header mask.
+A newly assigned sector slot stays absent from hash/direct lookups until its
+first complete header queues successfully. Reused slots can retain old physical
+bytes while deferred; those bytes remain unreachable. First publication changes
+the lookup revision, so cached lookup buffers rebuild. Existing published sectors
+remain readable while replacement content is deferred.
+
+Upload service rechecks the full-sector record set and byte cost immediately
+before execution. Late tracked demand cannot skip a new record or exceed the remaining
+frame budget. Brick counts describe logical selected records; migration mirrors
+double the affected buffer bytes, not record counts. Header-only empty-sector
+work consumes no brick records but still consumes sector/header budgets. Dirty
+completion, shared ownership and auxiliary/payload capacity guards remain in the
+same service boundary. Packed allocation and rank indexing are subsequent work.
+
 ### Normal neighbor preparation
 
 After structural dirty preparation, each voxel update snapshots original dirty
@@ -1255,8 +1280,9 @@ pauses every content write.
 
 The byte cap covers material rows, sector/brick records, auxiliary
 occupancy/normals and mixed payloads, including duplicate buffer writes into an
-active staging generation. A full sector consumes 64 brick records,
-including empty clears. Allocation/migration copies, lookup rebuilding, scene
+active staging generation. Managed full sectors consume occupied records and
+required clears; unknown allocation snapshots retain the 64-record fallback.
+Allocation/migration copies, lookup rebuilding, scene
 buffers and CPU queue/normal-halo preparation remain outside this cap.
 
 Shared maps upload geometry once, using their best instance priority/order.

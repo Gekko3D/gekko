@@ -255,6 +255,7 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 				sSlot := m.SectorAlloc.Alloc()
 				bSlot := m.BrickAlloc.Alloc()
 				info = SectorGpuInfo{
+					pending:         true,
 					SlotIndex:       sSlot,
 					BrickTableIndex: bSlot * 64,
 				}
@@ -580,17 +581,17 @@ func (m *GpuBufferManager) recordVoxelUploadStats(mode brickUploadMode) {
 	}
 }
 
-func (m *GpuBufferManager) writeSectorRecord(sector *volume.Sector, info SectorGpuInfo) {
+func (m *GpuBufferManager) writeSectorRecord(coords [3]int, mask uint64, info SectorGpuInfo) {
 	sData := make([]byte, 32)
-	ox, oy, oz := int32(sector.Coords[0]*32), int32(sector.Coords[1]*32), int32(sector.Coords[2]*32)
+	ox, oy, oz := int32(coords[0]*32), int32(coords[1]*32), int32(coords[2]*32)
 	binary.LittleEndian.PutUint32(sData[0:4], uint32(ox))
 	binary.LittleEndian.PutUint32(sData[4:8], uint32(oy))
 	binary.LittleEndian.PutUint32(sData[8:12], uint32(oz))
 	binary.LittleEndian.PutUint32(sData[12:16], 0) // padding
 
 	binary.LittleEndian.PutUint32(sData[16:20], info.BrickTableIndex)
-	binary.LittleEndian.PutUint32(sData[20:24], uint32(sector.BrickMask64))
-	binary.LittleEndian.PutUint32(sData[24:28], uint32(sector.BrickMask64>>32))
+	binary.LittleEndian.PutUint32(sData[20:24], uint32(mask))
+	binary.LittleEndian.PutUint32(sData[24:28], uint32(mask>>32))
 	// 28:32 padding
 
 	mustQueueVoxelWrite(m.writeVoxelBuffer(m.SectorTableBuf, uint64(info.SlotIndex)*32, sData))

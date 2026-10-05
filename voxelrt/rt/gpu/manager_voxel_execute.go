@@ -21,6 +21,9 @@ func (m *GpuBufferManager) executeVoxelUpload(context func() voxelNormalBakeCont
 	m.markRetainedVoxelMapAccountingDirty(xbm)
 	sector := xbm.Sectors[key]
 	info := m.SectorToInfo[sector]
+	if work.sectorSnapshot != nil {
+		sector, info = work.sectorSnapshot.sector, work.sectorSnapshot.info
+	}
 	pointers := m.Allocations[xbm].Bricks[key]
 	payload, auxiliary := m.voxelUploadReleases(work)
 	for brick := range payload {
@@ -29,17 +32,24 @@ func (m *GpuBufferManager) executeVoxelUpload(context func() voxelNormalBakeCont
 	for brick := range auxiliary {
 		m.releaseVoxelAuxSlot(brick)
 	}
-	if work.kind == voxelUploadSector {
-		m.writeSectorRecord(sector, info)
-	}
 	start, end := work.brickRange()
 	for i := start; i < end; i++ {
-		brick := sector.GetBrick(i%4, (i/4)%4, i/16)
+		if work.kind == voxelUploadSector && work.sparseRecordSet && work.recordMask&(uint64(1)<<i) == 0 {
+			continue
+		}
+		brick := work.desiredBrick(sector, i)
 		pointers[i] = brick
 		if brick == nil {
 			mustQueueVoxelWrite(m.writeVoxelBuffer(m.BrickTableBuf, uint64(info.BrickTableIndex+uint32(i))*BrickRecordSize, make([]byte, BrickRecordSize)))
 		} else {
 			m.uploadBrick(context, work.object, xbm, brick, info.BrickTableIndex+uint32(i), brickOriginForSectorIndex(key, i))
+		}
+	}
+	if work.kind == voxelUploadSector {
+		if work.sectorSnapshot != nil {
+			m.writeSectorRecord(work.sectorSnapshot.coords, work.sectorSnapshot.mask, info)
+		} else {
+			m.writeSectorRecord(sector.Coords, sector.BrickMask64, info)
 		}
 	}
 	return true

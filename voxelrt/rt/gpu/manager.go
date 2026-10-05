@@ -633,6 +633,8 @@ type MaterialGpuAllocation struct {
 }
 
 type SectorGpuInfo struct {
+	// pending hides a newly managed slot until its first complete header is queued.
+	pending         bool
 	SlotIndex       uint32
 	BrickTableIndex uint32 // Index into global BrickTableBuf (64 slots per sector)
 }

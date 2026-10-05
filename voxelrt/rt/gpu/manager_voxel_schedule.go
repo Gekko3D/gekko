@@ -2,6 +2,7 @@ package gpu
 
 import (
 	"bytes"
+	"math/bits"
 	"sort"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
@@ -39,6 +40,9 @@ const (
 )
 
 type voxelUploadWork struct {
+	sectorSnapshot     *voxelSectorUploadSnapshot
+	recordMask         uint64
+	sparseRecordSet    bool
 	material           *MaterialGpuAllocation
 	materialBlock      *materialGPUBlock
 	materialData       []byte
@@ -272,14 +276,8 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 				delete(xbm.DirtySectors, key)
 				continue
 			}
-			bytes := uint64(32)
-			if m.voxelBufferMirrored(0) {
-				bytes *= 2
-			}
-			for i := 0; i < 64; i++ {
-				bytes += m.voxelBrickUploadBytes(sector.GetBrick(i%4, (i/4)%4, i/16))
-			}
-			queue = append(queue, voxelUploadWork{kind: voxelUploadSector, object: obj, target: xbm, targetRevision: xbm.Revision, pendingGeneration: target.pendingGeneration, sectorKey: key, bytes: bytes, sectors: 1, bricks: 64})
+			work := voxelUploadWork{kind: voxelUploadSector, object: obj, target: xbm, targetRevision: xbm.Revision, pendingGeneration: target.pendingGeneration, sectorKey: key, sectors: 1}
+			queue = append(queue, m.qualifySectorUpload(work))
 		}
 		for key, dirty := range xbm.DirtyBricks {
 			sKey := [3]int{key[0], key[1], key[2]}
@@ -354,15 +352,34 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 		if !w.targetCurrent() || (w.kind == voxelUploadMaterial && !m.materialWorkCurrent(w)) {
 			continue
 		}
+		if w.kind != voxelUploadMaterial {
+			key := w.sectorCoordinate()
+			sector := w.targetMap().Sectors[key]
+			allocation := m.Allocations[w.targetMap()]
+			if sector == nil || allocation == nil || allocation.Sectors[key] != sector || allocation.Bricks[key] == nil {
+				continue
+			}
+			if _, ok := m.SectorToInfo[sector]; !ok {
+				continue
+			}
+		}
+		if w.kind == voxelUploadSector {
+			w = m.qualifySectorUpload(w)
+		}
 		if w.bytes > remaining.MaxBytes || w.sectors > remaining.MaxSectors || w.bricks > remaining.MaxBricks {
 			continue
 		}
 		if w.kind != voxelUploadMaterial && (!m.voxelUploadPayloadFits(w) || !m.voxelUploadAuxiliaryFits(w)) {
 			continue
 		}
+		if w.kind == voxelUploadSector {
+			w.sectorSnapshot = m.captureSectorUpload(w)
+		}
 		snapshot := m.captureVoxelUploadSnapshot(w)
 		geometry := m.Allocations[w.targetMap()]
 		material := m.MaterialAllocations[w.object]
+		sector := w.targetMap().Sectors[w.sectorCoordinate()]
+		sectorInfo, hasSectorInfo := m.SectorToInfo[sector]
 		var opacity materialShadowOpacity
 		if w.kind == voxelUploadMaterial {
 			if w.materialBlock != nil {
@@ -374,6 +391,14 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 		}
 		if execute == nil || !execute(w) {
 			continue
+		}
+		// First publication belongs to the exact captured physical allocation.
+		if w.kind == voxelUploadSector && hasSectorInfo && sectorInfo.pending {
+			if current, ok := m.SectorToInfo[sector]; ok && current == sectorInfo {
+				current.pending = false
+				m.SectorToInfo[sector] = current
+				m.sectorTopologyRevision++
+			}
 		}
 		// Epochs describe written allocations, even when selection changed during execution.
 		if w.kind == voxelUploadMaterial {
@@ -412,7 +437,7 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 				}
 			}
 		} else {
-			if !w.targetCurrent() || (w.kind == voxelUploadMaterial && !m.materialWorkCurrent(w)) {
+			if !w.targetCurrent() || (w.kind == voxelUploadMaterial && !m.materialWorkCurrent(w)) || (w.sectorSnapshot != nil && !w.sectorSnapshot.current(w)) {
 				continue
 			}
 			xbm := w.targetMap()
@@ -490,13 +515,13 @@ func (m *GpuBufferManager) voxelUploadReleases(w voxelUploadWork) (payload, auxi
 	pointers := m.Allocations[w.targetMap()].Bricks[key]
 	targets := make(map[*volume.Brick]bool)
 	for i := 0; i < 64; i++ {
-		if b := sector.GetBrick(i%4, (i/4)%4, i/16); b != nil {
+		if b := w.desiredBrick(sector, i); b != nil {
 			targets[b] = true
 		}
 	}
 	start, end := w.brickRange()
 	for i := start; i < end; i++ {
-		current := sector.GetBrick(i%4, (i/4)%4, i/16)
+		current := w.desiredBrick(sector, i)
 		if pointers != nil {
 			if old := pointers[i]; old != nil && !targets[old] {
 				payload[old], auxiliary[old] = true, true
@@ -599,4 +624,34 @@ func (m *GpuBufferManager) voxelUploadPayloadFits(w voxelUploadWork) bool {
 		}
 	}
 	return uint64(len(needed)) <= available
+}
+
+// qualifySectorUpload rechecks the complete unit immediately before admission to
+// the frame budget. Raw edits need not have changed the map revision.
+func (m *GpuBufferManager) qualifySectorUpload(w voxelUploadWork) voxelUploadWork {
+	xbm := w.targetMap()
+	sector := xbm.Sectors[w.sectorKey]
+	allocation := m.Allocations[xbm]
+	w.recordMask = ^uint64(0)
+	w.sparseRecordSet = m.ownsVoxelAllocation(xbm, allocation) && allocation.Sectors[w.sectorKey] == sector && allocation.Bricks[w.sectorKey] != nil
+	if w.sparseRecordSet {
+		w.recordMask = 0
+		previous := allocation.Bricks[w.sectorKey]
+		for i := 0; i < 64; i++ {
+			if previous[i] != nil || sector.GetBrick(i%4, (i/4)%4, i/16) != nil {
+				w.recordMask |= uint64(1) << i
+			}
+		}
+	}
+	w.bytes = 32
+	if m.voxelBufferMirrored(0) {
+		w.bytes *= 2
+	}
+	for i := 0; i < 64; i++ {
+		if w.recordMask&(uint64(1)<<i) != 0 {
+			w.bytes += m.voxelBrickUploadBytes(sector.GetBrick(i%4, (i/4)%4, i/16))
+		}
+	}
+	w.bricks = uint32(bits.OnesCount64(w.recordMask))
+	return w
 }
