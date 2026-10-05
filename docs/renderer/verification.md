@@ -153,3 +153,23 @@ combination with the baseline. It requires nonempty transparency and shadow
 captures and a visible material-edit contribution. Particle probes verify
 collision inputs, not full simulated trajectories. These windowed runs require
 a desktop session; they do not establish full-frame FPS or interactive gameplay.
+
+## Scene BVH Native Regression
+
+The W3a diagnostic compares a late voxel hit in 300 overlapping instances
+(599 generated nodes) with a one-object control. It uses production G-buffer and
+transparent passes plus the intact shadow `traverse_scene` function in a
+single-ray compute wrapper. Actual uploaded topology, identical bounds and
+instance identities establish the late candidate's visit position. It checks
+opaque depth/material, transparent accumulation, shadow hit distance, all-miss
+scenes, nearest-hit behavior and zero sentinel roots after buffer growth.
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/bvh -count=1
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-w3a-native docs/roadmaps/diagnostics/w3a_scene_traversal.go
+/tmp/gekko-w3a-native -output /tmp/w3a-scene-traversal
+```
+
+The windowed run requires a desktop session. This establishes candidate coverage
+and output parity, not FPS, exhaustive camera coverage or removal of inner voxel
+traversal limits.

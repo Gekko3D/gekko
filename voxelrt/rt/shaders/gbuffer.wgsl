@@ -1200,14 +1200,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var stack_ptr = 0;
     
     let n_nodes = arrayLength(&nodes);
+    // TLASBuilder median splits bound DFS pending nodes to depth + 1 (<= 31).
+    // The empty scene is a zero root, even if this buffer retains stale rows.
     if (n_nodes > 0u) {
-        stack[stack_ptr] = 0;
-        stack_ptr += 1;
+        let root = nodes[0];
+        if (root.leaf_count > 0 || root.left > 0 || root.right > 0) {
+            stack[stack_ptr] = 0;
+            stack_ptr += 1;
+        }
     }
     
-    var iterations = 0;
-    while (stack_ptr > 0 && iterations < 512) { // Increased limit
-        iterations++;
+    while (stack_ptr > 0) {
         stack_ptr--;
         let node_idx = stack[stack_ptr];
         if (node_idx < 0 || u32(node_idx) >= n_nodes) { continue; }
@@ -1241,7 +1244,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     }
                 }
                 var hit_r = false; var t_r = hit_res.t;
-                if (node.right != -1 && stack_ptr < 64) {
+                if (node.right != -1) {
                     let child_r = nodes[node.right];
                     let t_vals = intersect_aabb(ray, child_r.aabb_min.xyz, child_r.aabb_max.xyz);
                     if (t_vals.x <= t_vals.y && t_vals.y > 0.0 && t_vals.x < hit_res.t) {
@@ -1250,16 +1253,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
                 if (hit_l && hit_r) {
                     if (t_l < t_r) {
-                        if (stack_ptr < 64) { stack[stack_ptr] = node.right; stack_ptr++; }
-                        if (stack_ptr < 64) { stack[stack_ptr] = node.left; stack_ptr++; }
+                        stack[stack_ptr] = node.right; stack_ptr++;
+                        stack[stack_ptr] = node.left; stack_ptr++;
                     } else {
-                        if (stack_ptr < 64) { stack[stack_ptr] = node.left; stack_ptr++; }
-                        if (stack_ptr < 64) { stack[stack_ptr] = node.right; stack_ptr++; }
+                        stack[stack_ptr] = node.left; stack_ptr++;
+                        stack[stack_ptr] = node.right; stack_ptr++;
                     }
                 } else if (hit_l) {
-                    if (stack_ptr < 64) { stack[stack_ptr] = node.left; stack_ptr++; }
+                    stack[stack_ptr] = node.left; stack_ptr++;
                 } else if (hit_r) {
-                    if (stack_ptr < 64) { stack[stack_ptr] = node.right; stack_ptr++; }
+                    stack[stack_ptr] = node.right; stack_ptr++;
                 }
             }
         }

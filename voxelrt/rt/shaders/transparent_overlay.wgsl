@@ -1278,11 +1278,16 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
   var stack: array<i32, 64>;
   var sp = 0;
   let n_nodes = arrayLength(&nodes);
-  if (n_nodes > 0u) { stack[sp] = 0; sp += 1; }
+  // TLASBuilder median splits bound DFS pending nodes to depth + 1 (<= 31).
+  // The empty scene is a zero root, even if this buffer retains stale rows.
+  if (n_nodes > 0u) {
+    let root = nodes[0];
+    if (root.leaf_count > 0 || root.left > 0 || root.right > 0) {
+      stack[sp] = 0; sp += 1;
+    }
+  }
 
-  var it = 0;
-  while (sp > 0 && it < 128) {
-    it += 1;
+  while (sp > 0) {
     sp -= 1;
     let idx = stack[sp];
     if (idx < 0 || u32(idx) >= n_nodes) { continue; }
@@ -1617,7 +1622,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
             }
         }
         var hit_r = false; var t_r = t_limit;
-        if (node.right != -1 && sp < 64) {
+        if (node.right != -1) {
             let child_r = nodes[node.right];
             let t_vals = intersect_aabb(ray, child_r.aabb_min.xyz, child_r.aabb_max.xyz);
             if (t_vals.x <= t_vals.y && t_vals.y > 0.0 && t_vals.x < t_limit) {
@@ -1626,16 +1631,16 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
         }
         if (hit_l && hit_r) {
             if (t_l < t_r) {
-                if (sp < 64) { stack[sp] = node.right; sp++; }
-                if (sp < 64) { stack[sp] = node.left; sp++; }
+                stack[sp] = node.right; sp++;
+                stack[sp] = node.left; sp++;
             } else {
-                if (sp < 64) { stack[sp] = node.left; sp++; }
-                if (sp < 64) { stack[sp] = node.right; sp++; }
+                stack[sp] = node.left; sp++;
+                stack[sp] = node.right; sp++;
             }
         } else if (hit_l) {
-            if (sp < 64) { stack[sp] = node.left; sp++; }
+            stack[sp] = node.left; sp++;
         } else if (hit_r) {
-            if (sp < 64) { stack[sp] = node.right; sp++; }
+            stack[sp] = node.right; sp++;
         }
       }
     }

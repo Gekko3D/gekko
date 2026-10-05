@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals, P3b native workload evaluation and P3c packed mixed materials are complete, with P3 remaining partial; other sections are proposals.
+Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals, P3b native workload evaluation and P3c packed mixed materials are complete, with P3 remaining partial; W3a scene BVH traversal is complete, with W3 remaining partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -745,7 +745,13 @@ Far heightfields/impostors optional; cannot cover POI interiors or replace edit/
 
 ### W3. Remove traversal truncation as a scaling failure
 
-CPU BVH uses median splits. G-buffer: 64-entry stack, 512-node cap. Balanced depth does not bound visits below 512.
+Status: partial. W3a completes generated scene BVH traversal in opaque, shadow
+and transparent passes, preserving near-first order, distance pruning and the
+empty zero sentinel. See [the runtime contract](../renderer/runtime.md#scene-bvh-traversal).
+Inner voxel/sector/tree64 progress and termination proofs remain.
+
+CPU BVH uses median splits. Balanced depth does not bound node visits below the
+former 512-node opaque/shadow or 128-node transparent caps.
 
 Prove generated-tree stack bounds; complete traversal within structural limits. Remove silent dropping at arbitrary caps/guards. Audit shadow/transparent/particle/CPU traversal. Broader leaves require contiguous shader leaf instance ranges.
 
@@ -943,7 +949,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | P2c | `d0e13a6` | Pack sector ranges with fenced reuse and shared publication | [Runtime contract](../renderer/runtime.md#packed-sector-brick-ranges) |
 | P3a | `b52551d` | Opt-in occupancy-ranked fitted normals with fenced packet reuse | [Runtime contract](../renderer/runtime.md#packed-fitted-normal-storage) |
 | P3b | `de9cc6e` | Measure sparse, dense and edited packed-normal traversal with native GPU queries | [Verification](../renderer/verification.md#packed-normal-workload-benchmark) |
-| P3c | This batch | Independently pack mixed-material bytes with fenced packet ownership and native parity | [Runtime contract](../renderer/runtime.md#packed-mixed-material-storage) |
+| P3c | `1acada7` | Independently pack mixed-material bytes with fenced packet ownership and native parity | [Runtime contract](../renderer/runtime.md#packed-mixed-material-storage) |
+| W3a | This batch | Complete generated scene BVH traversal without arbitrary visit limits | [Runtime contract](../renderer/runtime.md#scene-bvh-traversal) |
 | S1a | `e3f11cf` | Hidden residency and readiness tickets | [Design](streamed-rendering-s1a.md) |
 | S1b | `a539257` | Global content budgets, ordering and atlas backpressure | [Design](streamed-rendering-s1b.md) |
 | S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
@@ -4683,3 +4690,35 @@ Full-frame FPS, other adapters/camera angles, interactive editor/gameplay and
 full particle trajectories remain unverified. Native timing uses the current
 workspace WebGPU bindings. Density policy, broader scenes, additional pool
 pages and atlas removal remain evaluation/implementation work.
+
+### W3a: Complete generated scene BVH traversal
+
+Commit: this batch. Opaque, shadow and transparent scene walks finish their
+pending candidates, preserving ordering, distance pruning and empty roots.
+Native hits at visit 599 now match one-object controls; all-miss, nearest-hit
+and retained-capacity empty scenes pass. The [canonical contract](../renderer/runtime.md#scene-bvh-traversal)
+owns the stack proof and [verification guide](../renderer/verification.md#scene-bvh-native-regression)
+owns the diagnostic procedure.
+
+Verification passed from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/bvh ./voxelrt/rt/shaders ./voxelrt/rt/gpu ./voxelrt/rt/core -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-w3a-native docs/roadmaps/diagnostics/w3a_scene_traversal.go
+/tmp/gekko-w3a-native -output /tmp/w3a-scene-traversal-green
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p3c-after-w3a docs/roadmaps/diagnostics/p3c_packed_voxel_materials.go
+/tmp/gekko-p3c-after-w3a -mode dense -materials atlas -output /tmp/p3c-w3a-dense-atlas -compare /tmp/p3c-dense-atlas
+/tmp/gekko-p3c-after-w3a -mode packed -materials packed -output /tmp/p3c-w3a-packed-packed -compare /tmp/p3c-w3a-dense-atlas
+git diff --check
+```
+
+Both P3c comparisons matched all 81 canonical captures. Consumer builds passed
+with `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-w3a-editor .` from
+`../gekko-editor`, and `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-w3a-voxel-demo .`
+from `../examples/testing-vox`.
+
+W3 remains partial: inner sector/voxel/tree64 traversal limits need separate
+termination proofs. More complete traversal can increase work in formerly
+truncated scenes; FPS, other adapters and full interactive gameplay were not
+measured. CPU picking and particle candidate iteration remain unchanged.
