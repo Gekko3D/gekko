@@ -115,7 +115,11 @@ func validateTerrainHeightTileEntry(e TerrainChunkEntryDef) error {
 	return nil
 }
 
-func validateTerrainHeightTileManifest(d *TerrainChunkManifestDef) error {
+// ValidateTerrainHeightTileManifest validates an explicit tiled-source manifest.
+func ValidateTerrainHeightTileManifest(d *TerrainChunkManifestDef) error {
+	if d == nil || d.SchemaVersion != TerrainHeightTileManifestSchemaVersion {
+		return fmt.Errorf("terrain height tile manifest requires schema 3")
+	}
 	if strings.TrimSpace(d.TerrainID) == "" || strings.TrimSpace(d.SourceHash) == "" || d.ChunkSize < 1 || d.ChunkSize > 128 || !terrainFinite(d.VoxelResolution) || d.VoxelResolution <= 0 {
 		return fmt.Errorf("invalid terrain height tile manifest")
 	}
@@ -128,6 +132,30 @@ func validateTerrainHeightTileManifest(d *TerrainChunkManifestDef) error {
 			return fmt.Errorf("mismatched or duplicate terrain height tile entry")
 		}
 		seen[e.Coord] = true
+	}
+	return nil
+}
+
+// ValidateTerrainHeightTileReference checks a tile's identity, lattice and raw
+// payload against a manifest reference. Height offset and scale belong to the
+// tile metadata, while the reference hash covers its raw payload.
+func ValidateTerrainHeightTileReference(entry TerrainChunkEntryDef, tile *TerrainHeightTileDef) error {
+	if err := ValidateTerrainHeightTile(tile); err != nil {
+		return err
+	}
+	_, result := terrainHeightTilePayload(tile)
+	return validateTerrainHeightTileReference(entry, tile, result)
+}
+
+func validateTerrainHeightTileReference(entry TerrainChunkEntryDef, tile *TerrainHeightTileDef, result TerrainHeightTileSaveResult) error {
+	if err := validateTerrainHeightTileEntry(entry); err != nil {
+		return err
+	}
+	if err := ValidateTerrainHeightTile(tile); err != nil {
+		return err
+	}
+	if tile.TerrainID != entry.TerrainID || tile.SourceHash != entry.SourceHash || tile.Coord != entry.Coord || tile.WorldOrigin != entry.WorldOrigin || tile.SampleWidth != entry.ChunkSize || tile.SampleHeight != entry.ChunkSize || tile.SampleSpacing != entry.VoxelResolution || result.PayloadHash != entry.PayloadHash || result.PayloadSizeBytes != entry.PayloadSizeBytes {
+		return fmt.Errorf("terrain height tile reference mismatch")
 	}
 	return nil
 }

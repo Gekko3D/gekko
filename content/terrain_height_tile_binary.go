@@ -147,8 +147,8 @@ func LoadTerrainHeightTileEntry(entry TerrainChunkEntryDef, manifestPath string)
 	if err != nil {
 		return nil, err
 	}
-	if d.TerrainID != entry.TerrainID || d.SourceHash != entry.SourceHash || d.Coord != entry.Coord || d.WorldOrigin != entry.WorldOrigin || d.SampleWidth != entry.ChunkSize || d.SampleHeight != entry.ChunkSize || d.SampleSpacing != entry.VoxelResolution || result.PayloadHash != entry.PayloadHash || result.PayloadSizeBytes != entry.PayloadSizeBytes {
-		return nil, fmt.Errorf("terrain height tile reference mismatch")
+	if err := validateTerrainHeightTileReference(entry, d, result); err != nil {
+		return nil, err
 	}
 	return d, nil
 }

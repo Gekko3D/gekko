@@ -18,7 +18,7 @@ func SaveTerrainChunkManifest(path string, def *TerrainChunkManifestDef) error {
 		return fmt.Errorf("unsupported terrain chunk manifest schema version %d", def.SchemaVersion)
 	}
 	if def.SchemaVersion == TerrainHeightTileManifestSchemaVersion {
-		if err := validateTerrainHeightTileManifest(def); err != nil {
+		if err := ValidateTerrainHeightTileManifest(def); err != nil {
 			return err
 		}
 	}
@@ -49,7 +49,7 @@ func LoadTerrainChunkManifest(path string) (*TerrainChunkManifestDef, error) {
 		return nil, fmt.Errorf("unsupported terrain chunk manifest schema version %d", def.SchemaVersion)
 	}
 	if def.SchemaVersion == TerrainHeightTileManifestSchemaVersion {
-		if err := validateTerrainHeightTileManifest(&def); err != nil {
+		if err := ValidateTerrainHeightTileManifest(&def); err != nil {
 			return nil, err
 		}
 	}

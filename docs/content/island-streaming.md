@@ -311,6 +311,8 @@ W4c1 implements the source tile codec, legacy heightfield-to-tile bake and v3
 manifest tooling. The current runtime still rejects v3 until height collision
 and edit-patch ownership are ready. See the
 [implemented source contract](streaming-and-worlds.md#tiled-terrain-source-content-v3).
+W4c2 adds the [resident query foundation](streaming-and-worlds.md#resident-height-query-foundation);
+it does not activate or complete I13/I14.
 
 Terrain v3 adds one required payload kind,
 `height_u16_binary_v1`. Reuse the existing binary-chunk framing: 8-byte

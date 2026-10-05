@@ -132,6 +132,44 @@ whose centers all fall outside a small source extent. Source hashes retain the
 legacy source identity; entry dimensions, spacing and payload hashes identify
 the tiled representation.
 
+### Resident height query foundation
+
+`TerrainHeightField` owns decoded source tiles independently from voxel geometry.
+Construction copies validated v3 manifest references. `LoadTile` resolves a
+manifest-relative file; `PublishTile` validates the complete reference and copies
+height, validity and navigation arrays into private storage. Producers must not
+mutate input during publication. Failed publication preserves existing residency
+and generation. `MaxResidentTiles` defaults to 256; replacement is allowed at
+capacity, while new tiles require explicit removal of another resident tile.
+
+`SampleGroundXZ` interpolates physical heights on the global cell-centered
+lattice and returns an analytic bilinear normal. Signed floor division resolves
+neighbors across tile seams. Only corners contributing to height or its gradient
+are dependencies: at an exact sample center, the forward X/Z neighbors are needed
+for the normal, but the diagonal is not. Required masked corners never supply
+interpolated natural ground. No exterior extrapolation or missing-neighbor
+clamping occurs.
+
+Nonfinite coordinates or normalized coordinates with magnitude at least `2^52`
+return invalid before the float64 half-cell offset can lose precision. Platform
+integer and stencil bounds are checked separately before indexing.
+
+Queries distinguish invalid input, outside declared coverage, declared but
+nonresident data, masked ground and present ground. Required-corner failures use
+outside, then nonresident, then masked precedence. Non-present results have zero
+height/normal. `ProbeGroundXZ` retains that status while checking an inclusive
+vertical interval, so missing data cannot appear as a ready collision miss.
+
+Publication/removal and queries synchronize through the owner; each query sees
+one generation. Successful publication and resident removal advance generation.
+Immutable snapshots retain their original resident pointer map and generation
+across later replacement/removal. Snapshot holders own those retained lifetimes;
+the residency limit bounds the current owner, not caller-retained snapshots.
+
+This CPU query foundation does not install a physics or character-controller
+provider and does not enable v3 levels. Live height collision still requires
+readiness holds, terrain/POI replacement and edit-patch ownership handoffs.
+
 ## Imported Worlds
 
 Imported worlds are chunked voxel worlds, usually baked from VOX data.
