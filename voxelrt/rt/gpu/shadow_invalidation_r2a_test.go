@@ -102,6 +102,12 @@ func TestR2aCasterDependencies(t *testing.T) {
 				m, scene, camera := r2aFixture(t, kind)
 				obj := scene.Objects[0]
 				invalid := []int{0}
+				if kind == core.LightTypePoint && change != "source radius" && change != "emitter link" {
+					// Both placements are selected upstream. Point shader rays extend
+					// beyond light range: the remote light's signed X face also
+					// depends on this caster, even across the gap between lights.
+					invalid = []int{0, 1}
+				}
 				switch change {
 				case "insert":
 					scene.Objects = append(scene.Objects, r2aObject(3, 41))
@@ -313,10 +319,19 @@ func TestR2aPendingFullUploadDoesNotInvalidateDisplay(t *testing.T) {
 	r2aAssert(t, m, scene, camera, r2aWarmFrame+1, nil)
 }
 
-func TestR2aPointFacesTrackWholeDependencyGeneration(t *testing.T) {
-	m, scene, camera := r2aFixture(t, core.LightTypePoint)
-	obj := scene.Objects[0]
-	obj.ShadowGroupID++
+func TestR2aPointFacesTrackGlobalLightDependencyGeneration(t *testing.T) {
+	// Keep the upload resident but outside selected caster membership. Distance
+	// alone cannot make a selected point caster unrelated to unbounded rays.
+	objects := []*core.VoxelObject{r2aObject(1, 40), r2aObject(2, 100)}
+	objects[1].CastsShadows = false
+	m, _ := scheduleFixture(t, objects...)
+	scene := core.NewScene()
+	scene.Objects = objects
+	scene.Lights = []core.Light{r2aLight(core.LightTypePoint, 40), r2aLight(core.LightTypePoint, 100)}
+	camera := core.NewCameraState()
+	camera.Position = mgl32.Vec3{}
+	r2aWarm(t, m, scene, camera)
+	scene.Lights[0].ShadowMeta[3]++
 	r2aCommit(m, scene, camera)
 	updates := r2aAssert(t, m, scene, camera, r2aWarmFrame+1, []int{0})
 	m.RecordShadowUpdates(updates, r2aWarmFrame+1, scene.ShadowRevision())
@@ -347,12 +362,12 @@ func TestR2aPointFacesTrackWholeDependencyGeneration(t *testing.T) {
 	if len(seen) != core.PointShadowFaceCount || lightParamsWFromData(data, 0) != 1 {
 		t.Fatal("point light failed to finish current faces across unrelated upload")
 	}
-	// A second edit must discard acknowledgements from the previous generation.
-	obj.ShadowGroupID++
+	// A second global light edit must discard acknowledgements from the previous generation.
+	scene.Lights[0].ShadowMeta[3]++
 	r2aCommit(m, scene, camera)
 	updates = m.BuildShadowUpdates(scene, camera, 48, false)
 	m.RecordShadowUpdates(updates, 48, scene.ShadowRevision())
-	obj.EmitterLinkID++
+	scene.Lights[0].ShadowMeta[3]++
 	r2aCommit(m, scene, camera)
 	updates = m.BuildShadowUpdates(scene, camera, 49, false)
 	m.RecordShadowUpdates(updates, 49, scene.ShadowRevision())

@@ -11,7 +11,8 @@ layouts and ECS publication retain their existing ownership.
 Exact scalar snapshots fit the existing renderer's compatibility with public
 in-place mutations. Comparing current selected casters handles removals, movement
 and camera-dependent caster-group replacement without introducing producer event
-requirements. One generation per point light keeps six-face publication coherent.
+requirements. R2a used one generation per point light to keep six-face publication coherent;
+R2i narrows acknowledgement to independent current faces.
 Allocation-owned upload epochs follow existing geometry/material lifetimes;
 shadow-relevant opacity snapshots avoid invalidation on identical palette refresh.
 Stable volume membership reuse limits repeated intersection work while retaining
@@ -25,9 +26,9 @@ broader producer/publication and retention decisions. Exact snapshots are the
 chosen boundary; no new ECS extraction architecture or total-memory ceiling is
 introduced. Local snapshots still add CPU and retained-memory cost.
 
-Face-specific point dependencies, clipmap scrolling and dirty texels remain
-separate steps. R2e/R2f remove periodic rebuilds after dependency-driven reuse is
-established; R2g removes camera heuristics from ordinary scheduling.
+R2i adds face-specific point dependencies; clipmap scrolling and dirty texels
+remain separate steps. R2e/R2f remove periodic rebuilds after dependency-driven
+reuse is established; R2g removes camera heuristics from ordinary scheduling.
 Automated scheduling checks alone do not prove visual parity or net frame gains.
 Native shadow readback and a CPU diagnostic are retained in the
 [delivery record](streamed-rendering-content-optimization.md#r2a-local-shadow-dependency-invalidation).
@@ -138,3 +139,40 @@ contract with a bounded grid/coverage change; it is not a scrolling clipmap or
 partial-map update. Geometry coverage tests and native Render readbacks validate
 stable cells and crossings. Full gameplay appearance and GPU/FPS gains remain
 separate measurements.
+
+
+## R2i ownership decision
+
+The GPU manager owns independent point-face dependency generations. Point rays
+use six fixed world-axis cones, so a caster change need only invalidate faces
+whose rays can intersect its current or previous selected bounds. Conservative
+AABB plane separation includes seams, origin contact and numerical uncertainty.
+Unknown bounds or unsupported light/face inputs retain membership. Dependencies
+cover the full downstream cone: shader traversal is not capped by light range,
+and casters selected for another light can still appear in a point map. Source
+radius does not narrow membership. Scene caster selection retains its owner.
+
+Face membership includes the union of world cones and cones over float32
+render-relative bounds/light positions published to the GPU. Rebasing can move
+the published footprint through rounding, so origin changes recompute membership.
+They do not themselves change generations: identical selected inputs and members
+retain acknowledgements. The app rebases to camera position every update; forcing
+all point maps on origin changes would defeat existing camera-motion reuse.
+Invalid rebased inputs retain membership. This preserves world-input cache
+semantics, not bitwise fresh-map parity across arbitrary coordinate rebasing.
+
+Each face snapshots the existing live scalar caster/upload inputs and its light,
+face/layer assignment and effective resolution. Membership indices reuse stable
+bounds; removed layers release references. Shared caster capture remains once per
+preparation. Only recorded updates acknowledge a face. All six faces must be
+current before GPU light serialization enables the point shadow, but unaffected
+faces retain acknowledgements across local edits and partial refresh. Global light
+or unattributed upload changes still invalidate every face.
+
+Scheduling filters valid faces before applying existing tier face budgets and
+rotation. Per-tier light budgets and nearest-light priority remain unchanged.
+Whole-light generations repeat up to six maps for isolated edits; a spatial
+change index needs broader producer contracts. Independent exact snapshots fit
+the current live-input architecture without shader, GPU-layout or ECS changes.
+CPU scans and retained per-face snapshots add cost; native scheduling/readback
+parity proves avoided map work, while gameplay frame-time gains need measurement.

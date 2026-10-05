@@ -49,7 +49,7 @@ func spotLightDistance(light core.Light, camPos mgl32.Vec3) float32 {
 	return lightPos.Sub(camPos).Len()
 }
 
-func localLightShadowUpdates(light core.Light, params []ShadowLayerParams, cacheStates []shadowCacheState) []core.ShadowUpdate {
+func (m *GpuBufferManager) localLightShadowUpdates(light core.Light, params []ShadowLayerParams, cacheStates []shadowCacheState) []core.ShadowUpdate {
 	updates := make([]core.ShadowUpdate, 0, light.ShadowMeta[1])
 	baseLayer := light.ShadowMeta[0]
 	lightType := uint32(light.Params[2])
@@ -61,6 +61,9 @@ func localLightShadowUpdates(light core.Light, params []ShadowLayerParams, cache
 				continue
 			}
 			layerParams := params[layer]
+			if !m.shadowNeedsRefresh(layerParams) {
+				continue
+			}
 			faceCandidate := pointShadowFaceCandidate{
 				Update: core.ShadowUpdate{
 					LightIndex:   layerParams.LightIndex,
@@ -196,7 +199,7 @@ func (m *GpuBufferManager) BuildShadowUpdates(scene *core.Scene, camera *core.Ca
 				break
 			}
 			light := scene.Lights[candidate.Update.LightIndex]
-			updates = append(updates, localLightShadowUpdates(light, m.ShadowLayerParams, m.shadowCacheStates)...)
+			updates = append(updates, m.localLightShadowUpdates(light, m.ShadowLayerParams, m.shadowCacheStates)...)
 			budget--
 		}
 	}
@@ -217,7 +220,9 @@ func (m *GpuBufferManager) RecordShadowUpdates(updates []core.ShadowUpdate, fram
 		state.LastSceneRevision = shadowRevision
 		state.LastVoxelUploadRevision = m.VoxelUploadRevision
 		params := m.ShadowLayerParams[layer]
-		if params.Kind != core.ShadowUpdateKindDirectional && int(params.LightIndex) < len(m.localShadowDependencies) {
+		if params.Kind == core.ShadowUpdateKindPoint && int(layer) < len(m.pointShadowDependencies) {
+			state.LastLocalGeneration = m.pointShadowDependencies[layer].generation
+		} else if params.Kind != core.ShadowUpdateKindDirectional && int(params.LightIndex) < len(m.localShadowDependencies) {
 			state.LastLocalGeneration = m.localShadowDependencies[params.LightIndex].generation
 		} else if params.Kind == core.ShadowUpdateKindDirectional && int(layer) < len(m.directionalShadowDependencies) {
 			state.LastLocalGeneration = m.directionalShadowDependencies[layer].generation

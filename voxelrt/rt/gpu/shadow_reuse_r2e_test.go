@@ -132,7 +132,7 @@ func TestR2ePartialPointFacesStayDirtyUntilSixRecordedThenIdle(t *testing.T) {
 		t.Run(tier.name, func(t *testing.T) {
 			m, s, c := r2eFixture(t, core.LightTypePoint, tier.x, 1)
 			r2eWarm(t, m, s, c)
-			s.Objects[0].XBrickMap.Revision++
+			m.VoxelUploadRevision++ // Unknown uploads invalidate the entire cubemap.
 			r2aCommit(m, s, c)
 			seen := map[uint32]bool{}
 			for frame := uint64(1000); len(seen) < core.PointShadowFaceCount && frame < 1010; frame++ {
@@ -167,7 +167,7 @@ func TestR2eBuildWithoutRecordCannotAcknowledgeDirtyWork(t *testing.T) {
 		t.Run(fmt.Sprint(kind), func(t *testing.T) {
 			m, s, c := r2eFixture(t, kind, 10, 1)
 			r2eWarm(t, m, s, c)
-			s.Objects[0].XBrickMap.Revision++
+			m.VoxelUploadRevision++ // Unknown uploads invalidate the entire cubemap.
 			r2aCommit(m, s, c)
 			first := m.BuildShadowUpdates(s, c, 1000, false)
 			second := m.BuildShadowUpdates(s, c, 1000, false)
@@ -281,7 +281,7 @@ func TestR2eSecondEditDuringPartialPointRefreshRequiresNewSixFaces(t *testing.T)
 		t.Run(tier.name, func(t *testing.T) {
 			m, s, c := r2eFixture(t, core.LightTypePoint, tier.x, 1)
 			r2eWarm(t, m, s, c)
-			s.Objects[0].XBrickMap.Revision++
+			m.VoxelUploadRevision++ // Unknown uploads invalidate the entire cubemap.
 			r2aCommit(m, s, c)
 			first := m.BuildShadowUpdates(s, c, 1000, false)
 			if len(first) != tier.faces {
@@ -291,7 +291,7 @@ func TestR2eSecondEditDuringPartialPointRefreshRequiresNewSixFaces(t *testing.T)
 			if r2eReady(m, s, 0) {
 				t.Fatal("partial first generation became ready")
 			}
-			s.Objects[0].EmitterLinkID++
+			m.VoxelUploadRevision++ // A second global change invalidates all six again.
 			r2aCommit(m, s, c)
 			if r2eReady(m, s, 0) {
 				t.Fatal("second edit reused earlier generation acknowledgements")

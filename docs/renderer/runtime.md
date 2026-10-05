@@ -648,11 +648,25 @@ Point and spot layers use GPU-manager-owned local dependencies instead of global
 scene/upload revisions. Exact scalar snapshots include selected caster membership,
 render-map identity/revision, matrices, bounds, object metadata, allocation
 identity and successful content uploads. Source radius and emitter links are
-part of light identity. Existing conservative light volumes operate on the
-selected `Scene.ShadowObjects`, including off-screen and grouped casters.
+part of light identity. Spot dependencies use the existing conservative light
+volume. Point dependencies use independent face cones over selected
+`Scene.ShadowObjects`, including off-screen and grouped casters. Each face follows its fixed world-axis shader
+direction (+X, -X, +Y, -Y, +Z, -Z). Conservative AABB plane separation includes
+seams, origin contact and numerical uncertainty. Invalid bounds or unsupported
+light/face inputs retain casters. Point shader traversal is not capped by light
+range, so selected downstream casters remain dependencies even beyond that range.
+Source radius does not narrow membership; scene selection itself is unchanged.
+Point membership conservatively includes both world-space cones and cones over
+the float32 render-relative bounds/position published to the GPU. This covers
+rebasing roundoff without dropping world-space dependencies. Origin changes
+recompute membership; identical selected inputs/membership preserve current faces.
+Ordinary camera rebasing does not force point-map rebuilds. Invalid rebased inputs
+retain casters. This preserves the existing world-input cache contract; it does
+not promise bitwise fresh-map parity across arbitrary coordinate rebasing.
 
 Unchanged ordered caster identities/world bounds and light inputs reuse volume
-membership; other render inputs remain live comparisons. Removed casters and
+membership when the point coordinate origin is also unchanged; other render
+inputs remain live comparisons. Removed casters and
 lights release snapshot references. This adds scoped CPU snapshot storage,
 including approximately 1 KiB of opacity metadata per material allocation;
 existing cache budgets do not become a total process-memory ceiling.
@@ -670,15 +684,22 @@ local lights, including changes during a tracked executor.
 voxel upload and lookup maintenance. Scheduling uses the same dependency
 revision. `BuildShadowUpdates` and `RecordShadowUpdates` retain their synchronous
 render-thread contract. Only recorded updates acknowledge dependencies. A point
-light remains disabled until all six faces acknowledge current content; unrelated
-uploads do not restart partial face progress. Valid point/spot layers remain
-cached regardless of age: local `CadenceFrames` metadata does not trigger rebuilds.
+light remains disabled until all six independent face dependencies are current.
+Each face retains exact caster/upload inputs plus light, layer/face assignment and
+effective resolution. Caster edits invalidate intersecting faces; position, source
+radius, emitter links and other light inputs invalidate every face. A whole-map
+resolution change affects all faces, while a face-specific resolution change
+affects that face. Unrelated uploads do not restart partial face progress. Valid
+point/spot layers remain cached regardless of age: local `CadenceFrames` metadata
+does not trigger rebuilds.
 Initial and invalidated lights retain the existing per-tier light budgets, nearest
-light priority and point-face budgets/rotation. Pending work remains invalid until
-recorded; a second dependency change during partial point refresh requires all six
-faces of the new generation. Once current work completes, local dispatch stops
-until inputs change. This does not redesign priority among continuously dirty
-lights. Directional cascades use the per-layer dependencies below.
+light priority and point-face budgets/rotation. Valid point faces are filtered
+before the face budget is applied. Pending work remains invalid until recorded;
+a second caster change during partial refresh only discards acknowledgements of
+faces dependent on that change. Global light or unknown-upload changes require
+all six faces to acknowledge their new dependencies. Once current work completes,
+local dispatch stops until inputs change. This does not redesign priority among
+continuously dirty lights. Directional cascades use the per-layer dependencies below.
 See [R2 ownership decision](../roadmaps/streamed-rendering-r2.md).
 
 ### Directional shadow cache dependencies
