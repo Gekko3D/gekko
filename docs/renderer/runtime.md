@@ -934,6 +934,37 @@ existing buffer headroom; planning reserves no slots and changes no maps.
 sector entries inspected by this planning step. Other scene scans and the work
 within one new or dirty map remain.
 
+### Auxiliary capacity admission
+
+Auxiliary occupancy/normal storage is independent of the fixed 64-record sector
+brick stride. All nonnil brick modes, including solid bricks, require one
+1,088-byte sidecar per distinct brick pointer. Admission inventories new and
+structurally changed maps plus the dirty sector/brick frontier of existing maps,
+including pending full targets. Clean resident sectors require no auxiliary walk.
+Tracked mutations must maintain the existing dirty queues.
+
+The planner preserves allocator high-water capacity and current free slots.
+Fresh pointers shared by pending upload units reserve one global slot. A fresh
+pointer exclusive to one complete unit can use a release credit from that unit
+only when no future target still needs the old pointer. Surplus release credits
+never fund another deferred upload. Structural credits are global only when
+admitted structural preparation will remove the final committed reference before
+content service. Candidate refusal rolls back demand and credits together.
+Retained and shared snapshots keep their slots pinned.
+
+Execution checks physical auxiliary capacity again before writing a complete
+unit. Late demand that does not fit remains dirty until a later admission pass;
+it cannot allocate or acknowledge an out-of-range sidecar. Existing safe release
+and resurrection behavior remains intact. Growth uses aligned geometric capacity
+without fixed 2,048-row auxiliary headroom, through the existing atomic migration
+and bind-group recreation path. Released slots do not shrink buffers.
+
+Conservative reservations may defer alias-heavy replacements until additional
+capacity or final-reference releases become available. Unsupported public
+allocation headers retain conservative compatibility handling. The brick record
+layout, auxiliary word offsets, fitted normals and shader indexing are unchanged;
+packed sector brick ranges remain subsequent P2 work.
+
 ### Normal neighbor preparation
 
 After structural dirty preparation, each voxel update snapshots original dirty

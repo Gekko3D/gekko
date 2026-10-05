@@ -346,7 +346,13 @@ func TestS1kAcknowledgedEditsSurvivePublicationWhileUploadsPaused(t *testing.T) 
 	before, generation := s1kPublished(m), m.MaterialBufferGeneration
 	// This arrival grows all six storage buffers. Copy all their old bytes except
 	// four tail bytes, ensuring resident records and lookup prefixes are copied.
-	s1kArrival(scene, 20, 129, false)
+	arrival := s1kArrival(scene, 20, 129, false)
+	// Auxiliary capacity follows occupied bricks. Populate sparse uniform
+	// records so the intended six-buffer migration still includes auxiliary
+	// copies and mirrors without requiring additional payload atlas slots.
+	for i := 1; i < 129; i++ {
+		schedulePutBrick(arrival, [6]int{i, 0, 0, 0, 0, 0}, scheduleBrick("uniform"))
+	}
 	var oldStorageBytes uint64
 	for _, buffer := range before[:6] {
 		oldStorageBytes += b.BufferSize(buffer)

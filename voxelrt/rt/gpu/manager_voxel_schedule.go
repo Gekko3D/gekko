@@ -357,7 +357,7 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 		if w.bytes > remaining.MaxBytes || w.sectors > remaining.MaxSectors || w.bricks > remaining.MaxBricks {
 			continue
 		}
-		if w.kind != voxelUploadMaterial && !m.voxelUploadPayloadFits(w) {
+		if w.kind != voxelUploadMaterial && (!m.voxelUploadPayloadFits(w) || !m.voxelUploadAuxiliaryFits(w)) {
 			continue
 		}
 		snapshot := m.captureVoxelUploadSnapshot(w)

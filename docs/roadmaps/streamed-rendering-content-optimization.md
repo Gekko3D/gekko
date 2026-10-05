@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 is complete; other sections are proposals.
+Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a are complete; P2 remains partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -39,7 +39,7 @@ Owners: renderer storage/upload and streamed runtime. Consumers: physics, naviga
 | Q7, D2 | No live probe snapshot path to fix; extend existing immutable snapshots | P1, P5 |
 | Q8 | Camera-focused cascades already present | R2 |
 | B0 | Certified static tables share GPU material blocks; dynamic/raw tables remain private | P4 |
-| B1 | CPU complete; GPU still reserves 64 records per sector | P2 |
+| B1 | CPU complete; auxiliary capacity follows distinct bricks; GPU brick table still reserves 64 records per sector | P2 |
 | B2 | GPU dense occupancy already present | P1, P3 |
 | B3, B4, B7 | Packed payload useful; retain Gekko normal encoding; atlas removal conditional | P3 |
 | B5 | Compact read-only CPU storage strongly applicable | P1 |
@@ -101,6 +101,13 @@ Decouple auxiliary capacity from `requiredBricks = sector slots × 64`; size by 
 Tradeoff: shader popcount and membership relocation. Retain dense table option for highly occupied/frequently edited sectors if packing loses benefit.
 
 Owners: `gpu/manager_voxel.go`, allocation metadata, scene bindings. Update `gbuffer.wgsl`, `shadow_map.wgsl`, `transparent_overlay.wgsl`, and `particles_sim.wgsl` together. Acceptance: identical hits across empty/new/removed bricks, correct slot reuse, and records proportional to occupied bricks.
+
+P2a is complete: auxiliary occupancy/normal capacity follows distinct pending
+brick pointers, preserving deferred uploads, retained references and physical
+capacity guards. Shader indexing and normal encoding are unchanged. Full packed
+brick ranges and atomic base/mask publication remain subsequent P2 work.
+See the [runtime contract](../renderer/runtime.md#auxiliary-capacity-admission)
+and [delivery](#p2a-auxiliary-capacity-by-brick-demand).
 
 ### P3. Pack mixed materials and existing normals
 
@@ -909,7 +916,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | R2k | `ff17954` | Compact volume member snapshots while preserving exact live dependencies | [Runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies) |
 | R2l | `a47351e` | Share preparation-local point footprints across faces needing membership work | [Runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies) |
 | R2m | `d72bc88` | Project directional caster bounds with affine endpoint intervals | [Runtime contract](../renderer/runtime.md#directional-shadow-cache-dependencies) |
-| P4 | This batch | Share certified static GPU material blocks with isolated instance edits | [Runtime contract](../renderer/runtime.md#immutable-gpu-material-blocks) |
+| P4 | `cfc07c7` | Share certified static GPU material blocks with isolated instance edits | [Runtime contract](../renderer/runtime.md#immutable-gpu-material-blocks) |
+| P2a | This batch | Size auxiliary buffers by distinct brick demand with safe admission/reuse | [Runtime contract](../renderer/runtime.md#auxiliary-capacity-admission) |
 | S1a | `e3f11cf` | Hidden residency and readiness tickets | [Design](streamed-rendering-s1a.md) |
 | S1b | `a539257` | Global content budgets, ordering and atlas backpressure | [Design](streamed-rendering-s1b.md) |
 | S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
@@ -4361,3 +4369,36 @@ Buffers retain high-water capacity, and instance rows consume independent CPU
 memory. Legacy private in-place upload detection is unchanged. Full interactive
 editor/gameplay appearance and FPS remain unmeasured; animated palette extraction
 has automated private-fallback coverage and native dynamic-row isolation coverage.
+
+
+### P2a: Auxiliary capacity by brick demand
+
+This batch decouples occupancy/normal buffer capacity from fixed sector brick
+blocks. GPU resource admission and upload service own the change; editor and voxel
+apps retain the same offsets, normal encoding and shader layout. The native
+128-brick/128-sector fixture uses 139,264 bytes versus 11,141,120 bytes at
+`cfc07c7`: 80× less capacity (98.75%). Native readback matches CPU occupancy and
+fitted normals across edits, growth to 366,848 bytes, and removal. The fixture
+holds object bounds fixed to preserve normal tie-breaking inputs.
+
+Verification from the engine module passed:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/gpu ./voxelrt/rt/core ./voxelrt/rt/app ./voxelrt/rt/volume -count=1
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p2a-native docs/roadmaps/diagnostics/p2a_auxiliary_capacity.go
+/tmp/gekko-p2a-native
+git diff --check
+```
+
+The P4 native material diagnostic and all seven R2 native diagnostics were rebuilt
+and rerun using the [P4 verification commands](#p4-immutable-gpu-material-sharing).
+Consumer builds passed with
+`env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p2a-consumer-N .` from
+`../gekko-editor` (N=0), `../actiongame` (1), `../spacegame_go` (2),
+`../spacesim` (3) and `../examples/testing-vox` (4).
+
+Physical buffers retain high-water capacity; conservative shared-pointer demand
+can require headroom. Packed brick ranges, retirement and atomic base/mask shader
+publication remain unfinished P2 work. FPS and full interactive gameplay/editor
+appearance were not measured.

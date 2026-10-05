@@ -38,7 +38,7 @@ func TestS1iRegressionRetainedReactivationRespectsHardLookupCapacity(t *testing.
 		t.Fatal("second retained map never reached ready")
 	}
 	m.RetainVoxelMap(second)
-	if resources.Auxiliary != storageLimit || resources.SectorGrid != 65536 || m.SectorAlloc.Tail != 1 || m.BrickAlloc.Tail != 1 || resources.Material > storageLimit {
+	if uint64(m.VoxelAuxAlloc.Tail)*VoxelAuxRecordBytes > resources.Auxiliary || resources.Auxiliary > storageLimit || resources.SectorGrid != 65536 || m.SectorAlloc.Tail != 1 || m.BrickAlloc.Tail != 1 || resources.Material > storageLimit {
 		t.Fatalf("fixture did not establish legal shared geometry/hash capacities: %+v", resources)
 	}
 	beforeHash := s1iHashEntries(t, m, scene)

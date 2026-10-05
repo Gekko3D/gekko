@@ -187,6 +187,9 @@ func TestS1jPendingGenerationAndDetachmentResetDeferredWait(t *testing.T) {
 			}
 			seed := s1iObject(50, 1, false)
 			s1iRun(t, m, &core.Scene{Objects: []*core.VoxelObject{obj, seed}}, &resources, s1iGrow(&resources))
+			// Keep recurring admission opportunities at the warmed two-sector
+			// physical capacity, independently of auxiliary rows per sector.
+			m.SetVoxelGPUAdmissionBudget(VoxelGPUAdmissionBudget{MaxBytes: m.VoxelGPUAdmissionStats().TotalBytes})
 			obj.VoxelUploadPriority, obj.VoxelUploadOrder = core.VoxelUploadPriorityKeep, 9999
 			if !s1jReady(m, obj) || !obj.SetPendingFullUpload() {
 				t.Fatal("pending wait fixture lost its ready coarse selection")
