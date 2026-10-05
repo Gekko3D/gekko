@@ -25,9 +25,9 @@ broader producer/publication and retention decisions. Exact snapshots are the
 chosen boundary; no new ECS extraction architecture or total-memory ceiling is
 introduced. Local snapshots still add CPU and retained-memory cost.
 
-Face-specific point dependencies, clipmap scrolling, dirty texels and
-camera-force refinement remain separate steps. R2e removes periodic local
-refresh after dependency-driven reuse is established.
+Face-specific point dependencies, clipmap scrolling and dirty texels remain
+separate steps. R2e/R2f remove periodic rebuilds after dependency-driven reuse is
+established; R2g removes camera heuristics from ordinary scheduling.
 Automated scheduling checks alone do not prove visual parity or net frame gains.
 Native shadow readback and a CPU diagnostic are retained in the
 [delivery record](streamed-rendering-content-optimization.md#r2a-local-shadow-dependency-invalidation).
@@ -96,3 +96,20 @@ behavior, so it remains separate. This step changes only GPU-manager scheduling;
 projection generation, caster selection, shader traversal and publication remain
 with their current owners. CPU scheduling and native fresh-reference parity
 validate idle reuse and dependent changes; frame-time gains require measurement.
+
+
+## R2g ownership decision
+
+App orchestration requests ordinary shadow scheduling from dependency validity.
+Camera-history availability and motion diagnostics do not force cascade rebuilds:
+current projection and selected caster inputs already define per-cascade validity.
+The GPU manager retains its explicit forced-refresh API. Initial maps remain dirty
+until recorded, and cached transforms publish with their scheduled maps.
+
+Keeping both camera heuristics and dependency invalidation duplicates authority.
+Removing only the heuristic fits the current live-input architecture; projection
+stabilization is a separate change with visual consequences. Actual moving-camera
+projection changes still rebuild cascades. This step touches app shadow recording,
+its behavioral tests and native Render verification, with no shader or projection
+changes. It removes redundant work when camera metadata/history changes without
+changing map inputs; it does not promise broad moving-camera cache reuse.

@@ -701,9 +701,13 @@ Removed layers release retained caster references.
 Valid cascades remain cached regardless of age. `CadenceFrames` remains metadata
 for compatibility but does not schedule periodic work. Initial or changed inputs
 schedule the affected cascades; only recorded updates acknowledge their content.
-Explicit forced refresh and the app's camera-motion force path still schedule both
-cascades. Cached cascade transforms stay paired with their maps until the scheduled
-rebuild publishes new transforms through `PrepareShadowLights`. This does not
+The GPU manager's explicit forced-refresh request still schedules both cascades.
+App shadow recording uses ordinary dependency scheduling: missing camera history
+or motion metadata alone does not force work. `ShadowCameraMotion` remains a
+profiler diagnostic. Actual camera changes rebuild cascades when their projection
+or selected caster inputs change; this does not stabilize moving projections.
+Cached cascade transforms stay paired with their maps until the scheduled rebuild
+publishes new transforms through `PrepareShadowLights`. This does not
 change projection generation, scene caster selection, shader traversal, GPU
 layouts or the synchronous recording contract.
 

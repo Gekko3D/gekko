@@ -742,7 +742,8 @@ func (a *App) recordShadowPass(encoder *wgpu.CommandEncoder) error {
 	defer a.Profiler.EndScope("Shadows")
 
 	shadowCameraMotion := a.hasShadowCameraMotion()
-	shadowUpdates := manager.BuildShadowUpdates(a.Scene, a.Camera, a.RenderFrameIndex, shadowCameraMotion)
+	// Motion remains diagnostic; current projection and caster dependencies own refresh.
+	shadowUpdates := manager.BuildShadowUpdates(a.Scene, a.Camera, a.RenderFrameIndex, false)
 
 	shadowPointUpdates := 0
 	shadowSpotUpdates := 0
