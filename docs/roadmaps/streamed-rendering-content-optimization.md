@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals is complete, with P3 remaining partial; other sections are proposals.
+Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals and P3b native workload evaluation are complete, with P3 remaining partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -137,8 +137,10 @@ Owners: voxel pool allocator, upload/bind groups, traversal shaders, normal buil
 
 P3a completes an opt-in packed fitted-normal GPU prototype while retaining the
 material atlas and dense default. See the [storage contract](../renderer/runtime.md#packed-fitted-normal-storage)
-and [delivery](#p3a-packed-fitted-normal-gpu-storage). Dense traversal benchmarking,
-packed mixed-material storage and any default policy remain P3 work.
+and [delivery](#p3a-packed-fitted-normal-gpu-storage). P3b adds a fixed native
+sparse/dense/edited benchmark and retains the dense default based on its measured
+tradeoffs. Packed mixed-material storage, broader workload evaluation and any
+default policy remain P3 work.
 
 ### P4. Share immutable GPU material blocks
 
@@ -937,7 +939,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | P2a | `362f10d` | Size auxiliary buffers by distinct brick demand with safe admission/reuse | [Runtime contract](../renderer/runtime.md#auxiliary-capacity-admission) |
 | P2b | `c2356df` | Upload sparse sector records with captured header publication | [Runtime contract](../renderer/runtime.md#sparse-sector-publication) |
 | P2c | `d0e13a6` | Pack sector ranges with fenced reuse and shared publication | [Runtime contract](../renderer/runtime.md#packed-sector-brick-ranges) |
-| P3a | This batch | Opt-in occupancy-ranked fitted normals with fenced packet reuse | [Runtime contract](../renderer/runtime.md#packed-fitted-normal-storage) |
+| P3a | `b52551d` | Opt-in occupancy-ranked fitted normals with fenced packet reuse | [Runtime contract](../renderer/runtime.md#packed-fitted-normal-storage) |
+| P3b | This batch | Measure sparse, dense and edited packed-normal traversal with native GPU queries | [Verification](../renderer/verification.md#packed-normal-workload-benchmark) |
 | S1a | `e3f11cf` | Hidden residency and readiness tickets | [Design](streamed-rendering-s1a.md) |
 | S1b | `a539257` | Global content budgets, ordering and atlas backpressure | [Design](streamed-rendering-s1b.md) |
 | S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
@@ -4537,6 +4540,62 @@ passed with `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p3a-consume
 from `../gekko-editor` (N=0), `../actiongame` (1), `../spacegame_go` (2),
 `../spacesim` (3) and `../examples/testing-vox` (4).
 
-FPS, dense/frequently edited traversal costs, full interactive editor/gameplay,
-complete particle trajectories and exhaustive traversal branches remain
-unverified. Packed mixed-material storage and a default policy remain P3 work.
+At this delivery, FPS, dense/frequently edited traversal costs, full interactive
+editor/gameplay, complete particle trajectories and exhaustive traversal branches
+were unverified. P3b subsequently measures isolated opaque traversal; packed
+mixed-material storage and a default policy remain P3 work.
+
+### P3b: Native packed-normal workload evaluation
+
+This batch adds `cmd/voxelbench`, owned by renderer diagnostics. It uses the
+production G-buffer shader, GPU allocation/upload path and submission fences;
+renderer defaults and consumers remain unchanged. The [verification contract](../renderer/verification.md#packed-normal-workload-benchmark)
+records query ownership, completed-pass resolution, calibration, comparison
+checks, units and reproducible invocation.
+
+Three alternating dense/packed pairs per fixture on Apple M4 Pro / Metal at
+640×480, 30 measured batches, ten warmup batches and eight dispatches per batch:
+
+| Fixture | Packed/dense GPU median ratio, median [range] | Auxiliary capacity, dense / packed |
+| --- | --- | --- |
+| Sparse | 1.0078 [1.0059–1.0093] | 69,632 / 12,288 bytes |
+| Dense mixed 511/512 occupancy | 1.0439 [1.0407–1.0485] | 69,632 / 69,632 bytes |
+| Frequently edited | 1.0126 [1.0083–1.0138] | 69,632 / 24,576 bytes |
+
+Ratios compare raw GPU ticks per dispatch, not CPU wall time or FPS. Packed dense
+traversal was 4.4% slower in this fixture, with no auxiliary saving. Sparse and
+edited traversal costs increased approximately 0.8% and 1.3%. Retain the dense
+default; opt-in packing trades small traversal costs for sparse capacity and
+upload savings. Edited CPU commit/upload preparation medians were 4.439 / 4.468
+ms, including bake medians 3.652 / 3.616 ms. Thirty edits uploaded 3,060,960 /
+1,386,720 content bytes (54.7% less packed). Physical capacity includes slack
+and replacement overhead. These fixed fixtures do not predict scene-wide gains.
+
+Verification passed from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./cmd/voxelbench -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./cmd/voxelbench -count=1
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/voxelbench ./cmd/voxelbench
+for native_workload in sparse dense edited; do
+  for native_repeat in 1 2 3; do
+    if [ "$native_repeat" -eq 2 ]; then native_first=packed; native_second=dense; else native_first=dense; native_second=packed; fi
+    /tmp/voxelbench -mode "$native_first" -workload "$native_workload" -output "/tmp/voxelbench-p3b-final-${native_workload}-${native_repeat}-${native_first}.json" || exit 1
+    /tmp/voxelbench -mode "$native_second" -workload "$native_workload" -output "/tmp/voxelbench-p3b-final-${native_workload}-${native_repeat}-${native_second}.json" -compare "/tmp/voxelbench-p3b-final-${native_workload}-${native_repeat}-${native_first}.json" || exit 1
+  done
+done
+/tmp/voxelbench -mode dense -workload sparse -samples 129 -warmup 1 -batch 1 -width 64 -height 64 -output /tmp/voxelbench-p3b-final-cohort-1-dense.json
+/tmp/voxelbench -mode packed -workload sparse -samples 129 -warmup 1 -batch 1 -width 64 -height 64 -output /tmp/voxelbench-p3b-final-cohort-1-packed.json -compare /tmp/voxelbench-p3b-final-cohort-1-dense.json
+git diff --check
+```
+
+All 20 native processes passed: 540 main and 258 cohort-boundary measured pairs
+were positive and strictly increasing, with exact paired initial/final
+production depth/normal/material readbacks. Edited surfaces visibly changed.
+No invalid measured samples were discarded. Query calibration succeeded once
+per cohort. JSON output matched saved reports. No engine, shader or bridge
+changes required consumer rebuilds.
+
+Full-frame FPS, transparency/particle timing, larger scenes, other adapters and
+camera angles remain unmeasured. Native timing uses the current workspace WebGPU
+bindings. Packed mixed materials and broader storage-policy evaluation remain.
