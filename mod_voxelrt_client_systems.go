@@ -345,6 +345,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 		state.managedVoxelBindings = make(map[EntityId]managedVoxelBinding)
 	}
 	state.beginMaterialFingerprintSync(server)
+	state.beginMaterialSemanticSync(server)
 	state.ensureMaterialCaches()
 	streamedMarkers := state.beginStreamedVoxelSync(cmd)
 	var compiledQualification compiledAssetLODQualification
@@ -355,6 +356,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	currentVoxelEntities := make(map[EntityId]bool, len(state.entityLODSelections))
 	frameMaterialKeys := make(map[AssetId]materialTableCacheKey)
 	frameVoxelPalettes := make(map[AssetId]VoxelPaletteAsset)
+	frameMaterialSemantics := make(map[AssetId]*voxelMaterialSemantic)
 	elapsed := float64(0)
 	if t != nil {
 		elapsed = t.Elapsed
@@ -459,6 +461,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			hasPalette = true
 			materialKey = state.materialTableKey(vox.VoxelPalette, &gekkoPalette)
 			frameMaterialKeys[vox.VoxelPalette] = materialKey
+			frameMaterialSemantics[vox.VoxelPalette] = state.materialSemantic(vox.VoxelPalette, &gekkoPalette)
 		}
 		if !hasPalette {
 			gekkoPalette, _ = server.GetVoxelPalette(vox.VoxelPalette)
@@ -473,11 +476,9 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			obj = state.instanceMap[entityId]
 			if obj == nil {
 				obj = core.NewVoxelObject()
-				obj.MaterialTable = state.buildMaterialTable(materialKey, &gekkoPalette)
 				state.RtApp.Scene.AddObject(obj)
 				state.instanceMap[entityId] = obj
 				state.objectToEntity[obj] = entityId
-				state.lastMaterialKeys[obj] = materialKey
 			}
 			changed := !bound || binding.id != displayGeometryID || binding.entry != entry || binding.exposed != entry.exposed
 			if changed {
@@ -525,14 +526,12 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 
 				obj = core.NewVoxelObject()
 				obj.XBrickMap = runtimeGeometryMap
-				obj.MaterialTable = state.buildMaterialTable(materialKey, &gekkoPalette)
 				state.RtApp.Scene.AddObject(obj)
 				if vox.RetainRendererGeometry {
 					state.RtApp.ActivateRetainedVoxelMap(sourceGeometryMap)
 				}
 				state.instanceMap[entityId] = obj
 				state.objectToEntity[obj] = entityId
-				state.lastMaterialKeys[obj] = materialKey
 				state.instanceGeometrySources[entityId] = sourceGeometryMap
 				state.instanceObjectScopedGeometry[entityId] = objectScopedGeometry
 			}
@@ -583,10 +582,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			obj.Transform.Dirty = true
 		}
 
-		if lastKey, ok := state.lastMaterialKeys[obj]; !ok || lastKey != materialKey {
-			obj.MaterialTable = state.buildMaterialTable(materialKey, &gekkoPalette)
-			state.lastMaterialKeys[obj] = materialKey
-		}
+		state.syncMaterialBinding(obj, materialKey, &gekkoPalette, frameMaterialSemantics[vox.VoxelPalette])
 
 		obj.RenderEnabled = !hidden
 		obj.VoxelGPUAdmissionOptional = streamed && hidden
@@ -648,6 +644,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	})
 
 	state.pruneMaterialFingerprints(frameMaterialKeys)
+	state.pruneMaterialSemantics(frameMaterialSemantics)
 	for eid, obj := range state.instanceMap {
 		if !currentObjectEntities[eid] {
 			state.clearCompiledAssetLOD(eid)
@@ -658,6 +655,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 			delete(state.instanceObjectScopedGeometry, eid)
 			state.clearRuntimeEditedVoxelEntity(eid)
 			delete(state.lastMaterialKeys, obj)
+			delete(state.lastMaterialSemantics, obj)
 			delete(state.objectToEntity, obj)
 		}
 	}

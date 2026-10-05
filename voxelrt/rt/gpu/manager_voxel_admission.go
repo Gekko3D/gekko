@@ -142,12 +142,14 @@ func (m *GpuBufferManager) cleanupVoxelAdmissionOwners(scene *core.Scene) map[*v
 			}
 		}
 	}
-	for obj, alloc := range m.MaterialAllocations {
+	for obj := range m.MaterialAllocations {
 		if !activeObjects[obj] {
-			if alloc != nil && alloc.MaterialCapacity > 0 {
-				m.MaterialAlloc.FreeSlot(alloc.MaterialOffset / materialBlockCapacity)
-			}
-			delete(m.MaterialAllocations, obj)
+			m.releaseMaterialAllocation(obj)
+		}
+	}
+	for obj := range m.managedMaterialObjects {
+		if !activeObjects[obj] {
+			delete(m.managedMaterialObjects, obj)
 		}
 	}
 	return activeMaps
@@ -160,6 +162,8 @@ type voxelAdmissionCandidate struct {
 }
 
 type voxelAdmissionPlan struct {
+	materialKeys                        map[string]bool
+	materialKeyJournal                  []string
 	sectorTail, brickTail, materialTail uint64
 	sectorFree, brickFree, materialFree uint64
 	sectors                             map[*volume.Sector]bool
@@ -179,6 +183,9 @@ type voxelAdmissionPlan struct {
 // Refusal rolls back deltas; no resident-sector set is cloned or enumerated.
 func (p *voxelAdmissionPlan) clone() voxelAdmissionPlan { return *p }
 func (p *voxelAdmissionPlan) rollback(previous voxelAdmissionPlan) {
+	for _, key := range p.materialKeyJournal[len(previous.materialKeyJournal):] {
+		delete(p.materialKeys, key)
+	}
 	for _, xbm := range p.lookupKeys[len(previous.lookupKeys):] {
 		delete(p.lookup, xbm)
 	}
@@ -305,8 +312,25 @@ func (p *voxelAdmissionPlan) addMaterial(m *GpuBufferManager, obj *core.VoxelObj
 	p.objects[obj] = true
 	p.objectKeys = append(p.objectKeys, obj)
 	alloc := m.MaterialAllocations[obj]
-	if alloc == nil || alloc.MaterialCapacity < uint32(materialUploadRows(len(obj.MaterialTable))) {
-		if alloc != nil && alloc.MaterialCapacity > 0 {
+	table := obj.ImmutableMaterialTable()
+	replacing := alloc != nil && !materialAttachmentMatches(alloc, table)
+	// Shared abandonment is credited once globally, before candidate trials.
+	// Private slots retain their per-object replacement accounting.
+	if replacing && alloc.MaterialCapacity > 0 && alloc.block == nil {
+		p.materialFree++
+	}
+	if table != nil {
+		key := table.Identity()
+		if p.materialKeys[key] || m.materialBlocks[key] != nil {
+			return
+		}
+		p.materialKeys[key] = true
+		p.materialKeyJournal = append(p.materialKeyJournal, key)
+		consumeVoxelSlots(&p.materialTail, &p.materialFree, 1)
+		return
+	}
+	if alloc == nil || replacing || alloc.MaterialCapacity < uint32(materialUploadRows(len(obj.MaterialTable))) {
+		if !replacing && alloc != nil && alloc.MaterialCapacity > 0 {
 			p.materialFree++
 		}
 		consumeVoxelSlots(&p.materialTail, &p.materialFree, 1)
@@ -409,7 +433,31 @@ func (m *GpuBufferManager) prepareVoxelGPUAdmissionCurrentFrame(scene *core.Scen
 	}
 	queue, ages := m.voxelAdmissionSchedule(candidates)
 
-	initial := voxelAdmissionPlan{sectorTail: uint64(m.SectorAlloc.Tail), brickTail: uint64(m.BrickAlloc.Tail), materialTail: uint64(m.MaterialAlloc.Tail), sectorFree: uint64(len(m.SectorAlloc.Free)), brickFree: uint64(len(m.BrickAlloc.Free)), materialFree: uint64(len(m.MaterialAlloc.Free)), sectors: make(map[*volume.Sector]bool), maps: make(map[*volume.XBrickMap]bool), objects: make(map[*core.VoxelObject]bool), lookup: make(map[*volume.XBrickMap]bool), removedSectors: make(map[*volume.Sector]bool)}
+	desiredMaterialKeys := make(map[string]bool)
+	if scene != nil {
+		for _, obj := range scene.Objects {
+			if obj != nil {
+				if table := obj.ImmutableMaterialTable(); table != nil {
+					desiredMaterialKeys[table.Identity()] = true
+				}
+			}
+		}
+	}
+	for _, candidate := range candidates {
+		if table := candidate.target.object.ImmutableMaterialTable(); table != nil {
+			desiredMaterialKeys[table.Identity()] = true
+		}
+	}
+	abandonedMaterialBlocks := make(map[*materialGPUBlock]bool)
+	for key, block := range m.materialBlocks {
+		if !desiredMaterialKeys[key] {
+			abandonedMaterialBlocks[block] = true
+		}
+	}
+	abandonmentAllowed := true
+	abandonedCredits := uint64(len(abandonedMaterialBlocks))
+	ordinaryMaterialFree := uint64(len(m.MaterialAlloc.Free))
+	initial := voxelAdmissionPlan{materialKeys: make(map[string]bool), sectorTail: uint64(m.SectorAlloc.Tail), brickTail: uint64(m.BrickAlloc.Tail), materialTail: uint64(m.MaterialAlloc.Tail), sectorFree: uint64(len(m.SectorAlloc.Free)), brickFree: uint64(len(m.BrickAlloc.Free)), materialFree: uint64(len(m.MaterialAlloc.Free)), sectors: make(map[*volume.Sector]bool), maps: make(map[*volume.XBrickMap]bool), objects: make(map[*core.VoxelObject]bool), lookup: make(map[*volume.XBrickMap]bool), removedSectors: make(map[*volume.Sector]bool)}
 
 	for xbm := range active {
 		if alloc := m.Allocations[xbm]; alloc != nil && (previousLookup[xbm] || (!wasActive && m.Device == nil)) {
@@ -427,6 +475,11 @@ func (m *GpuBufferManager) prepareVoxelGPUAdmissionCurrentFrame(scene *core.Scen
 	plan := initial.clone()
 	next := current
 	build := func(allowGrowth bool) {
+		initial.materialFree = ordinaryMaterialFree
+		if abandonmentAllowed {
+			initial.materialFree += abandonedCredits
+		}
+		clear(initial.materialKeys)
 		clear(initial.sectors)
 		clear(initial.maps)
 		clear(initial.objects)
@@ -524,6 +577,7 @@ func (m *GpuBufferManager) prepareVoxelGPUAdmissionCurrentFrame(scene *core.Scen
 				return true
 			}
 			*resources = current
+			abandonmentAllowed = false
 			if !errors.Is(err, errVoxelGPUWorkPending) {
 				m.recordVoxelGPUAllocationFailure(err)
 			}
@@ -532,6 +586,17 @@ func (m *GpuBufferManager) prepareVoxelGPUAdmissionCurrentFrame(scene *core.Scen
 			recreated = true
 		}
 	}
+	// A failed physical transaction cannot publish speculative abandonment,
+	// including replacements that might otherwise reuse a different resident key.
+	if !abandonmentAllowed {
+		for obj := range plan.objects {
+			if a := m.MaterialAllocations[obj]; a != nil && abandonedMaterialBlocks[a.block] && !materialAttachmentMatches(a, obj.ImmutableMaterialTable()) {
+				delete(plan.objects, obj)
+				denied[obj.RenderVoxelMap()] = true
+			}
+		}
+	}
+
 	m.finishVoxelAdmissionAges(ages, plan)
 	m.voxelAdmissionMaps, m.voxelAdmissionObjects = plan.maps, plan.objects
 	m.voxelLookupMaps = plan.lookup
@@ -544,27 +609,25 @@ func (m *GpuBufferManager) prepareVoxelGPUAdmissionCurrentFrame(scene *core.Scen
 	if m.MaterialAllocations == nil {
 		m.MaterialAllocations = make(map[*core.VoxelObject]*MaterialGpuAllocation)
 	}
-	seenObjects := make(map[*core.VoxelObject]bool)
+	var materialObjects []*core.VoxelObject
 	for _, candidate := range candidates {
-		obj := candidate.target.object
-		if !plan.objects[obj] || seenObjects[obj] {
-			continue
-		}
-		seenObjects[obj] = true
-		mat := m.MaterialAllocations[obj]
-		if mat == nil {
-			mat = &MaterialGpuAllocation{MaterialTableLen: -1}
-			m.MaterialAllocations[obj] = mat
-		}
-		if mat.MaterialCapacity < uint32(materialUploadRows(len(obj.MaterialTable))) {
-			if mat.MaterialCapacity > 0 {
-				m.MaterialAlloc.FreeSlot(mat.MaterialOffset / materialBlockCapacity)
-			}
-			mat.MaterialOffset = m.MaterialAlloc.Alloc() * materialBlockCapacity
-			mat.MaterialCapacity = materialBlockCapacity
-			mat.MaterialTableLen = -1
+		if plan.objects[candidate.target.object] {
+			materialObjects = append(materialObjects, candidate.target.object)
 		}
 	}
+	// Retire every stale attachment before reusing any credited physical slot.
+	// No admitted demand, or demand served by ordinary free slots, needs this
+	// global retirement. A fully refused plan preserves bindings; partial reuse
+	// also removes denied stale attachments so they cannot alias new content.
+	if abandonmentAllowed && len(plan.objects) > 0 && plan.materialFree < abandonedCredits {
+		for block := range abandonedMaterialBlocks {
+			for obj := range block.attachments {
+				m.releaseMaterialAllocation(obj)
+			}
+		}
+	}
+
+	m.prepareMaterialAttachments(materialObjects)
 	m.refreshVoxelGPUAdmissionStats(*resources)
 	stats := m.voxelGPUAdmissionStats
 	stats.DeferredMaps = len(denied)

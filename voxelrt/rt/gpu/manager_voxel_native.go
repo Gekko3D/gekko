@@ -136,7 +136,7 @@ func (m *GpuBufferManager) growVoxelGPUResources(resources *voxelGPUResources, n
 		}
 		*destinations[i] = buffer
 		if i == 3 {
-			m.MaterialBufferGeneration++
+			m.advanceMaterialBufferGeneration(previous != nil)
 		}
 	}
 	for i, texture := range textures {

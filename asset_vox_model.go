@@ -84,7 +84,12 @@ func voxelPaletteCacheKey(palette VoxPalette, materials []VoxMaterial, sourcePat
 }
 
 func voxelPaletteAssetCacheKey(asset VoxelPaletteAsset) string {
-	payload, _ := json.Marshal(struct {
+	key, _ := checkedVoxelPaletteAssetCacheKey(asset)
+	return key
+}
+
+func checkedVoxelPaletteAssetCacheKey(asset VoxelPaletteAsset) (string, error) {
+	payload, err := json.Marshal(struct {
 		Palette                VoxPalette
 		Materials              []VoxMaterial
 		SurfaceMaterials       map[uint8]VoxelSurfaceMaterial
@@ -111,7 +116,7 @@ func voxelPaletteAssetCacheKey(asset VoxelPaletteAsset) string {
 		Transparency:           asset.Transparency,
 		SourcePath:             asset.SourcePath,
 	})
-	return string(payload)
+	return string(payload), err
 }
 
 func (server *AssetServer) ensureVoxelStorage() {

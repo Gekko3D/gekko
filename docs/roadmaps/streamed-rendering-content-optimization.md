@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; other sections are proposals.
+Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 is complete; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -38,7 +38,7 @@ Owners: renderer storage/upload and streamed runtime. Consumers: physics, naviga
 | Q6 | Direct decode useful; empty skipping partly exists; no Bevy extraction bridge | P5, S2 |
 | Q7, D2 | No live probe snapshot path to fix; extend existing immutable snapshots | P1, P5 |
 | Q8 | Camera-focused cascades already present | R2 |
-| B0 | CPU palettes partly shared; GPU materials allocated per object | P4 |
+| B0 | Certified static tables share GPU material blocks; dynamic/raw tables remain private | P4 |
 | B1 | CPU complete; GPU still reserves 64 records per sector | P2 |
 | B2 | GPU dense occupancy already present | P1, P3 |
 | B3, B4, B7 | Packed payload useful; retain Gekko normal encoding; atlas removal conditional | P3 |
@@ -126,7 +126,7 @@ Keep animated palettes/overrides private or copy shared block on first mutation.
 
 Owners: material allocation in `manager_voxel.go`, bridge material sync, `AssetServer`, compiled asset tables.
 
-Next selected area after R2a–R2m. [P4 scope and ownership alternatives](streamed-rendering-p4.md) record the immutable-binding prerequisite and integrated sharing boundary; implementation awaits that boundary decision.
+Integrated P4 is complete: owned full semantic snapshots certify static rows, and the GPU manager shares physical blocks with independent instance attachments. Admission, uploads, generation migration, release and shader publication preserve edit isolation. [Delivery and limits](streamed-rendering-p4.md); [canonical contract](../renderer/runtime.md#immutable-gpu-material-blocks).
 
 ### P5. Build immutable upload packets on workers
 
@@ -821,8 +821,8 @@ Prevent `VoxelUploadRevision` invalidating unrelated lights. Retain cached casca
 Acceptance: edits update affected shadows, unrelated streaming preserves cached shadows, and delayed layers retain coherent transforms.
 
 Current milestone: R2a–R2m cover scoped invalidation, dependency-driven reuse and
-native cached/fresh-map parity. Further R2 implementation is deferred while GPU
-material sharing (P4) is scoped. R2 remains partial; remaining work is:
+native cached/fresh-map parity. Further R2 implementation remains deferred after
+GPU material sharing (P4). R2 remains partial; remaining work is:
 
 - Measure CPU preparation, GPU shadow work and frame time in representative
   gameplay, including camera movement, streaming and edits; native parity and
@@ -908,7 +908,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | R2j | `ed0993f` | Recheck changed bounds for stable shadow volumes with conservative full-scan fallbacks | [Runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies) |
 | R2k | `ff17954` | Compact volume member snapshots while preserving exact live dependencies | [Runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies) |
 | R2l | `a47351e` | Share preparation-local point footprints across faces needing membership work | [Runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies) |
-| R2m | This batch | Project directional caster bounds with affine endpoint intervals | [Runtime contract](../renderer/runtime.md#directional-shadow-cache-dependencies) |
+| R2m | `d72bc88` | Project directional caster bounds with affine endpoint intervals | [Runtime contract](../renderer/runtime.md#directional-shadow-cache-dependencies) |
+| P4 | This batch | Share certified static GPU material blocks with isolated instance edits | [Runtime contract](../renderer/runtime.md#immutable-gpu-material-blocks) |
 | S1a | `e3f11cf` | Hidden residency and readiness tickets | [Design](streamed-rendering-s1a.md) |
 | S1b | `a539257` | Global content budgets, ordering and atlas backpressure | [Design](streamed-rendering-s1b.md) |
 | S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
@@ -4319,3 +4320,44 @@ Consumer builds passed using `env GOCACHE=/tmp/gekko3d-gocache go build -o
 /tmp/gekko-r2m-consumer-N .` from `../gekko-editor` (N=0), `../actiongame` (1),
 `../spacegame_go` (2), `../spacesim` (3), and `../examples/testing-vox` (4).
 Gameplay appearance and FPS were not manually measured.
+
+
+### P4: Immutable GPU material sharing
+
+This batch completes bridge certification and GPU block sharing. Full semantic
+ownership, instance isolation and shader publication follow the
+[canonical contract](../renderer/runtime.md#immutable-gpu-material-blocks).
+The byte-backed production path at 1,000 identical 256-row tables measures
+16,384,000 material bytes/1,000 writes privately versus 16,384 bytes/one shared
+write (99.9% fewer bytes/writes). This is material-resource evidence, not FPS.
+
+Verification from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . ./voxelrt/rt/gpu ./voxelrt/rt/core ./voxelrt/rt/app -run '^(TestP4|TestR2|TestS2c|TestS2j)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^(TestS1i|TestC3h13c|TestStreamedVoxelReadinessLatchesAndForgettingIsTerminalOnly|TestStreamedVoxelAtomicParentChildVisibilitySwap)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu -run '^TestP4SharedMaterialThousandsOfBindingsUseOnePhysicalBlock$' -count=1 -v
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p4-native docs/roadmaps/diagnostics/p4_material_sharing.go
+/tmp/gekko-p4-native
+for entry in r2c:shadow_publication r2d:shadow_batches r2e:shadow_reuse r2f:directional_reuse r2g:camera_shadow_reuse r2h:directional_stability r2i:point_face_reuse; do
+    shadow_step=${entry%%:*}
+    diagnostic_name=${entry#*:}
+    env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-${shadow_step}-native docs/roadmaps/diagnostics/${shadow_step}_${diagnostic_name}.go || exit 1
+    /tmp/gekko-${shadow_step}-native || exit 1
+done
+git diff --check
+```
+
+Native desktop WebGPU checks pass for material bytes, shared/private albedo,
+emission and transparency parity, dynamic private rows, paused publication,
+isolated edits, growth and surviving-owner release. Rebuilt R2 diagnostics retain
+cached/fresh shadow-map parity. Consumer builds use
+`env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p4-consumer-N .` from
+`../gekko-editor` (N=0), `../actiongame` (1), `../spacegame_go` (2),
+`../spacesim` (3) and `../examples/testing-vox` (4).
+
+Buffers retain high-water capacity, and instance rows consume independent CPU
+memory. Legacy private in-place upload detection is unchanged. Full interactive
+editor/gameplay appearance and FPS remain unmeasured; animated palette extraction
+has automated private-fallback coverage and native dynamic-row isolation coverage.

@@ -77,8 +77,10 @@ func streamedStatus(t *testing.T, state *VoxelRtState, ticket uint64, want Strea
 	return status
 }
 
-// This fixture represents completed uploads; no App.Update or physical GPU is needed.
+// This fixture represents a completed private queued upload; no App.Update or
+// physical GPU is needed. GPU P4 tests own certified-block acknowledgement.
 func completeStreamedVoxelUpload(state *VoxelRtState, obj *core.VoxelObject) {
+	obj.SetImmutableMaterialTable(nil) // Preserve rows while modeling private ownership.
 	xbm := obj.XBrickMap
 	xbm.ClearDirty()
 	alloc := &gpu.ObjectGpuAllocation{Sectors: make(map[[3]int]*volume.Sector), Bricks: make(map[[3]int]*[64]*volume.Brick)}

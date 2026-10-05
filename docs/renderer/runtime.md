@@ -358,8 +358,9 @@ Each key charges CPU material slice capacity plus conservative entry metadata
 once. Current object keys, including hidden streamed objects, remain pinned and
 refresh LRU age without counting cache hits. Inactive entries are evicted oldest
 first until the budget fits or only pinned excess remains. Eviction releases
-cache references and prunes map capacity; borrowed/object material backing remains
-valid. Hashing, table construction and sharing semantics are unchanged.
+cache references and prunes map capacity; existing object copies remain valid.
+Hashing and table construction remain unchanged. P4 gives each object independent
+mutable rows while certified static tables share GPU blocks, as described below.
 Inactive keys use an indexed minimum heap ordered by saved usage age. Warm hits
 repair its order; pin transitions remove/add eligibility without making newly
 inactive keys newer. Completed maintenance gathers current keys from instances,
@@ -378,6 +379,65 @@ maintenance and all-pinned pressure add none. Private accounting owns retention.
 Nil state returns zero stats. Temporary construction/active-key collection,
 external borrowers, assets and GPU allocations are excluded; this is not a process
 or GPU memory limit. [Ownership rationale](../roadmaps/streamed-rendering-s2a.md#s2c-cpu-material-table-cache-ownership-decision).
+
+## Immutable GPU Material Blocks
+
+The bridge certifies static palettes using an independently owned full semantic
+snapshot, including surface kinds/tags, properties and provenance. This identity
+is separate from the narrower effective-palette rendering fingerprint. Exact live
+comparison reuses unchanged snapshots; canonical encoding runs once per used
+palette ID/change, rather than once per instance or idle frame. Animated palettes,
+frame overrides, unsupported identity values and over-budget inputs remain private.
+
+`core.NewImmutableMaterialTable(rows, semanticKey)` seals at most 256 rows and an
+opaque complete semantic key. Its identity encodes the key and exact row bits;
+row access returns a defensive copy. `VoxelObject.SetImmutableMaterialTable` gives
+the object independent public mutable rows. `ImmutableMaterialTable()` checks
+those rows and permanently detaches certification on a mismatch until the owner
+explicitly installs another handle. Unchanged bridge sync preserves an instance
+edit rather than resealing it. Asset IDs, row pointers and rendering hashes alone
+never certify sharing.
+
+`VoxelMaterialSemanticIdentityBudgetBytes` limits bridge snapshots to 8 MiB of
+conservatively accounted ownership. Support and charge checks precede cloning and
+encoding. `VoxelMaterialSemanticIdentityBuildCount` counts actual canonical encode
+attempts; `VoxelMaterialSemanticIdentityCount` and
+`VoxelMaterialSemanticIdentityBytes` describe retained current snapshots. Unused
+palettes, empty ownership and server replacement release this ownership. The budget
+excludes instance row copies, the CPU table cache and GPU-manager packets; it is
+not a process-memory limit.
+
+The GPU manager owns one 256-row, 16 KiB block per exact certified identity and
+separate per-object `MaterialAllocations` attachments. A block owns one CPU row
+snapshot and one padded GPU packet, encoded once during its lifetime. Admission
+reserves distinct blocks; service uses their highest-priority current requester
+and uploads each block once per buffer generation. Late attachments to uploaded
+blocks require no write. Readiness and shader publication require the current
+binding and acknowledged generation. Attachment changes invalidate only the
+object's shadow dependency; uploaded opacity acknowledgement remains object-local.
+
+Shared slots retire after the final attachment through existing render-thread
+queue ordering. Desired resident identities stay pinned across binding swaps.
+Abandoned shared blocks can fund replacement admission only when no active scene
+object still requests them, including objects outside the current service targets.
+If a partial replacement reuses a slot, stale denied attachments are removed before
+publication; failed resource growth preserves the old bindings. Optional new block
+demand obeys the optional admission cap. Fully queued buffer migration carries
+acknowledgement for already uploaded immutable blocks; pending blocks and external
+generation resets still require service. Raw uncertified tables keep private
+blocks and their existing mutable upload behavior.
+
+After certification detaches, later private edits retain the legacy pointer/length
+upload contract; replace the public slice to signal another update. P4 does not
+change the CPU row cache's existing palette-ID/render-fingerprint key. Semantic
+snapshot properties support finite `float32`, `float64`, `int` and `string` values;
+other property types conservatively fall back to private ownership.
+
+Shader layouts and 256-entry local addressing are unchanged. Physical buffers
+retain their high-water capacity after release. Independent mutable instance rows
+cost CPU memory (10 KiB for 256 rows); sharing reduces GPU block/packet duplication,
+not every CPU copy. See [P4 delivery](../roadmaps/streamed-rendering-p4.md) for
+verification and measured material traffic; no frame-time improvement is claimed.
 
 ## Allocation Snapshot Ownership
 
@@ -473,9 +533,10 @@ only to explicitly hidden streamed objects. A compiled startup readiness wait
 does not make an ordinary object optional. Valid pending full detail is always
 optional, preserving its ready coarse display. Any required shared instance
 makes geometry required, while a new optional instance still needs its own
-material admission. Existing map and material owners remain pinned and required
-growth can exceed the soft cap. Fresh required geometry preflights its first
-required material owner together. Zero-growth work can reuse slots under pressure;
+material admission. Existing map and unchanged material owners remain pinned;
+required growth can exceed the soft cap. Replacing a certified material block is
+new demand and follows the object's optional classification. Fresh required
+geometry preflights its first required material owner together. Zero-growth work can reuse slots under pressure;
 smaller fitting arrivals continue past a blocked target. Admission preserves the
 existing retention eviction policy; a blocked optional target can wait for slots
 to become free or for the cap to increase.
@@ -545,9 +606,10 @@ buffer also reaches its created staging replacement, including empty record
 clears and lookup updates. Duplicate content bytes consume the global voxel
 upload budget; payload textures are written once. Lookup writes retain their
 separate existing budget scope. Mirroring stores no replay journal. Existing
-material-generation invalidation still applies at publication and can require
-material reupload before readiness returns, while copied material bytes remain
-available for rendering.
+material-generation invalidation still applies to private tables at publication
+and can require material reupload before readiness returns. Fully migrated,
+already uploaded immutable blocks carry acknowledgement into the published
+generation; unuploaded blocks still wait for service.
 
 An allocation or migration error preserves published resources and dirty CPU
 authority. Unused unpublished buffers can release immediately; staging resources

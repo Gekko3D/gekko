@@ -170,7 +170,7 @@ func (m *GpuBufferManager) advanceVoxelGPUStage() (bool, error) {
 			m.retireVoxelBuffer(stage.sources[i], stage.old[i], stage.backend)
 			*destination = buffer
 			if i == 3 {
-				m.MaterialBufferGeneration++
+				m.advanceMaterialBufferGeneration(stage.sources[i] != nil && stage.copied[i] == stage.old[i])
 			}
 		}
 	}

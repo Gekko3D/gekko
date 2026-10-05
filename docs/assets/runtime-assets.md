@@ -66,6 +66,8 @@ content revision. Core renderer sync preserves these mutable inputs with live
 comparison against independently owned, bounded fingerprint snapshots; see
 [renderer ownership](../renderer/runtime.md#effective-palette-fingerprints).
 Mutate aliased palette data on the main thread, not concurrently with extraction.
+Static palettes can also certify immutable GPU sharing; mutable per-instance rows
+remain independent. See [material ownership](../renderer/runtime.md#immutable-gpu-material-blocks).
 
 ## Common Creation Paths
 

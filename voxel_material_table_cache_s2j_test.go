@@ -51,8 +51,8 @@ func TestS2jMaterialCandidatesBoundedAmidDistinctHiddenAndVisiblePins(t *testing
 	f.cmd.RemoveComponents(warm[0], VoxelRenderHiddenComponent{})
 	f.app.FlushCommands()
 	f.sync()
-	if &s2cTable(t, f.state, warm[0])[0] != &borrowed[0][0] {
-		t.Fatal("warm hit did not reuse borrowed material backing")
+	if !reflect.DeepEqual(s2cTable(t, f.state, warm[0]), borrowed[0]) {
+		t.Fatal("warm hit changed retained material content")
 	}
 	f.cmd.AddComponents(warm[0], VoxelRenderHiddenComponent{})
 	f.app.FlushCommands()
@@ -84,7 +84,7 @@ func TestS2jMaterialCandidatesBoundedAmidDistinctHiddenAndVisiblePins(t *testing
 	f.app.FlushCommands()
 	f.sync()
 	s2cStats(t, f.state, pins+1, pins+4, 2)
-	if &s2cTable(t, f.state, warm[0])[0] != &borrowed[0][0] {
+	if !reflect.DeepEqual(s2cTable(t, f.state, warm[0]), borrowed[0]) {
 		t.Fatal("recently hit inactive key was selected over older keys")
 	}
 	f.cmd.AddComponents(warm[0], VoxelRenderHiddenComponent{})
@@ -129,8 +129,8 @@ func TestS2jMaterialSavedRecencyEmptyCleanupAndRebuild(t *testing.T) {
 	f.app.FlushCommands()
 	f.sync()
 	s2cStats(t, f.state, 2, 3, 1)
-	if &s2cTable(t, f.state, a)[0] != &borrowed[0] {
-		t.Fatal("recent active A failed to retain its exact warm backing")
+	if !reflect.DeepEqual(s2cTable(t, f.state, a), borrowed) {
+		t.Fatal("recent active A failed to retain its warm material content")
 	}
 	// B was the victim: making it active must build rather than hit a dead key.
 	f.cmd.RemoveComponents(b, VoxelRenderHiddenComponent{})
@@ -159,8 +159,8 @@ func TestS2jMaterialSavedRecencyEmptyCleanupAndRebuild(t *testing.T) {
 	f.sync()
 	stats = s2cStats(t, f.state, 1, 5, 1)
 	if stats.Bytes != charge || stats.PinnedBytes != charge || stats.EvictionCandidateVisits != 4 ||
-		&s2cTable(t, f.state, rebuilt)[0] == &borrowed[0] || !reflect.DeepEqual(borrowed, saved) {
-		t.Fatalf("rebuild after empty cleanup reused dead backing or selected active victim: %+v", stats)
+		!reflect.DeepEqual(s2cTable(t, f.state, rebuilt), saved) || !reflect.DeepEqual(borrowed, saved) {
+		t.Fatalf("rebuild after empty cleanup changed material content or selected active victim: %+v", stats)
 	}
 	s2cColor(t, f.state, rebuilt, [4]uint8{40, 80, 120, 255})
 }

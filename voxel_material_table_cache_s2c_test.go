@@ -138,7 +138,7 @@ func TestS2cSharedActiveTablesPressureAndBorrowedLifetime(t *testing.T) {
 	f.app.FlushCommands()
 	f.sync()
 	s := s2cStats(t, f.state, 1, 1, 1)
-	if s.Bytes != charge || s.PinnedBytes != charge || s.PressureBytes != charge || &s2cTable(t, f.state, second)[0] != &borrowed[0] {
+	if s.Bytes != charge || s.PinnedBytes != charge || s.PressureBytes != charge || p4Binding(t, f.state.GetVoxelObject(second)).Identity() != p4Binding(t, f.state.GetVoxelObject(first)).Identity() {
 		t.Fatalf("shared active key must be retained/charged once: %+v", s)
 	}
 	model := f.voxelModel()
@@ -215,7 +215,7 @@ func TestS2cMaterialCacheLRUFollowsRecentActiveFrames(t *testing.T) {
 	f.app.FlushCommands()
 	f.sync()
 	s2cStats(t, f.state, 2, 3, 1)
-	if &s2cTable(t, f.state, a)[0] != &aTable[0] {
+	if !reflect.DeepEqual(s2cTable(t, f.state, a), aTable) {
 		t.Fatal("recent active A should reuse retained table")
 	}
 	f.cmd.AddComponents(a, VoxelRenderHiddenComponent{})

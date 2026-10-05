@@ -13,6 +13,9 @@ import (
 // target, revision, object material table and pending generation.
 func c3h13cUploaded(state *VoxelRtState, obj *core.VoxelObject, target *volume.XBrickMap) {
 	previous := state.RtApp.BufferManager
+	// The fake below models a completed private queued upload. Clear the
+	// original proof before copying; GPU P4 tests own certified-block acknowledgement.
+	obj.SetImmutableMaterialTable(nil)
 	fake := *obj
 	fake.XBrickMap = target
 	completeStreamedVoxelUpload(state, &fake)

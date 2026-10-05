@@ -1,6 +1,7 @@
 package gpu
 
 import (
+	"bytes"
 	"sort"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
@@ -38,15 +39,22 @@ const (
 )
 
 type voxelUploadWork struct {
-	kind              voxelUploadKind
-	object            *core.VoxelObject
-	sectorKey         [3]int
-	brickKey          [6]int
-	bytes             uint64
-	sectors, bricks   uint32
-	target            *volume.XBrickMap
-	targetRevision    uint64
-	pendingGeneration uint64
+	material           *MaterialGpuAllocation
+	materialBlock      *materialGPUBlock
+	materialData       []byte
+	materialRows       []core.Material
+	materialPtr        uintptr
+	materialLen        int
+	materialGeneration uint64
+	kind               voxelUploadKind
+	object             *core.VoxelObject
+	sectorKey          [3]int
+	brickKey           [6]int
+	bytes              uint64
+	sectors, bricks    uint32
+	target             *volume.XBrickMap
+	targetRevision     uint64
+	pendingGeneration  uint64
 }
 
 // Legacy helper work literals resolve their target at use; production queues
@@ -69,6 +77,21 @@ func (w voxelUploadWork) targetCurrent() bool {
 	return w.object.RenderVoxelMap() == target
 }
 
+func (m *GpuBufferManager) materialWorkCurrent(w voxelUploadWork) bool {
+	if w.material == nil {
+		return w.targetCurrent()
+	}
+	if m.MaterialAllocations[w.object] != w.material || m.MaterialBufferGeneration != w.materialGeneration {
+		return false
+	}
+	if w.materialBlock != nil {
+		table := w.object.ImmutableMaterialTable()
+		return table != nil && table.Identity() == w.materialBlock.table.Identity() && w.material.block == w.materialBlock
+	}
+	ptr, length := materialTableIdentity(w.object.MaterialTable)
+	return w.materialPtr == ptr && w.materialLen == length && bytes.Equal(w.materialData, buildMaterialData(w.object.MaterialTable))
+}
+
 func (w voxelUploadWork) uploadOrder() uint64 {
 	if w.object.VoxelUploadOrder != 0 {
 		return w.object.VoxelUploadOrder
@@ -79,17 +102,23 @@ func (w voxelUploadWork) uploadOrder() uint64 {
 // Identities retain coordinates and first service frame, never encoded payloads.
 // Materials also include the current map so detachment resets their age.
 type voxelUploadIdentity struct {
-	kind       voxelUploadKind
-	xbm        *volume.XBrickMap
-	object     *core.VoxelObject
-	coordinate [6]int
+	kind          voxelUploadKind
+	xbm           *volume.XBrickMap
+	object        *core.VoxelObject
+	materialBlock *materialGPUBlock
+	coordinate    [6]int
 }
 
 func (w voxelUploadWork) identity() voxelUploadIdentity {
 	id := voxelUploadIdentity{kind: w.kind, xbm: w.targetMap()}
 	switch w.kind {
 	case voxelUploadMaterial:
-		id.object = w.object
+		if w.materialBlock != nil {
+			id.materialBlock = w.materialBlock
+			id.xbm = nil
+		} else {
+			id.object = w.object
+		}
 	case voxelUploadSector:
 		copy(id.coordinate[:3], w.sectorKey[:])
 	case voxelUploadBrick:
@@ -157,6 +186,14 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 	if m.MaterialAllocations == nil {
 		m.MaterialAllocations = make(map[*core.VoxelObject]*MaterialGpuAllocation)
 	}
+	var materialObjects []*core.VoxelObject
+	for _, target := range voxelServiceTargets(scene) {
+		if target.pendingGeneration == 0 && m.voxelMapAdmitted(target.mapRef) && m.voxelObjectAdmitted(target.object) {
+			materialObjects = append(materialObjects, target.object)
+		}
+	}
+	m.prepareMaterialAttachments(materialObjects)
+	materialQueue := make(map[*materialGPUBlock]int)
 	var queue []voxelUploadWork
 	liveMaps := make(map[*volume.XBrickMap]bool)
 	liveObjects := make(map[*core.VoxelObject]bool)
@@ -191,26 +228,36 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 		}
 
 		mat := m.MaterialAllocations[obj]
-		if mat == nil {
-			mat = &MaterialGpuAllocation{MaterialTableLen: -1}
-			m.MaterialAllocations[obj] = mat
-		}
-		rows := materialUploadRows(len(obj.MaterialTable))
-		if mat.MaterialCapacity < uint32(rows) {
-			if mat.MaterialCapacity > 0 {
-				m.MaterialAlloc.FreeSlot(mat.MaterialOffset / materialBlockCapacity)
-			}
-			mat.MaterialOffset = m.MaterialAlloc.Alloc() * materialBlockCapacity
-			mat.MaterialCapacity = materialBlockCapacity
-			mat.MaterialTableLen = -1
-		}
 		ptr, length := materialTableIdentity(obj.MaterialTable)
-		if mat.MaterialTablePtr != ptr || mat.MaterialTableLen != length || mat.BufferGeneration != m.MaterialBufferGeneration {
-			bytes := uint64(rows) * 64
+		source := mat
+		if mat.block != nil {
+			source = &mat.block.allocation
+		}
+		if source.MaterialTableLen < 0 || (mat.block == nil && (mat.MaterialTablePtr != ptr || mat.MaterialTableLen != length)) || source.BufferGeneration != m.MaterialBufferGeneration {
+			var rows []core.Material
+			var data []byte
+			if mat.block != nil {
+				rows, data = mat.block.rows, mat.block.data
+			} else {
+				rows = append([]core.Material(nil), obj.MaterialTable...)
+				data = buildMaterialData(rows)
+			}
+			bytes := uint64(len(data))
 			if m.voxelBufferMirrored(3) {
 				bytes *= 2
 			}
-			queue = append(queue, voxelUploadWork{kind: voxelUploadMaterial, object: obj, target: xbm, targetRevision: xbm.Revision, bytes: bytes})
+			work := voxelUploadWork{kind: voxelUploadMaterial, object: obj, target: xbm, targetRevision: xbm.Revision, bytes: bytes, material: mat, materialBlock: mat.block, materialData: data, materialRows: rows, materialPtr: ptr, materialLen: length, materialGeneration: m.MaterialBufferGeneration}
+			if mat.block != nil {
+				if index, exists := materialQueue[mat.block]; exists {
+					previous := queue[index]
+					if obj.VoxelUploadPriority < previous.object.VoxelUploadPriority || (obj.VoxelUploadPriority == previous.object.VoxelUploadPriority && work.uploadOrder() < previous.uploadOrder()) {
+						queue[index] = work
+					}
+					continue
+				}
+				materialQueue[mat.block] = len(queue)
+			}
+			queue = append(queue, work)
 		}
 	}
 	for _, xbm := range maps {
@@ -251,7 +298,10 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 	// Deferred live work retains its first service frame. Detachment still
 	// removes identities, without needing to encode or enqueue denied work.
 	for id, first := range m.voxelUploadAges {
-		if !liveMaps[id.xbm] || (id.object != nil && !liveObjects[id.object]) {
+		if id.materialBlock != nil && m.materialBlocks[id.materialBlock.table.Identity()] != id.materialBlock {
+			continue
+		}
+		if (id.materialBlock == nil && !liveMaps[id.xbm]) || (id.object != nil && !liveObjects[id.object]) {
 			continue
 		}
 		if !m.voxelMapAdmitted(id.xbm) || (id.kind == voxelUploadMaterial && !m.voxelObjectAdmitted(id.object)) {
@@ -301,7 +351,7 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 	})
 	remaining := m.VoxelUploadBudget()
 	for _, w := range queue {
-		if !w.targetCurrent() {
+		if !w.targetCurrent() || (w.kind == voxelUploadMaterial && !m.materialWorkCurrent(w)) {
 			continue
 		}
 		if w.bytes > remaining.MaxBytes || w.sectors > remaining.MaxSectors || w.bricks > remaining.MaxBricks {
@@ -315,13 +365,21 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 		material := m.MaterialAllocations[w.object]
 		var opacity materialShadowOpacity
 		if w.kind == voxelUploadMaterial {
-			opacity = captureMaterialShadowOpacity(material, w.object.MaterialTable)
+			if w.materialBlock != nil {
+				opacity = captureMaterialShadowOpacity(nil, w.materialRows)
+				opacity.writtenRows = materialBlockCapacity
+			} else {
+				opacity = captureMaterialShadowOpacity(material, w.object.MaterialTable)
+			}
 		}
 		if execute == nil || !execute(w) {
 			continue
 		}
 		// Epochs describe written allocations, even when selection changed during execution.
 		if w.kind == voxelUploadMaterial {
+			if w.materialBlock != nil {
+				material = &w.materialBlock.allocation
+			}
 			if material != nil {
 				if material.shadowOpacity != opacity {
 					material.shadowUploadEpoch++
@@ -341,27 +399,57 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 		if w.kind == voxelUploadMaterial {
 			m.VoxelMaterialsUploaded++
 		}
-		// Written bytes consume admission even if execution changed selection or
-		// revision. Such work cannot acknowledge any newer dirty queues.
-		if !w.targetCurrent() {
-			continue
-		}
-		xbm := w.targetMap()
-		switch w.kind {
-		case voxelUploadMaterial:
-			mat := m.MaterialAllocations[w.object]
-			mat.MaterialTablePtr, mat.MaterialTableLen = materialTableIdentity(w.object.MaterialTable)
-			mat.BufferGeneration = m.MaterialBufferGeneration
-			mat.HasTransparency = materialTableHasTransparency(w.object.MaterialTable)
-		case voxelUploadSector:
-			delete(xbm.DirtySectors, w.sectorKey)
-			for i := 0; i < 64; i++ {
-				delete(xbm.DirtyBricks, [6]int{w.sectorKey[0], w.sectorKey[1], w.sectorKey[2], i % 4, (i / 4) % 4, i / 16})
+		// A shared write acknowledges its captured block even if its representative
+		// changed; only still-current attachments may inherit that acknowledgement.
+		if w.kind == voxelUploadMaterial && w.materialBlock != nil {
+			block := w.materialBlock
+			block.allocation.MaterialTableLen = len(w.materialRows)
+			block.allocation.BufferGeneration = w.materialGeneration
+			block.allocation.HasTransparency = materialTableHasTransparency(w.materialRows)
+			for obj, a := range block.attachments {
+				if table := obj.ImmutableMaterialTable(); table != nil && table.Identity() == block.table.Identity() {
+					m.acknowledgeMaterialAttachment(obj, a, block)
+				}
 			}
-		case voxelUploadBrick:
-			delete(xbm.DirtyBricks, w.brickKey)
+		} else {
+			if !w.targetCurrent() || (w.kind == voxelUploadMaterial && !m.materialWorkCurrent(w)) {
+				continue
+			}
+			xbm := w.targetMap()
+			switch w.kind {
+			case voxelUploadMaterial:
+				mat := m.MaterialAllocations[w.object]
+				mat.MaterialTablePtr, mat.MaterialTableLen = materialTableIdentity(w.object.MaterialTable)
+				mat.BufferGeneration = m.MaterialBufferGeneration
+				mat.HasTransparency = materialTableHasTransparency(w.object.MaterialTable)
+			case voxelUploadSector:
+				delete(xbm.DirtySectors, w.sectorKey)
+				for i := 0; i < 64; i++ {
+					delete(xbm.DirtyBricks, [6]int{w.sectorKey[0], w.sectorKey[1], w.sectorKey[2], i % 4, (i / 4) % 4, i / 16})
+				}
+			case voxelUploadBrick:
+				delete(xbm.DirtyBricks, w.brickKey)
+			}
 		}
 		delete(ages, w.identity())
+	}
+	// Executors may remove objects while a packet is being queued. Reconcile
+	// removals once after service, before any readiness/scene publication.
+	if scene != nil {
+		clear(liveObjects)
+		for _, obj := range scene.Objects {
+			liveObjects[obj] = true
+		}
+		for obj := range m.MaterialAllocations {
+			if !liveObjects[obj] {
+				m.releaseMaterialAllocation(obj)
+			}
+		}
+		for obj := range m.managedMaterialObjects {
+			if !liveObjects[obj] {
+				delete(m.managedMaterialObjects, obj)
+			}
+		}
 	}
 	m.voxelUploadAges = ages
 	for _, xbm := range maps {

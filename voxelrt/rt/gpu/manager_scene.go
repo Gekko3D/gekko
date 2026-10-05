@@ -198,6 +198,10 @@ func writeObjectParamsData(dst []byte, obj *core.VoxelObject, alloc *ObjectGpuAl
 	if len(dst) < objectParamsSizeBytes || obj == nil || obj.RenderVoxelMap() == nil || alloc == nil {
 		return
 	}
+	if !materialPublicationReady(obj, alloc, matAlloc) {
+		writeRejectedObjectParams(dst)
+		return
+	}
 	binary.LittleEndian.PutUint32(dst[0:4], obj.RenderVoxelMap().ID)
 	binary.LittleEndian.PutUint32(dst[4:8], 0)
 	binary.LittleEndian.PutUint32(dst[8:12], 0)

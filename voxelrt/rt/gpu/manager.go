@@ -503,11 +503,13 @@ type GpuBufferManager struct {
 	BrickToSlot    map[*volume.Brick]PayloadSlot
 	BrickToAuxSlot map[*volume.Brick]uint32
 
-	MaterialAlloc       SlotAllocator // Allocates blocks of 256 materials (16KB each)
-	Allocations         map[*volume.XBrickMap]*ObjectGpuAllocation
-	MaterialAllocations map[*core.VoxelObject]*MaterialGpuAllocation
-	retainedVoxelMaps   map[*volume.XBrickMap]*retainedVoxelMapEntry
-	voxelOwnership      voxelAllocationOwnership
+	MaterialAlloc          SlotAllocator // Allocates blocks of 256 materials (16KB each)
+	Allocations            map[*volume.XBrickMap]*ObjectGpuAllocation
+	MaterialAllocations    map[*core.VoxelObject]*MaterialGpuAllocation
+	materialBlocks         map[string]*materialGPUBlock
+	managedMaterialObjects map[*core.VoxelObject]bool
+	retainedVoxelMaps      map[*volume.XBrickMap]*retainedVoxelMapEntry
+	voxelOwnership         voxelAllocationOwnership
 
 	// Smooth streaming state
 	SectorsPerFrame                uint32
@@ -604,6 +606,7 @@ type retiredBindGroup struct {
 
 // ObjectGpuAllocation tracks the GPU memory regions assigned to a specific object.
 type ObjectGpuAllocation struct {
+	materialOwner        *GpuBufferManager
 	shadowUploadEpoch    uint64
 	ownerToken           *voxelAllocationOwnerToken
 	ownerMap             *volume.XBrickMap
@@ -617,6 +620,8 @@ type ObjectGpuAllocation struct {
 }
 
 type MaterialGpuAllocation struct {
+	managedOwner      *GpuBufferManager
+	block             *materialGPUBlock
 	shadowOpacity     materialShadowOpacity
 	shadowUploadEpoch uint64
 	MaterialOffset    uint32 // In elements (64 bytes each)

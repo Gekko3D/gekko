@@ -173,6 +173,15 @@ type VoxelRtState struct {
 	materialFingerprints               map[AssetId]voxelMaterialFingerprint
 	materialFingerprintBytes           uint64
 	materialFingerprintsPruned         bool
+	// Semantic observations account only private current-palette snapshots,
+	// canonical keys and sealed rows, excluding public instance row copies.
+	VoxelMaterialSemanticIdentityBuildCount uint64
+	VoxelMaterialSemanticIdentityCount      int
+	VoxelMaterialSemanticIdentityBytes      uint64
+	materialSemanticServer                  *AssetServer
+	materialSemantics                       map[AssetId]*voxelMaterialSemantic
+	materialSemanticBytes                   uint64
+	lastMaterialSemantics                   map[*core.VoxelObject]*voxelMaterialSemantic
 
 	materialTableRetention voxelMaterialTableRetention
 }

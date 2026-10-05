@@ -28,7 +28,20 @@ func voxelAdmissionRequest(target voxelServiceTarget, material bool) voxelAdmiss
 }
 
 func voxelAdmissionMaterialRequired(m *GpuBufferManager, obj *core.VoxelObject) bool {
-	return !obj.VoxelGPUAdmissionOptional || m.MaterialAllocations[obj] != nil
+	if !obj.VoxelGPUAdmissionOptional {
+		return true
+	}
+	allocation := m.MaterialAllocations[obj]
+	if allocation == nil {
+		return false
+	}
+	// Residency protects the existing binding, not a new certified request.
+	// Mutable legacy owners retain their prior admission behavior.
+	table := obj.ImmutableMaterialTable()
+	if allocation.block != nil || table != nil {
+		return materialAttachmentMatches(allocation, table)
+	}
+	return true
 }
 
 func voxelAdmissionOrder(target voxelServiceTarget) uint64 {

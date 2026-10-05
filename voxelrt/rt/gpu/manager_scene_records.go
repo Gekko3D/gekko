@@ -126,6 +126,9 @@ func sceneWorldBoundsKey(obj *core.VoxelObject) sceneBoundsKey {
 }
 
 func (m *GpuBufferManager) sceneObjectParamsKey(obj *core.VoxelObject) sceneParamsKey {
+	if !materialPublicationReady(obj, m.Allocations[obj.RenderVoxelMap()], m.MaterialAllocations[obj]) {
+		return sceneParamsKey{admissionRejected: true}
+	}
 	if m.voxelAdmissionActive && (m.Allocations[obj.RenderVoxelMap()] == nil || m.MaterialAllocations[obj] == nil || !m.voxelLookupMaps[obj.RenderVoxelMap()]) {
 		return sceneParamsKey{admissionRejected: true}
 	}
@@ -200,10 +203,7 @@ func (m *GpuBufferManager) prepareSceneObject(obj *core.VoxelObject, origin mgl3
 		if paramsKey.admissionRejected {
 			// Zero extent makes every direct lookup reject before a table read,
 			// including map ID zero and denied materials sharing required maps.
-			clear(row.params[:])
-			binary.LittleEndian.PutUint32(row.params[16:20], ^uint32(0))
-			binary.LittleEndian.PutUint32(row.params[108:112], LookupModeDirect)
-			binary.LittleEndian.PutUint32(row.params[124:128], DirectSectorLookupInvalid)
+			writeRejectedObjectParams(row.params[:])
 		}
 		row.paramsKey = paramsKey
 		row.paramsRevision++
