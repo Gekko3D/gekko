@@ -197,3 +197,25 @@ env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-w3b-native docs/roadmaps
 
 Native access requires a desktop-capable GPU environment. These checks establish
 sector traversal behavior, not FPS or removal of brick, voxel and tree64 limits.
+
+
+## Inner Grid Native Regression
+
+The W3c diagnostic extracts initialization, loop conditions and stepping from
+the three production sector-based brick loops and four voxel loops. It replaces
+payload/shading work with a GPU coordinate trace. It checks owning-grid bounds,
+signed progress and structural visit bounds, and compares ordinary-ray intervals
+with independent float64 cell slabs. Numerical fixtures check termination and
+indexing safety without promising full geometric accuracy. This probe does not
+exercise rendered material aliasing; rerun the W3b rendering diagnostic and P3c
+packed/default capture comparison for production pipeline coverage.
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-w3c-grid docs/roadmaps/diagnostics/w3c_cell_grid_bounds.go
+/tmp/gekko-w3c-grid
+```
+
+Use `-dump-wgsl /tmp/w3c-probes` to inspect or validate the seven source-derived
+modules with Naga before GPU execution. Native execution requires GPU access.
+Tree64 and its fallback, complete floating-point accuracy and FPS are outside
+this check.

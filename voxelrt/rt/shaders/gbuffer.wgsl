@@ -957,9 +957,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
             var t_max_brick = (sector_origin + vec3<f32>(brick_pos) * BRICK_SIZE + select(vec3<f32>(0.0), vec3<f32>(BRICK_SIZE), step > vec3<i32>(0)) - ray.origin) * inv_dir;
             // Stationary axes cannot cross before this clipped interval ends.
             t_max_brick = select(t_max_brick, vec3<f32>(t_sector_exit), step == vec3<i32>(0));
-            var iter_bricks = 0;
-            while (t_brick < t_sector_exit && iter_bricks < 16) {
-                iter_bricks += 1;
+            while (t_brick < t_sector_exit && all(brick_pos >= vec3<i32>(0)) && all(brick_pos < vec3<i32>(4))) {
                 if (all(brick_pos >= vec3<i32>(0)) && all(brick_pos < vec3<i32>(4))) {
                     let bvid = vec3<u32>(brick_pos);
                     let brick_idx_local = bvid.x + bvid.y * 4u + bvid.z * 16u;
@@ -1013,9 +1011,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                             let t_delta_1 = abs(1.0 * inv_dir);
                             let b_mask_lo = brick.occupancy_mask_lo;
                             let b_mask_hi = brick.occupancy_mask_hi;
-                            var iter_micro = 0;
-                            while (t_micro < t_brick_exit && iter_micro < 32) {
-                                iter_micro += 1;
+                            while (t_micro < t_brick_exit && all(voxel_pos >= vec3<i32>(0)) && all(voxel_pos < vec3<i32>(8))) {
                                 let vvid = vec3<u32>(voxel_pos);
                                 let voxel_idx = vvid.x + vvid.y * 8u + vvid.z * 64u;
                                 let mvid = vvid / 2u;

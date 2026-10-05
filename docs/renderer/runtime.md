@@ -944,7 +944,7 @@ pushes the root only if it has a leaf or positive child index, rejecting that
 sentinel even when the allocated buffer retains stale trailing nodes. Buffer
 capacity is not the live tree size. CPU picking and particle collision enumerate
 instances directly; their candidate coverage does not depend on these scene BVHs.
-Inner brick, voxel and tree64 traversal limits remain separate constraints.
+Tree64 and its voxel fallback retain separate traversal limits.
 
 ### Sector traversal
 
@@ -975,13 +975,36 @@ progress alone. Endpoint boundary cells may produce a zero-length interval.
 
 Nested sector-based brick and voxel walks mask stationary-axis boundary times
 to their parent interval's end, preventing zero-axis steps from rewinding the
-ray parameter. Their visit limits and nonzero-axis arithmetic remain unchanged.
+ray parameter. Their nonzero-axis arithmetic remains unchanged.
 
 This contract corrects sector stepping within the supplied clip. Shared slab
 clipping and tree64 traversal retain their numerical behavior and limits.
 Float32 coordinate and distance precision still constrain geometry
 at large magnitudes; sector completion does not establish full voxel accuracy
 there. CPU interaction and particle collision retain their existing paths.
+
+### Inner brick and voxel traversal
+
+Sector-based opaque, shadow and transparent paths stop their inner walks at
+both the parent ray interval and the owning local grid boundary. Brick loop
+coordinates stay in `[0,4)^3`; voxel loop coordinates stay in `[0,8)^3` before
+any body processing or unsigned index conversion. These loops have no fixed
+visit counters.
+
+Initialization clamps each coordinate into its grid. Each nonzero-axis step
+moves one coordinate by its fixed sign, so a valid walk visits at most
+`1 + 3*(4-1) = 10` bricks or `1 + 3*(8-1) = 22` voxels. A stationary axis has
+its boundary time masked to the parent interval end; selecting it ends the
+walk through the existing time condition. Integer bounds ensure termination
+when float32 time increments or the existing epsilon round away, and prevent
+out-of-grid coordinates from aliasing other cells' occupancy or material data.
+
+The former counters already exceeded those valid-grid bounds. This change
+establishes geometric termination and indexing safety, rather than increasing
+ordinary valid path coverage. Existing biases, reciprocal clamps, hit ordering,
+normal/material reads and transparency integration retain their arithmetic.
+Tiny-direction or extreme-coordinate geometric accuracy, transparency segment
+clipping, and Tree64 traversal require separate work.
 
 ### Voxel capacity planning
 

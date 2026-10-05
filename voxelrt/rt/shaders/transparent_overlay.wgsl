@@ -1336,9 +1336,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                 t_max_brick = select(t_max_brick, vec3<f32>(t_sector_exit), step == vec3<i32>(0));
                 let t_delta_brick = abs(BRICK_SIZE * inv_dir);
 
-                var it_brick = 0;
-                while (t_brick < t_sector_exit && it_brick < 64) {
-                  it_brick += 1;
+                while (t_brick < t_sector_exit && all(brick_pos >= vec3<i32>(0)) && all(brick_pos < vec3<i32>(4))) {
                   if (all(brick_pos >= vec3<i32>(0)) && all(brick_pos < vec3<i32>(4))) {
                     let bvid = vec3<u32>(u32(brick_pos.x), u32(brick_pos.y), u32(brick_pos.z));
                     let brick_idx_local = bvid.x + bvid.y * 4u + bvid.z * 16u;
@@ -1371,9 +1369,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                           var t_max_micro = (brick_origin + vec3<f32>(voxel_pos) * 1.0 + select(vec3<f32>(0.0), vec3<f32>(1.0), step > vec3<i32>(0)) - ray_os.origin) * inv_dir;
                           t_max_micro = select(t_max_micro, vec3<f32>(t_brick_exit), step == vec3<i32>(0));
                           let t_delta_1 = abs(1.0 * inv_dir);
-                          var it_micro = 0;
-                          while (t_micro < t_brick_exit && it_micro < 32) {
-                            it_micro += 1;
+                          while (t_micro < t_brick_exit && all(voxel_pos >= vec3<i32>(0)) && all(voxel_pos < vec3<i32>(8))) {
                             let t_next = min(t_max_micro.x, min(t_max_micro.y, t_max_micro.z));
                             let dt = max(0.0, t_next - t_micro);
                             if (dt > 0.0) {
@@ -1471,9 +1467,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                         let t_delta_1 = abs(1.0 * inv_dir);
                         let b_mask_lo = brick.occupancy_mask_lo;
                         let b_mask_hi = brick.occupancy_mask_hi;
-                        var it_micro = 0;
-                        while (t_micro < t_brick_exit && it_micro < 32) {
-                          it_micro += 1;
+                        while (t_micro < t_brick_exit && all(voxel_pos >= vec3<i32>(0)) && all(voxel_pos < vec3<i32>(8))) {
                           let vvid = vec3<u32>(u32(voxel_pos.x), u32(voxel_pos.y), u32(voxel_pos.z));
                           let mvid = vvid / 2u;
                           let micro_idx = mvid.x + mvid.y * 4u + mvid.z * 16u;
