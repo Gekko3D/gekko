@@ -45,3 +45,20 @@ when the selected scene also contains downstream casters. Unsupported or invalid
 projection/bounds inputs must retain conservative membership. Periodic cadence,
 forced camera refresh, scene caster selection and cached map/transform publication
 keep their existing owners. No shader traversal or ECS changes are required.
+
+
+## R2d ownership decision
+
+Shadow dispatch owns an immutable record snapshot for each call. Queue writes
+cannot publish distinct bucket contents to one storage buffer before a shared
+submission: earlier encoded passes can observe later writes. Encoder-ordered
+copies publish each bucket immediately before its compute pass. This preserves
+resolution-specific work sizes, the existing 24-byte records and shader bindings.
+
+An immutable packet per call also supports multiple dispatch calls before one
+submit without relying on frame counters or caller slice lifetime. Permanent
+per-resolution buffers would still need a policy for same-resolution repeated
+calls. Shader base-index or dynamic-offset designs add a broader layout contract;
+ordered copies fit the existing resource manager. Native parity is verified by the R2d diagnostic; recording cost remains comparable
+in the measured fixture. Transient packet allocation is a tradeoff; GPU timing and
+full gameplay visual checks remain unverified.

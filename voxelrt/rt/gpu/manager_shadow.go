@@ -212,39 +212,74 @@ func (m *GpuBufferManager) DispatchShadowPass(encoder *wgpu.CommandEncoder, upda
 		return
 	}
 
-	for _, resolution := range []uint32{512, 256, 128, shadowAtlasLayerResolution} {
-		bucket := make([]core.ShadowUpdate, 0, len(updates))
+	// Each call owns an immutable packet. Queue writes to shared storage would
+	// overwrite earlier buckets (or earlier calls) before the encoder executes.
+	resolutions := [4]uint32{512, 256, 128, shadowAtlasLayerResolution}
+	var counts [4]int
+	total, maxCount := 0, 0
+	for bucket, resolution := range resolutions {
 		for _, update := range updates {
 			if update.Resolution == resolution {
-				bucket = append(bucket, update)
+				counts[bucket]++
 			}
 		}
-		if len(bucket) == 0 {
+		total += counts[bucket]
+		maxCount = max(maxCount, counts[bucket])
+	}
+	if total == 0 {
+		return
+	}
+	packet, err := m.Device.CreateBuffer(&wgpu.BufferDescriptor{
+		Label: "Shadow Update Packet", Size: uint64(total) * 24,
+		Usage: wgpu.BufferUsageCopySrc, MappedAtCreation: true,
+	})
+	if err != nil {
+		panic(err)
+	}
+	// Recorded commands retain their source references. Release our handle after
+	// encoding; Destroy would invalidate copies that have not executed yet.
+	defer packet.Release()
+	data := packet.GetMappedRange(0, uint(total)*24)
+	var offsets [4]uint64
+	cursor := 0
+	for bucket, resolution := range resolutions {
+		offsets[bucket] = uint64(cursor)
+		for _, update := range updates {
+			if update.Resolution != resolution {
+				continue
+			}
+			binary.LittleEndian.PutUint32(data[cursor+0:], update.LightIndex)
+			binary.LittleEndian.PutUint32(data[cursor+4:], update.ShadowLayer)
+			binary.LittleEndian.PutUint32(data[cursor+8:], update.CascadeIndex)
+			binary.LittleEndian.PutUint32(data[cursor+12:], update.Kind)
+			binary.LittleEndian.PutUint32(data[cursor+16:], update.Tier)
+			binary.LittleEndian.PutUint32(data[cursor+20:], update.Resolution)
+			cursor += 24
+		}
+	}
+	if err := packet.Unmap(); err != nil {
+		panic(err)
+	}
+	// Empty non-nil data requests capacity without a queue write or a migration
+	// submission. Each bucket fully publishes its own live rows before reading.
+	if m.ensureBuffer("ShadowUpdatesBuf", &m.ShadowUpdatesBuf, []byte{}, wgpu.BufferUsageStorage, maxCount*24+1024) {
+		m.CreateShadowBindGroups()
+	}
+	for bucket, resolution := range resolutions {
+		if counts[bucket] == 0 {
 			continue
 		}
-		updateBytes := make([]byte, len(bucket)*24)
-		for i, update := range bucket {
-			offset := i * 24
-			binary.LittleEndian.PutUint32(updateBytes[offset+0:], update.LightIndex)
-			binary.LittleEndian.PutUint32(updateBytes[offset+4:], update.ShadowLayer)
-			binary.LittleEndian.PutUint32(updateBytes[offset+8:], update.CascadeIndex)
-			binary.LittleEndian.PutUint32(updateBytes[offset+12:], update.Kind)
-			binary.LittleEndian.PutUint32(updateBytes[offset+16:], update.Tier)
-			binary.LittleEndian.PutUint32(updateBytes[offset+20:], update.Resolution)
+		if err := encoder.CopyBufferToBuffer(packet, offsets[bucket], m.ShadowUpdatesBuf, 0, uint64(counts[bucket])*24); err != nil {
+			panic(err)
 		}
-		if m.ensureBuffer("ShadowUpdatesBuf", &m.ShadowUpdatesBuf, updateBytes, wgpu.BufferUsageStorage, 1024) {
-			m.CreateShadowBindGroups()
-		}
-
 		cPass := encoder.BeginComputePass(nil)
 		cPass.SetPipeline(m.ShadowPipeline)
 		cPass.SetBindGroup(0, m.ShadowBindGroup0, nil)
 		cPass.SetBindGroup(1, m.ShadowBindGroup1, nil)
 		cPass.SetBindGroup(2, m.ShadowBindGroup2, nil)
-
 		wgX := (resolution + 7) / 8
 		wgY := (resolution + 7) / 8
-		cPass.DispatchWorkgroups(uint32(wgX), uint32(wgY), uint32(len(bucket)))
+		cPass.DispatchWorkgroups(wgX, wgY, uint32(counts[bucket]))
 		cPass.End()
 	}
 }

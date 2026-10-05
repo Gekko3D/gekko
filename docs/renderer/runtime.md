@@ -708,6 +708,20 @@ storage; capacity-only setup does not publish a placeholder header. Update-buffe
 growth and explicit scene-resource rebinds therefore preserve the published
 light, layer, cascade, kind, tier and resolution fields.
 
+Each dispatch call snapshots supported records into an immutable GPU copy-source
+packet. Buckets preserve input order within the fixed 512, 256, 128, 1024 sequence;
+unsupported resolutions and empty calls do no work. The manager provisions shared
+storage once for the largest bucket, then records a copy to offset zero immediately
+before each bucket's compute pass. It never queue-writes bucket records or submits
+inside dispatch. Multiple calls on one encoder remain independent even if caller
+slices are reused or destination storage grows before submission. Encoded commands
+retain packet references; dispatch releases its source handle without destroying
+the resource. Existing storage and bind-group retirement rules remain in force.
+
+This adds one transient packet allocation per nonempty supported call and one
+copy command per bucket. Shader bindings, 24-byte records, resolution-specific
+work sizes, scheduling, cadence and cached map/transform pairing are unchanged.
+
 ### Transparency / WBOIT
 
 - accumulation: `RGBA16Float`
