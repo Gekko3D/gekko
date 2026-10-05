@@ -113,3 +113,28 @@ projection changes still rebuild cascades. This step touches app shadow recordin
 its behavioral tests and native Render verification, with no shader or projection
 changes. It removes redundant work when camera metadata/history changes without
 changing map inputs; it does not promise broad moving-camera cache reuse.
+
+
+## R2h ownership decision
+
+Directional projection generation owns world-anchored lateral texel snapping.
+The previous centered view projects its own center to approximately zero, so
+rounding that position does not stabilize the world grid. A fixed light basis
+projects the world center before XY quantization. Camera-relative frustum fitting
+keeps extents independent of lateral translation; light-space depth remains live.
+The returned culling view must match the generated projection.
+
+Snapping needs conservative coverage: for resolutions at least two, expanding the
+fit by one base texel covers the maximum half-final-texel center shift. A single
+texel map uses an unsnapped conservative fit; zero resolution retains the existing
+default. Exact dependency comparisons remain unchanged. Intrinsics, orientation,
+sun direction, depth changes, grid crossings and selected caster changes still
+invalidate their actual inputs. Cached maps and transforms remain paired.
+
+Keeping the centered snap repeats directional GPU work during sub-texel movement.
+Ignoring small matrix differences would hide real input changes, so approximate
+cache comparisons are rejected. World anchoring repairs the intended projection
+contract with a bounded grid/coverage change; it is not a scrolling clipmap or
+partial-map update. Geometry coverage tests and native Render readbacks validate
+stable cells and crossings. Full gameplay appearance and GPU/FPS gains remain
+separate measurements.

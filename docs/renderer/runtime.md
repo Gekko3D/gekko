@@ -705,7 +705,23 @@ The GPU manager's explicit forced-refresh request still schedules both cascades.
 App shadow recording uses ordinary dependency scheduling: missing camera history
 or motion metadata alone does not force work. `ShadowCameraMotion` remains a
 profiler diagnostic. Actual camera changes rebuild cascades when their projection
-or selected caster inputs change; this does not stabilize moving projections.
+or selected caster inputs change.
+
+Directional XY texel grids are anchored in a fixed world light basis. Frustum
+extents are fitted in camera-relative coordinates, so pure lateral translation
+with unchanged orientation/intrinsics does not alter fit size. The world center
+is rounded to the final texel grid; snapped zero is canonicalized for exact
+bitwise dependency keys. For resolutions at least two, one base texel of fit
+margin conservatively covers the maximum half-final-texel center shift. Resolution
+one uses an unsnapped fit; zero keeps the existing 1024 default. Culling and render
+projection use the same view and extent. Light-space depth is not quantized.
+
+Sub-cell motion can reuse maps only while exact projection and caster dependencies
+remain unchanged. Grid crossings, changed orientation/intrinsics/sun direction,
+depth motion and caster inputs still invalidate affected cascades. This changes
+grid placement and slightly expands coverage; it does not introduce approximate
+cache equality, scrolling clipmaps or partial-map updates.
+
 Cached cascade transforms stay paired with their maps until the scheduled rebuild
 publishes new transforms through `PrepareShadowLights`. This does not
 change projection generation, scene caster selection, shader traversal, GPU

@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2g are complete; R2 remains partial; other sections are proposals.
+Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2h are complete; R2 remains partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -803,10 +803,11 @@ Owners: app resources/frame graph, GPU render setup, resolve and feature shaders
 
 ### R2. Narrow shadow invalidation
 
-R2a–R2g completed local point/spot and per-cascade directional dependencies,
+R2a–R2h completed local point/spot and per-cascade directional dependencies,
 opacity-aware upload attribution, consistent scheduling and growth-safe update
 publication, including encoder-ordered mixed-resolution batches and dependency-driven
-local and directional reuse without camera-history force. Finer spatial work remains. [Ownership decision](streamed-rendering-r2.md);
+local and directional reuse without camera-history force, plus world-anchored
+directional texel grids. Finer spatial work remains. [Ownership decision](streamed-rendering-r2.md);
 [runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies).
 
 Retain camera-focused cascades/local-light budgets. Track changed bounds/revisions; dirty intersecting caster volumes only, including removal/streamed activation.
@@ -878,7 +879,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | R2d | `e244827` | Publish mixed-resolution and repeated-call shadow records in encoder order | [Runtime contract](../renderer/runtime.md#shadow-update-publication) |
 | R2e | `aec163a` | Reuse valid local shadow maps without periodic rebuilds | [Runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies) |
 | R2f | `23ecc35` | Reuse valid directional cascades without periodic rebuilds | [Runtime contract](../renderer/runtime.md#directional-shadow-cache-dependencies) |
-| R2g | This batch | Let exact dependencies control app shadow dispatch; retain motion diagnostics | [Runtime contract](../renderer/runtime.md#directional-shadow-cache-dependencies) |
+| R2g | `d2452be` | Let exact dependencies control app shadow dispatch; retain motion diagnostics | [Runtime contract](../renderer/runtime.md#directional-shadow-cache-dependencies) |
+| R2h | This batch | Anchor directional texel grids in world light space for sub-cell reuse | [Runtime contract](../renderer/runtime.md#directional-shadow-cache-dependencies) |
 | S1a | `e3f11cf` | Hidden residency and readiness tickets | [Design](streamed-rendering-s1a.md) |
 | S1b | `a539257` | Global content budgets, ordering and atlas backpressure | [Design](streamed-rendering-s1b.md) |
 | S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
@@ -3983,4 +3985,64 @@ env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2g-consumer-2 .
 env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2g-consumer-3 .
 # ../examples/testing-vox
 env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2g-consumer-4 .
+```
+
+
+### R2h: Anchor directional texel grids in world light space
+
+Projection generation now fits camera-relative frustum corners and snaps the
+world center in a fixed light basis. A conservative coverage margin protects the
+camera slice; depth remains unsnapped and dependency equality stays exact. This
+repairs the former centered-view snap, which did not stabilize the world grid.
+Grid placement and coverage change slightly. Contract:
+[directional shadow cache dependencies](../renderer/runtime.md#directional-shadow-cache-dependencies).
+
+Verification from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu ./voxelrt/rt/core ./voxelrt/rt/app
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/app ./voxelrt/rt/gpu -run '^TestR2' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2h-native docs/roadmaps/diagnostics/r2h_directional_stability.go
+/tmp/gekko-r2h-native
+git diff --check
+```
+
+Package and race checks pass, including unmodified resolution/tight-fit tests.
+Geometry tests cover signed cells/zero, independent cascade crossings, translated
+origins, rolled/off-axis cameras, all eight frustum corners, inverse/culling
+consistency and low-resolution fallbacks. Native actual `App.Render` readback
+starts with seven genuine caster-hit maps. Positive/negative 0.007230974-unit
+lateral movement within the 0.072309740 near texel keeps exact inputs and pixels,
+reducing directional records from two to zero. A near-grid crossing refreshes one
+cascade; a far-grid crossing refreshes both. Caster edits and depth motion still
+refresh affected maps. Cleared, fresh forced references match every reuse/crossing
+case. Previous native publication and reuse diagnostics also pass after rebuild:
+
+```sh
+for entry in r2c:shadow_publication r2d:shadow_batches r2e:shadow_reuse r2f:directional_reuse r2g:camera_shadow_reuse; do
+    shadow_step=${entry%%:*}
+    diagnostic_name=${entry#*:}
+    env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-${shadow_step}-native docs/roadmaps/diagnostics/${shadow_step}_${diagnostic_name}.go
+    /tmp/gekko-${shadow_step}-native
+done
+```
+
+Native diagnostics require desktop WebGPU and are not run by package-only tests.
+Reuse remains conditional on exact projection and selected-caster inputs; depth,
+orientation, intrinsics, sun direction and grid crossings can rebuild maps. Full
+gameplay appearance and GPU/FPS timing remain unmeasured.
+
+Consumer builds passed from their respective module directories:
+
+```sh
+# ../gekko-editor
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2h-consumer-0 .
+# ../actiongame
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2h-consumer-1 .
+# ../spacegame_go
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2h-consumer-2 .
+# ../spacesim
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2h-consumer-3 .
+# ../examples/testing-vox
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2h-consumer-4 .
 ```

@@ -108,34 +108,50 @@ func buildDirectionalShadowCascade(camera *core.CameraState, aspect float32, dir
 		farDist = nearDist + 1.0
 	}
 
-	corners := cameraSliceCorners(camera, aspect, nearDist, farDist)
-	up := shadowUpVector(dir)
-	center := mgl32.Vec3{}
+	// Fit in camera-relative coordinates so translating the camera does not
+	// perturb the extent. Retain its orientation and existing camera fallbacks.
+	relativeCamera := *camera
+	relativeCamera.Position = mgl32.Vec3{}
+	relativeCamera.LookAt = camera.LookAt.Sub(camera.Position)
+	corners := cameraSliceCorners(&relativeCamera, aspect, nearDist, farDist)
+	view := mgl32.LookAtV(mgl32.Vec3{}, dir, shadowUpVector(dir))
+	relativeCenter := mgl32.Vec3{}
 	for _, corner := range corners {
-		center = center.Add(corner)
+		relativeCenter = relativeCenter.Add(corner)
 	}
-	center = center.Mul(1.0 / float32(len(corners)))
-	eye := center.Sub(dir.Mul(directionalShadowDepth * 0.5))
-	view := mgl32.LookAtV(eye, center, up)
-
-	centerLS := view.Mul4x1(center.Vec4(1.0)).Vec3()
-	halfExtent := float32(0.0)
+	relativeCenter = relativeCenter.Mul(1.0 / float32(len(corners)))
+	relativeCenterLS := view.Mul4x1(relativeCenter.Vec4(1)).Vec3()
+	halfExtent := float32(0)
 	for _, corner := range corners {
-		cornerLS := view.Mul4x1(corner.Vec4(1.0)).Vec3()
-		halfExtent = maxf(halfExtent, float32(math.Abs(float64(cornerLS.X()-centerLS.X()))))
-		halfExtent = maxf(halfExtent, float32(math.Abs(float64(cornerLS.Y()-centerLS.Y()))))
+		cornerLS := view.Mul4x1(corner.Vec4(1)).Vec3()
+		halfExtent = maxf(halfExtent, float32(math.Abs(float64(cornerLS.X()-relativeCenterLS.X()))))
+		halfExtent = maxf(halfExtent, float32(math.Abs(float64(cornerLS.Y()-relativeCenterLS.Y()))))
 	}
-	if halfExtent < 1.0 {
-		halfExtent = 1.0
+	halfExtent = maxf(halfExtent, 1)
+	if effectiveResolution >= 2 {
+		// One base texel of margin covers the maximum half-final-texel snap.
+		halfExtent += 2 * halfExtent / float32(effectiveResolution)
 	}
-	texelWorldSize := (halfExtent * 2.0) / float32(effectiveResolution)
-	snappedX := float32(math.Round(float64(centerLS.X()/texelWorldSize))) * texelWorldSize
-	snappedY := float32(math.Round(float64(centerLS.Y()/texelWorldSize))) * texelWorldSize
-	offsetLS := mgl32.Vec3{snappedX - centerLS.X(), snappedY - centerLS.Y(), -(directionalShadowDepth * 0.5) - centerLS.Z()}
-	offsetWS := view.Inv().Mul4x1(offsetLS.Vec4(0.0)).Vec3()
-	eye = eye.Add(offsetWS)
-	center = center.Add(offsetWS)
-	view = mgl32.LookAtV(eye, center, up)
+	texelWorldSize := 2 * halfExtent / float32(effectiveResolution)
+	worldCenter := camera.Position.Add(relativeCenter)
+	centerLS := view.Mul4x1(worldCenter.Vec4(1)).Vec3()
+	snappedX, snappedY := centerLS.X(), centerLS.Y()
+	if effectiveResolution >= 2 {
+		snappedX = float32(math.Round(float64(snappedX/texelWorldSize))) * texelWorldSize
+		snappedY = float32(math.Round(float64(snappedY/texelWorldSize))) * texelWorldSize
+		// Round preserves signed zero; exact dependency bits require one zero sign
+		// for the entire origin cell, including negative sub-texel translations.
+		if snappedX == 0 {
+			snappedX = 0
+		}
+		if snappedY == 0 {
+			snappedY = 0
+		}
+	}
+	// Keep the light rotation fixed rather than rebuilding LookAt from translated
+	// points. Lateral translation follows the world grid; depth stays unsnapped.
+	view[12], view[13] = -snappedX, -snappedY
+	view[14] = -(centerLS.Z() + directionalShadowDepth*.5)
 
 	proj := mgl32.Ortho(-halfExtent, halfExtent, -halfExtent, halfExtent, directionalShadowNear, directionalShadowDepth)
 	vp := proj.Mul4(view)
