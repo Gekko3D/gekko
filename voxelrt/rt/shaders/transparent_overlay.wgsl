@@ -1303,28 +1303,25 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
             let params = object_params[inst.object_id];
             let ray_os = transform_ray(ray, inst.world_to_object);
             let t_obj = intersect_aabb(ray_os, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz);
-            var t_curr = max(max(t_obj.x, t_inst.x), 0.0) + EPS;
+            let t_start = max(max(t_obj.x, t_inst.x), 0.0) + EPS;
             let t_max_obj = min(min(t_obj.y, t_inst.y), t_limit);
-            if (t_curr >= t_max_obj) { continue; }
+            if (t_start >= t_max_obj) { continue; }
 
             let dir = ray_os.dir;
             let inv_dir = ray_os.inv_dir;
             let step = vec3<i32>(sign(dir));
-            let t_delta_sector = abs(SECTOR_SIZE * inv_dir);
-            let sector_bias = select(vec3<f32>(0.0), vec3<f32>(EPS), step < vec3<i32>(0));
-            var sector_pos = vec3<i32>(floor(((ray_os.origin + dir * t_curr) - sector_bias) / SECTOR_SIZE));
-            var t_max_sector = (vec3<f32>(sector_pos) * SECTOR_SIZE + select(vec3<f32>(0.0), vec3<f32>(SECTOR_SIZE), step > vec3<i32>(0)) - ray_os.origin) * inv_dir;
+            var sector_dda = sector_dda_init(ray_os.origin, dir, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, t_start, t_max_obj);
 
             let dir_ws = (inst.object_to_world * vec4<f32>(ray_os.dir, 0.0)).xyz;
             let d_ws_scale = length(dir_ws);
             let k: f32 = 8.0;
             var refractive_path_ws = 0.0;
 
-            var it_sect = 0;
-            while (t_curr < t_max_obj && it_sect < 64) {
-              it_sect += 1;
+            while (sector_dda.running) {
+              let sector_pos = sector_dda.position;
+              let t_curr = sector_dda.t;
               let sector_idx = find_sector_cached(sector_pos.x, sector_pos.y, sector_pos.z, params);
-              let t_sector_exit = min(min(min(t_max_sector.x, t_max_sector.y), t_max_sector.z), t_max_obj);
+              let t_sector_exit = sector_dda.exit_t;
 
               if (sector_idx >= 0) {
                 let sector = sectors[sector_idx];
@@ -1335,6 +1332,8 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                 var brick_pos = vec3<i32>(floor((((ray_os.origin + dir * t_brick) - sector_origin) - brick_bias) / BRICK_SIZE));
                 brick_pos = clamp(brick_pos, vec3<i32>(0), vec3<i32>(3));
                 var t_max_brick = (sector_origin + vec3<f32>(brick_pos) * BRICK_SIZE + select(vec3<f32>(0.0), vec3<f32>(BRICK_SIZE), step > vec3<i32>(0)) - ray_os.origin) * inv_dir;
+                // Stationary axes cannot cross before this clipped interval ends.
+                t_max_brick = select(t_max_brick, vec3<f32>(t_sector_exit), step == vec3<i32>(0));
                 let t_delta_brick = abs(BRICK_SIZE * inv_dir);
 
                 var it_brick = 0;
@@ -1370,6 +1369,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                           var voxel_pos = vec3<i32>(floor(((ray_os.origin + dir * t_micro) - brick_origin) - voxel_bias));
                           voxel_pos = clamp(voxel_pos, vec3<i32>(0), vec3<i32>(7));
                           var t_max_micro = (brick_origin + vec3<f32>(voxel_pos) * 1.0 + select(vec3<f32>(0.0), vec3<f32>(1.0), step > vec3<i32>(0)) - ray_os.origin) * inv_dir;
+                          t_max_micro = select(t_max_micro, vec3<f32>(t_brick_exit), step == vec3<i32>(0));
                           let t_delta_1 = abs(1.0 * inv_dir);
                           var it_micro = 0;
                           while (t_micro < t_brick_exit && it_micro < 32) {
@@ -1467,6 +1467,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                         var voxel_pos = vec3<i32>(floor(((ray_os.origin + dir * t_micro) - brick_origin) - voxel_bias));
                         voxel_pos = clamp(voxel_pos, vec3<i32>(0), vec3<i32>(7));
                         var t_max_micro = (brick_origin + vec3<f32>(voxel_pos) * 1.0 + select(vec3<f32>(0.0), vec3<f32>(1.0), step > vec3<i32>(0)) - ray_os.origin) * inv_dir;
+                        t_max_micro = select(t_max_micro, vec3<f32>(t_brick_exit), step == vec3<i32>(0));
                         let t_delta_1 = abs(1.0 * inv_dir);
                         let b_mask_lo = brick.occupancy_mask_lo;
                         let b_mask_hi = brick.occupancy_mask_hi;
@@ -1600,13 +1601,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
 
               if (surface_done) { break; }
 
-              if (t_max_sector.x < t_max_sector.y) {
-                if (t_max_sector.x < t_max_sector.z) { sector_pos.x += step.x; t_curr = t_max_sector.x; t_max_sector.x += t_delta_sector.x; }
-                else { sector_pos.z += step.z; t_curr = t_max_sector.z; t_max_sector.z += t_delta_sector.z; }
-              } else {
-                if (t_max_sector.y < t_max_sector.z) { sector_pos.y += step.y; t_curr = t_max_sector.y; t_max_sector.y += t_delta_sector.y; }
-                else { sector_pos.z += step.z; t_curr = t_max_sector.z; t_max_sector.z += t_delta_sector.z; }
-              }
+              sector_dda_advance(&sector_dda);
             }
             if (surface_done) { break; }
           }

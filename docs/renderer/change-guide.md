@@ -47,6 +47,7 @@ If a change depends on scene upload, particle uploads, or text lifetime, it usua
 | Public picking, projection, or voxel-edit helpers | `mod_voxelrt_client.go` | `voxelrt/rt/core/scene.go`, `voxelrt/rt/volume/xbrickmap_edit.go` |
 | Frame pass ordering or execution timing | `voxelrt/rt/app/app_frame.go` | `voxelrt/rt/app/app.go`, `voxelrt/rt/app/app_pipelines.go` |
 | Pipeline layouts and shader bindings | `voxelrt/rt/app/app_pipelines.go` | relevant `.wgsl` file plus `voxelrt/rt/gpu/Create*BindGroups`; voxel payload bindings are shared across all voxel consumers |
+| Sector traversal in opaque, shadow or transparent passes | `voxelrt/rt/shaders/sector_dda.wgsl`, `voxelrt/rt/shaders/shaders.go` | Composed exported shader sources, nested pass walkers, [sector contract](runtime.md#sector-traversal) |
 | Scene upload, buffer growth, or bind-group churn | `voxelrt/rt/gpu/manager_scene.go`, `voxelrt/rt/gpu/manager_alloc.go` | `voxelrt/rt/app/app_frame.go`, `voxelrt/rt/gpu/manager_render_setup.go` |
 | Voxel serialization, atlas layout, or dirty upload rules | `voxelrt/rt/gpu/manager_voxel.go` | `voxelrt/rt/volume/xbrickmap*.go`, `voxelrt/rt/gpu/manager.go`, and every voxel-reading shader |
 | Culling or interaction regressions | `voxelrt/rt/core/scene.go`, `voxelrt/rt/core/camera.go` | `voxelrt/rt/gpu/manager_hiz.go` |

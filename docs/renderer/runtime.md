@@ -944,7 +944,44 @@ pushes the root only if it has a leaf or positive child index, rejecting that
 sentinel even when the allocated buffer retains stale trailing nodes. Buffer
 capacity is not the live tree size. CPU picking and particle collision enumerate
 instances directly; their candidate coverage does not depend on these scene BVHs.
-Inner voxel, sector and tree64 traversal limits remain separate constraints.
+Inner brick, voxel and tree64 traversal limits remain separate constraints.
+
+### Sector traversal
+
+`shaders/sector_dda.wgsl` owns sector stepping for opaque, shadow and transparent
+voxel traversal. `shaders.go` prefixes this shared fragment to their exported
+WGSL sources; pipeline builders must consume those composed sources.
+Sector traversal has no fixed visit cap.
+
+The helper accepts a finite, ordered object-space box and clipped world-ray
+interval. Transformed directions remain unnormalized, retaining world-distance
+`t`. It validates finite inputs, derived endpoint coordinates and signed 32-bit
+sector conversion before stepping. Invalid intervals, zero directions and
+stationary axes outside the object bounds return an inactive walk.
+
+Integer limits intersect conservative object-sector bounds with the clipped
+ray segment's sector-coordinate box. Negative rays starting exactly on a
+sector plane begin in the preceding cell. Only nonzero axes participate in
+boundary selection; equal times retain the Z, Y, X priority. Boundary times use
+the actual direction component and are recomputed from integer coordinates.
+Reported intervals remain clipped and nondecreasing.
+
+Each transition advances one signed coordinate toward its terminal limit,
+checking that limit before incrementing. A walk visits at most
+`1 + (max_x - min_x) + (max_y - min_y) + (max_z - min_z)` cells. Termination thus
+depends on integer progress, including zero-length tie cells and repeated
+float32 boundary times, rather than an arbitrary counter or floating-time
+progress alone. Endpoint boundary cells may produce a zero-length interval.
+
+Nested sector-based brick and voxel walks mask stationary-axis boundary times
+to their parent interval's end, preventing zero-axis steps from rewinding the
+ray parameter. Their visit limits and nonzero-axis arithmetic remain unchanged.
+
+This contract corrects sector stepping within the supplied clip. Shared slab
+clipping and tree64 traversal retain their numerical behavior and limits.
+Float32 coordinate and distance precision still constrain geometry
+at large magnitudes; sector completion does not establish full voxel accuracy
+there. CPU interaction and particle collision retain their existing paths.
 
 ### Voxel capacity planning
 

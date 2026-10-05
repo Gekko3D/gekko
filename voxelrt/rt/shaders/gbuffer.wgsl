@@ -940,25 +940,23 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
     let dir = ray.dir;
     let inv_dir = ray.inv_dir;
     let step = vec3<i32>(sign(dir));
-    let t_delta_sector = abs(SECTOR_SIZE * inv_dir);
     let t_delta_brick = abs(BRICK_SIZE * inv_dir);
-    var t_curr = t_start;
-    let sector_bias = select(vec3<f32>(0.0), vec3<f32>(EPS), step < vec3<i32>(0));
-    var sector_pos = vec3<i32>(floor(((ray.origin + dir * t_curr) - sector_bias) / SECTOR_SIZE));
-    var t_max_sector = (vec3<f32>(sector_pos) * SECTOR_SIZE + select(vec3<f32>(0.0), vec3<f32>(SECTOR_SIZE), step > vec3<i32>(0)) - ray.origin) * inv_dir;
-    var iter_sectors = 0;
-    while (t_curr < t_end && iter_sectors < 16) {
-        iter_sectors += 1;
+    var sector_dda = sector_dda_init(ray.origin, dir, inst.local_aabb_min.xyz, inst.local_aabb_max.xyz, t_start, t_end);
+    while (sector_dda.running) {
+        let sector_pos = sector_dda.position;
+        let t_curr = sector_dda.t;
         let sector_idx = find_sector_cached(sector_pos.x, sector_pos.y, sector_pos.z, params);
         if (sector_idx >= 0) {
             let sector = sectors[sector_idx];
             let sector_origin = vec3<f32>(sector.origin_vox.xyz);
-            var t_sector_exit = min(min(min(t_max_sector.x, t_max_sector.y), t_max_sector.z), t_end);
+            let t_sector_exit = sector_dda.exit_t;
             var t_brick = t_curr;
             let brick_bias = select(vec3<f32>(0.0), vec3<f32>(EPS), step < vec3<i32>(0));
             var brick_pos = vec3<i32>(floor((((ray.origin + dir * t_brick) - sector_origin) - brick_bias) / BRICK_SIZE));
             brick_pos = clamp(brick_pos, vec3<i32>(0), vec3<i32>(3));
             var t_max_brick = (sector_origin + vec3<f32>(brick_pos) * BRICK_SIZE + select(vec3<f32>(0.0), vec3<f32>(BRICK_SIZE), step > vec3<i32>(0)) - ray.origin) * inv_dir;
+            // Stationary axes cannot cross before this clipped interval ends.
+            t_max_brick = select(t_max_brick, vec3<f32>(t_sector_exit), step == vec3<i32>(0));
             var iter_bricks = 0;
             while (t_brick < t_sector_exit && iter_bricks < 16) {
                 iter_bricks += 1;
@@ -1011,6 +1009,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                             var voxel_pos = vec3<i32>(floor(((ray.origin + dir * t_micro) - brick_origin) - voxel_bias));
                             voxel_pos = clamp(voxel_pos, vec3<i32>(0), vec3<i32>(7));
                             var t_max_micro = (brick_origin + vec3<f32>(voxel_pos) * 1.0 + select(vec3<f32>(0.0), vec3<f32>(1.0), step > vec3<i32>(0)) - ray.origin) * inv_dir;
+                            t_max_micro = select(t_max_micro, vec3<f32>(t_brick_exit), step == vec3<i32>(0));
                             let t_delta_1 = abs(1.0 * inv_dir);
                             let b_mask_lo = brick.occupancy_mask_lo;
                             let b_mask_hi = brick.occupancy_mask_hi;
@@ -1074,13 +1073,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                 }
             }
         }
-        if (t_max_sector.x < t_max_sector.y) {
-            if (t_max_sector.x < t_max_sector.z) { sector_pos.x += step.x; t_curr = t_max_sector.x; t_max_sector.x += t_delta_sector.x; }
-            else { sector_pos.z += step.z; t_curr = t_max_sector.z; t_max_sector.z += t_delta_sector.z; }
-        } else {
-            if (t_max_sector.y < t_max_sector.z) { sector_pos.y += step.y; t_curr = t_max_sector.y; t_max_sector.y += t_delta_sector.y; }
-            else { sector_pos.z += step.z; t_curr = t_max_sector.z; t_max_sector.z += t_delta_sector.z; }
-        }
+        sector_dda_advance(&sector_dda);
     }
     return result;
 }

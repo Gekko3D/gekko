@@ -14,7 +14,7 @@ var DebugWGSL string
 var TextWGSL string
 
 //go:embed gbuffer.wgsl
-var GBufferWGSL string
+var gBufferWGSL string
 
 //go:embed deferred_lighting.wgsl
 var DeferredLightingWGSL string
@@ -23,7 +23,7 @@ var DeferredLightingWGSL string
 var TiledLightCullWGSL string
 
 //go:embed shadow_map.wgsl
-var ShadowMapWGSL string
+var shadowMapWGSL string
 
 //go:embed particles_billboard.wgsl
 var ParticlesBillboardWGSL string
@@ -52,7 +52,7 @@ var DebrisMidfieldWGSL string
 /**
  */
 //go:embed transparent_overlay.wgsl
-var TransparentOverlayWGSL string
+var transparentOverlayWGSL string
 
 //go:embed resolve_transparency.wgsl
 var ResolveTransparencyWGSL string
@@ -74,3 +74,14 @@ var BeamsWGSL string
 
 //go:embed decals.wgsl
 var DecalsWGSL string
+
+//go:embed sector_dda.wgsl
+var sectorDDAWGSL string
+
+// Public shader sources include the same sector traversal contract. Raw pass
+// sources retain their independent bindings and inner voxel traversal paths.
+var (
+	GBufferWGSL            = sectorDDAWGSL + "\n" + gBufferWGSL
+	ShadowMapWGSL          = sectorDDAWGSL + "\n" + shadowMapWGSL
+	TransparentOverlayWGSL = sectorDDAWGSL + "\n" + transparentOverlayWGSL
+)

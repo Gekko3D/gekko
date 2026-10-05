@@ -173,3 +173,27 @@ env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-w3a-native docs/roadmaps
 The windowed run requires a desktop session. This establishes candidate coverage
 and output parity, not FPS, exhaustive camera coverage or removal of inner voxel
 traversal limits.
+
+## Sector DDA Native Regression
+
+The W3b helper diagnostic exercises the shared sector walk in all three composed
+shader sources. It compares intervals with independent float64 sector slabs and
+checks coordinate progress, clipped bounds, ties, signed boundaries, tiny and
+zero directions, transforms, float32 time stagnation and invalid inputs.
+
+The rendered diagnostic checks sparse objects whose first hit follows 600
+sector crossings in either direction, using actual uploaded bounds and
+transforms. Short controls, all-miss paths and an independently known 12-unit
+shadow distance protect coverage and prevent mutually incorrect controls from
+passing. Rendering uses a fixed odd physical resolution to align the sampled
+pixel with the camera ray across display scales.
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-w3b-dda docs/roadmaps/diagnostics/w3b_sector_dda.go
+/tmp/gekko-w3b-dda
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-w3b-native docs/roadmaps/diagnostics/w3b_sector_traversal.go
+/tmp/gekko-w3b-native -output /tmp/w3b-sector-traversal
+```
+
+Native access requires a desktop-capable GPU environment. These checks establish
+sector traversal behavior, not FPS or removal of brick, voxel and tree64 limits.
