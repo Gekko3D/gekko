@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals, P3b native workload evaluation and P3c packed mixed materials are complete, with P3 remaining partial; W3a scene BVH, W3b sector and W3c inner grid traversal are complete, with W3 remaining partial; W4a terrain brick-run construction is complete, with W4 remaining partial; other sections are proposals.
+Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals, P3b native workload evaluation and P3c packed mixed materials are complete, with P3 remaining partial; W3a scene BVH, W3b sector and W3c inner grid traversal are complete, with W3 remaining partial; W4a terrain brick-run construction and W4b ordered mixed-material construction are complete, with W4 remaining partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -773,8 +773,11 @@ Keep existing near-first child ordering. Rust's exact 30-depth/32-stack constant
 Status: partial. W4a fills uniform terrain columns in brick-confined runs while
 preserving full-column geometry and publication semantics; see the
 [column construction contract](../renderer/editing.md#fresh-uniform-column-construction).
-Imported/mixed brick construction, distant surface-band rendering and its
-heightfield collision/edit-frontier authority remain separate steps.
+W4b accelerates existing ordered mixed-material construction with bounded lookup
+and exact halo-region caches; see the
+[ordered construction contract](../renderer/editing.md#fresh-ordered-voxel-construction).
+Distant surface-band rendering and its heightfield collision/edit-frontier
+authority remain separate steps.
 
 Replace `SetVoxel` loops with bulk masks/values for baked/imported chunks and terrain pages. Distant natural terrain materializes surface bands, not full columns; height tiles retain collision authority.
 
@@ -970,7 +973,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | W3a | `57f162c` | Complete generated scene BVH traversal without arbitrary visit limits | [Runtime contract](../renderer/runtime.md#scene-bvh-traversal) |
 | W3b | `c5676cf` | Complete sector traversal and prevent stationary-axis rewinds in nested walks | [Runtime contract](../renderer/runtime.md#sector-traversal) |
 | W3c | `aafa193` | Bound sector-based brick and voxel walks by their owning grids | [Runtime contract](../renderer/runtime.md#inner-brick-and-voxel-traversal) |
-| W4a | This batch | Bulk uniform terrain column construction with ordered revision and halo parity | [Construction contract](../renderer/editing.md#fresh-uniform-column-construction) |
+| W4a | `748ab8f` | Bulk uniform terrain column construction with ordered revision and halo parity | [Construction contract](../renderer/editing.md#fresh-uniform-column-construction) |
+| W4b | This batch | Cache ordered mixed-material construction with exact dirty/revision parity | [Construction contract](../renderer/editing.md#fresh-ordered-voxel-construction) |
 | S1a | `e3f11cf` | Hidden residency and readiness tickets | [Design](streamed-rendering-s1a.md) |
 | S1b | `a539257` | Global content budgets, ordering and atlas backpressure | [Design](streamed-rendering-s1b.md) |
 | S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
@@ -4847,7 +4851,7 @@ the particle live-count audit.
 
 ### W4a: Bulk uniform terrain column construction
 
-Commit: this batch. Volume-owned `BuildXBrickMapColumns` fills payloads and micro
+Commit: `748ab8f`. Volume-owned `BuildXBrickMapColumns` fills payloads and micro
 occupancy in brick-confined runs. Eager terrain spawning and streamed worker
 preparation use it through their shared conversion. Full geometry, source
 records, ordered revisions, dirty coverage and edit/copy behavior retain parity
@@ -4879,3 +4883,46 @@ Consumer builds passed with
 bands with collision/backing/edit-frontier authority. No shader, persisted
 schema, surface-only geometry or collision policy changed. Native GPU visuals,
 other machines and full interactive gameplay were not checked.
+
+
+### W4b: Ordered mixed-material construction caches
+
+Commit: this batch. Volume-owned `BuildXBrickMap` caches the current sector/brick
+and exact normal-halo classes without sorting or buffering writes. Runtime
+imported chunks and offline normal-bake input retain source filtering, material
+conversion, auxiliary ownership and publication state. Ordered writes, revisions,
+tombstones and dirty coverage retain sequential parity. See the
+[canonical contract](../renderer/editing.md#fresh-ordered-voxel-construction).
+
+Verification passed from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume . ./content/derived -run W4b -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume -run 'W4b|P5f|P5k' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . ./content/derived -run 'W4b|P5f|P5g' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume . -run '^$' -bench '^BenchmarkW4b' -benchmem -benchtime=100ms -count=3
+git diff --check
+```
+
+Consumer `env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1` was attempted
+from `../gekko-editor` and `../actiongame`. Editor tests cannot compile because
+`base_world_import_test.go` references missing `collectUIButtonLabelsForTest` and
+`containsButtonOrLabel` helpers. Six action-game bot tests fail identically with
+the original builder via
+`env GOCACHE=/tmp/gekko3d-gocache go test -overlay=/tmp/w4b-original-overlay.json ./src/modules/startup -run '^TestActionGameBot' -count=1`;
+the overlay replaces only this builder with its pre-change source. Consumer
+builds passed using `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-w4b-editor .`
+from `../gekko-editor` and `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-w4b-actiongame .`
+from `../actiongame`.
+
+Against the pre-change builder, median
+CPU time improved 2.61× for dense X-fast imports (4.17 to 1.60 ms), 5.70× for
+brick-major imports (4.10 to 0.72 ms), 1.72× for shell imports and 5.09× for
+ordered duplicate/repaint/delete tails. Scattered sparse imports were roughly
+unchanged (2.13 to 2.11 ms). Scratch storage remains constant-sized; dense/shell
+fixtures add four allocations and 144 allocated bytes per construction.
+
+W4 remains partial for surface bands with collision/backing/edit-frontier
+authority. These local construction measurements do not establish GPU/FPS gains;
+native visuals, other machines and full interactive gameplay were not checked.

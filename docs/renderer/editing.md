@@ -62,6 +62,23 @@ in `GPUEditMode` uses ordinary sequential `SetVoxel` throughout, preserving
 callback observations and reentry even if a callback changes that mode. No
 intermediate write list or new shared owner is introduced.
 
+## Fresh ordered voxel construction
+
+`volume.BuildXBrickMap(iter.Seq[volume.VoxelWrite])` consumes ordered assignments
+once into a fresh editable CPU map; nil input is empty. Zero removes a voxel.
+Duplicates, no-ops, removals and recreation retain sequential `SetVoxel` content,
+revision and sector-tombstone semantics. Initial dirty coverage includes transient
+geometry, and material flags finalize once per surviving brick before return.
+
+Construction caches only the current sector and brick pointers, invalidating them
+on removal. Packed-brick indices are not cached because insertion shifts them.
+With the normal-fit radius equal to half the brick size, each local half on each
+axis selects one of eight exact halo regions. The first changed write in each
+region marks its halo immediately; no-ops do not mark a region. The region mask
+resets on a brick-key switch. Other radii use per-change halo marking. Scratch
+storage is constant-sized; writes are neither sorted nor buffered. Fresh private
+bricks have no authored auxiliary packets during construction.
+
 ## Fresh uniform column construction
 
 `volume.BuildXBrickMapColumns(iter.Seq[volume.VoxelColumn], value)` builds a

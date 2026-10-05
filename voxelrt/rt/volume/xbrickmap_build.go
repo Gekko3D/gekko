@@ -19,6 +19,12 @@ func BuildXBrickMap(writes iter.Seq[VoxelWrite]) *XBrickMap {
 	}
 	// Fresh private bricks have no auxiliary data, so each halo key needs marking once.
 	batch := voxelEditBatch{halos: x.DirtyBricks}
+	var sector *Sector
+	var brick *Brick
+	var sectorKey [3]int
+	var brickKey [6]int
+	var cached bool
+	var haloClasses uint8
 	for w := range writes {
 		sKey, bKey := sectorBrickKeyForVoxel(w.X, w.Y, w.Z)
 		vx, vy, vz := w.X%BrickSize, w.Y%BrickSize, w.Z%BrickSize
@@ -31,10 +37,18 @@ func BuildXBrickMap(writes iter.Seq[VoxelWrite]) *XBrickMap {
 		if vz < 0 {
 			vz += BrickSize
 		}
-		sector := x.Sectors[sKey]
-		var brick *Brick
-		if sector != nil {
-			brick = sector.GetBrick(bKey[3], bKey[4], bKey[5])
+		if !cached || sKey != sectorKey {
+			sector = x.Sectors[sKey]
+			sectorKey = sKey
+		}
+		if !cached || bKey != brickKey {
+			brick = nil
+			if sector != nil {
+				brick = sector.GetBrick(bKey[3], bKey[4], bKey[5])
+			}
+			brickKey = bKey
+			haloClasses = 0
+			cached = true
 		}
 		current := uint8(0)
 		if brick != nil {
@@ -57,13 +71,27 @@ func BuildXBrickMap(writes iter.Seq[VoxelWrite]) *XBrickMap {
 		brick.SetVoxel(vx, vy, vz, w.Value)
 		// Record each changed write, including transient/deleted geometry, so
 		// adjacent normal uploads retain the same coverage as live edits.
-		x.markVoxelNormalHaloDirtyBatched(w.X, w.Y, w.Z, &batch)
+		if VoxelNormalExtendedSurfaceFitRadius == BrickSize/2 {
+			// With a half-brick radius, each local half on an axis has the
+			// same neighboring brick range. Deduplicate exact halo classes,
+			// retaining transient changes without filling sparse gaps.
+			class := vx/(BrickSize/2) + vy/(BrickSize/2)*2 + vz/(BrickSize/2)*4
+			bit := uint8(1) << class
+			if haloClasses&bit == 0 {
+				x.markVoxelNormalHaloDirtyBatched(w.X, w.Y, w.Z, &batch)
+				haloClasses |= bit
+			}
+		} else {
+			x.markVoxelNormalHaloDirtyBatched(w.X, w.Y, w.Z, &batch)
+		}
 		if brick.IsEmpty() {
 			sector.RemoveBrickIfEmpty(bKey[3], bKey[4], bKey[5])
 			x.DirtySectors[sKey] = true
 			if sector.IsEmpty() {
 				delete(x.Sectors, sKey)
+				sector = nil
 			}
+			brick = nil
 		}
 	}
 	for _, sector := range x.Sectors {

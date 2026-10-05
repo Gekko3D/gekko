@@ -180,6 +180,14 @@ Spawn helpers live in:
 
 - `imported_world_spawn.go`
 
+Runtime and offline normal-bake conversion share the
+[fresh ordered voxel builder](../renderer/editing.md#fresh-ordered-voxel-construction).
+Both skip records whose source `Value` is zero and use a nonzero `MaterialValue`
+override, preserving decoded record order. Runtime conversion attaches copied
+embedded auxiliary packets after geometry construction. Offline conversion does
+not adopt those packets and clears initial dirtiness for nonnil chunks; its nil
+input retains the fresh empty-map state.
+
 ## Streamed Level Runtime
 
 The streamed runtime is implemented in `streamed_level_runtime.go`, with observer
