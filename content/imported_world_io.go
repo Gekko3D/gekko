@@ -23,6 +23,19 @@ func SaveImportedWorld(path string, def *ImportedWorldDef) error {
 	if def == nil {
 		return fmt.Errorf("imported world is nil")
 	}
+	if def.SchemaVersion == ImportedWorldPageSchemaVersion {
+		if _, err := ValidateImportedWorldV3(def); err != nil {
+			return err
+		}
+		data, err := json.MarshalIndent(def, "", "  ")
+		if err != nil {
+			return err
+		}
+		return writeImportedWorldManifestAtomic(path, data)
+	}
+	if len(def.Pages) > 0 || len(def.RootPageIndices) > 0 || len(def.IndexedSectors) > 0 {
+		return fmt.Errorf("imported world page fields require schema version 3")
+	}
 	EnsureImportedWorldDefaults(def)
 	if def.SchemaVersion != CurrentImportedWorldSchemaVersion {
 		return fmt.Errorf("unsupported imported world schema version %d", def.SchemaVersion)
@@ -45,6 +58,14 @@ func LoadImportedWorld(path string) (*ImportedWorldDef, error) {
 	var def ImportedWorldDef
 	if err := json.Unmarshal(data, &def); err != nil {
 		return nil, err
+	}
+	if def.SchemaVersion == ImportedWorldPageSchemaVersion {
+		index, err := ValidateImportedWorldV3(&def)
+		if err != nil {
+			return nil, err
+		}
+		def.PageIndex = index
+		return &def, nil
 	}
 	index, err := NormalizeImportedWorldPages(&def)
 	if err != nil {
@@ -131,4 +152,27 @@ func writeFileIfChanged(path string, data []byte, perm os.FileMode) (bool, error
 		return false, err
 	}
 	return true, nil
+}
+
+func writeImportedWorldManifestAtomic(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(filepath.Dir(path), ".gkworld-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	if err = file.Chmod(0644); err != nil {
+		file.Close()
+		return err
+	}
+	if _, err = file.Write(data); err != nil {
+		file.Close()
+		return err
+	}
+	if err = file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(file.Name(), path)
 }

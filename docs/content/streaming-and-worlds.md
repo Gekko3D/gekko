@@ -219,9 +219,77 @@ This compatibility index owns its slices/maps and always has `LegacyDistance`
 set. Proxy-less sectors retain distance/PVS behavior; these pages do not promise
 v3 fallback coverage. Cached callers must treat the loaded definition and index
 as read-only, or recompute the index after authoring mutations. The decoded cache
-accounts for the derived storage. Writers remain schema 2 and `.gkchunk` remains
-schema 1. Imported-world v3 admission, page baking and live page selection are
-still pending [I06 and later island slices](island-streaming.md#commit-sized-delivery-slices).
+accounts for the derived storage. Default writers remain schema 2 and `.gkchunk`
+remains schema 1. Explicit v3 tooling follows the contract below; live page
+selection remains pending [later island slices](island-streaming.md#commit-sized-delivery-slices).
+
+### Imported-world v3 page baking
+
+`ImportedWorldPageSchemaVersion` selects schema 3 explicitly. Content readers
+and writers dispatch by the serialized version; missing versions retain the
+legacy v2 path. The wire `sectors` array uses integer entry/PVS/adjacency indices
+in v3. The Go API retains legacy `Sectors` and exposes v3 `IndexedSectors`.
+Cross-version sector reference keys fail even when empty. `Pages` and
+`RootPageIndices` are v3 fields; a legacy writer rejects explicit page data.
+
+`ValidateImportedWorldV3` builds an owned, metadata-only index with
+`LegacyDistance=false`. Full entries and every page require existing checksummed
+binary voxel payload kinds (dense RLE, material RLE or compiled bricks), SHA-256
+hashes, positive codec-defined payload byte sizes, valid grids
+and nonnegative optional occupied-sector/brick costs. Conservative payload
+coverage is the cube at `WorldOrigin` with side `ChunkSize*VoxelResolution`.
+Page bounds contain that cube and their child/leaf coverage. Sectors are optional
+visibility memberships: different sectors may reference the same full entry;
+the forest owns each nonempty visual leaf exactly once. Optional voxel-page
+`Aux` references identify normal sidecars and must match their source payload.
+
+The v3 voxel payload side is bounded to 256 cells; legacy readers keep their
+existing limits. Sparse JSON has no existing canonical payload checksum and is
+not a qualified v3 page payload.
+
+`LoadImportedWorldPagePayload` qualifies decoded kind, hash, body size, grid,
+world identity and coordinate against the manifest. A page reusing a full entry
+uses its full chunk coordinate; generated coarse payloads use coordinate zero
+and the page's explicit world origin. The existing body hash does not cover
+header identity fields, so decoding alone does not establish page placement.
+RLE headers and run counts are qualified before voxel expansion. File validation
+also qualifies aux owner/grid headers and bounds sidecar record counts and bytes
+before allocation; legacy decoders retain their existing behavior.
+
+`content/derived.BuildImportedWorldPageBake` consumes legacy full chunks and
+produces a schema-3 draft with leaf, regional, macro and root pages. The default
+X/Z spans are 128/512/2048 m at 1/4/16 m resolution. Spans align to full chunk
+boundaries; parent span ratios are powers of two and coarse grids divide their
+spans. Y is packed locally into bounded conservative cubes. Default and hard
+limits are 4,096 pages and 256 cells per payload side, including full chunks.
+Sparse forests omit unused branches rather than adding empty island coverage.
+
+Every coarse tier aggregates original full voxels independently. It selects the
+most frequent `(MaterialValue, Value)` pair, with ties ordered by material then
+value. Explicit transparency and water/glass materials are excluded from coarse
+pages; full geometry remains authoritative. Opaque emissive materials survive.
+Authored landmarks override coarse cells at their chosen minimum level and all
+coarser levels; conflicting authored pairs fail. Landmarks may create
+payload-only branches beyond full geometry without inventing full entries.
+
+The bake owns its geometry/material data and canonicalizes inputs before
+assigning indices. Its source hash identifies the complete generation,
+including geometry, materials, bake options, landmarks and bake/normal versions.
+All full/page/aux paths use that identity, including unchanged chunks whose
+neighbor-aware normals can change. `SaveImportedWorldPageBake` validates the
+draft before writes, emits existing material-preserving dense RLE payloads and
+normal sidecars, qualifies the complete output, then publishes the manifest
+last. Published payload bytes are immutable. Draft mutation requires a new
+bake; late I/O failures can leave unreferenced new-generation files but preserve
+the previous manifest and its payloads. Generic aux repair rejects v3.
+
+VOX `ImportedWorldBakeConfig.PageBakeOptions` and common-importer
+`ImportedWorldEmitOptions.PageBakeOptions` opt into this shared producer. Nil
+options preserve legacy v2 behavior. Page saving uses fixed dense RLE plus
+sidecar normals; incompatible common-importer codec/embedding options fail.
+`RuntimeContentLoader` rejects v3 until page residency and handoff are ready.
+These tools do not activate live selection, collision or cross-layer coverage
+groups, and their tests do not establish a frame-time improvement.
 
 ### Compiled imported chunks
 

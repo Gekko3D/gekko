@@ -29,16 +29,17 @@ type StreamPageDef struct {
 // StreamPagePayloadDef describes a referenced fallback payload. Its qualified
 // world coverage is supplied separately by the owning decoder or compiler.
 type StreamPagePayloadDef struct {
-	Kind                string     `json:"kind"`
-	Path                string     `json:"path"`
-	WorldOrigin         [3]float32 `json:"world_origin"`
-	ChunkSize           int        `json:"chunk_size"`
-	VoxelResolution     float32    `json:"voxel_resolution"`
-	SampleSpacing       float32    `json:"sample_spacing,omitempty"`
-	PayloadHash         string     `json:"payload_hash"`
-	PayloadSizeBytes    int        `json:"payload_size_bytes"`
-	OccupiedSectorCount int        `json:"occupied_sector_count,omitempty"`
-	OccupiedBrickCount  int        `json:"occupied_brick_count,omitempty"`
+	Aux                 *ImportedWorldChunkAuxRefDef `json:"aux,omitempty"`
+	Kind                string                       `json:"kind"`
+	Path                string                       `json:"path"`
+	WorldOrigin         [3]float32                   `json:"world_origin"`
+	ChunkSize           int                          `json:"chunk_size"`
+	VoxelResolution     float32                      `json:"voxel_resolution"`
+	SampleSpacing       float32                      `json:"sample_spacing,omitempty"`
+	PayloadHash         string                       `json:"payload_hash"`
+	PayloadSizeBytes    int                          `json:"payload_size_bytes"`
+	OccupiedSectorCount int                          `json:"occupied_sector_count,omitempty"`
+	OccupiedBrickCount  int                          `json:"occupied_brick_count,omitempty"`
 }
 
 // ImportedWorldSectorV3Def uses manifest-local indices for visibility and full
@@ -106,6 +107,9 @@ func validateStreamPagePayload(payload StreamPagePayloadDef) error {
 		return fmt.Errorf("invalid stream page payload grid")
 	}
 	if payload.Kind == TerrainHeightTilePayloadKind {
+		if payload.Aux != nil {
+			return fmt.Errorf("height stream page cannot use voxel normal aux")
+		}
 		if payload.ChunkSize > 128 || payload.SampleSpacing <= 0 {
 			return fmt.Errorf("invalid height stream page grid")
 		}
@@ -113,6 +117,11 @@ func validateStreamPagePayload(payload StreamPagePayloadDef) error {
 		kind, err := NormalizeImportedWorldChunkPayloadKind(payload.Kind)
 		if err != nil || payload.Kind == "" || kind != payload.Kind || payload.VoxelResolution <= 0 {
 			return fmt.Errorf("invalid voxel stream page payload kind or grid")
+		}
+	}
+	if payload.Aux != nil {
+		if err := validateImportedPageAux(payload.Aux, payload.PayloadHash, payload.PayloadSizeBytes); err != nil {
+			return err
 		}
 	}
 	return nil

@@ -267,12 +267,14 @@ type StreamPagePayloadDef struct {
     PayloadSizeBytes    int        `json:"payload_size_bytes"`
     OccupiedSectorCount int        `json:"occupied_sector_count,omitempty"`
     OccupiedBrickCount  int        `json:"occupied_brick_count,omitempty"`
+    Aux                 *ImportedWorldChunkAuxRefDef `json:"aux,omitempty"`
 }
 
 type ImportedWorldDef struct {
     // Existing world identity, material, backing, and source fields remain.
     Entries         []ImportedWorldChunkEntryDef `json:"entries,omitempty"`
-    Sectors         []ImportedWorldSectorV3Def   `json:"sectors,omitempty"`
+    Sectors         []ImportedWorldSectorDef     `json:"sectors,omitempty"` // legacy API; custom wire dispatch
+    IndexedSectors  []ImportedWorldSectorV3Def   `json:"-"` // v3 wire: sectors
     Pages           []StreamPageDef              `json:"pages,omitempty"`
     RootPageIndices []uint32                     `json:"root_page_indices,omitempty"`
 }
@@ -1094,7 +1096,7 @@ but do not split a row so that it leaves its external contract half-active.
 | I03 | I01 | Staged-hidden renderer object and ticket state/query API. |
 | I04 | I03 | Global byte/sector upload queue and exact readiness predicate. |
 | I05 | - | Complete: shared page types/validator and imported-world v1/v2 normalization; see [runtime contract](streaming-and-worlds.md#streaming-page-contracts-and-legacy-normalization). |
-| I06 | I05 | `.gkworld` v3 reader/writer and deterministic POI page bake. |
+| I06 | I05 | Complete: explicit `.gkworld` v3 tooling and deterministic POI page bake; live runtime remains gated. See [bake contract](streaming-and-worlds.md#imported-world-v3-page-baking). |
 | I07 | I05 | Terrain v3 manifest plus `height_u16_binary_v1` read/write validation. |
 | I08 | I06, I07 | Independent terrain/POI world-space indexes; remove resolution equality. |
 | I09 | I06, I07 | Deterministic 15 km harness builder and generated fixture recipe. |

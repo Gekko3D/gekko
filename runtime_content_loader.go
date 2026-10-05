@@ -425,7 +425,16 @@ func (l *RuntimeContentLoader) LoadTerrainChunk(path string) (*content.TerrainCh
 	return loadRuntimeContent(l, "terrain-chunk", path, content.LoadTerrainChunk)
 }
 func (l *RuntimeContentLoader) LoadImportedWorld(path string) (*content.ImportedWorldDef, error) {
-	return loadRuntimeContent(l, "imported-world", path, content.LoadImportedWorld)
+	return loadRuntimeContent(l, "imported-world", path, func(path string) (*content.ImportedWorldDef, error) {
+		world, err := content.LoadImportedWorld(path)
+		if err != nil {
+			return nil, err
+		}
+		if world.SchemaVersion == content.ImportedWorldPageSchemaVersion {
+			return nil, fmt.Errorf("imported world page runtime requires indexed page registration and handoff support")
+		}
+		return world, nil
+	})
 }
 func (l *RuntimeContentLoader) LoadImportedWorldChunk(path string) (*content.ImportedWorldChunkDef, error) {
 	var codec *voxelcodec.Codec

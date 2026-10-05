@@ -6,9 +6,9 @@ import (
 	"strconv"
 )
 
-// ImportedWorldPageIndex is a metadata-only legacy compatibility view. It
-// preserves distance/PVS selection and does not promise strict v3 fallback
-// coverage. All slices and maps are owned independently of authored content.
+// ImportedWorldPageIndex owns manifest-local graph and membership metadata.
+// LegacyDistance distinguishes legacy distance/PVS compatibility from a strict
+// v3 page forest. All slices and maps are independent of authored content.
 type ImportedWorldPageIndex struct {
 	LegacyDistance       bool
 	Pages                []StreamPageDef

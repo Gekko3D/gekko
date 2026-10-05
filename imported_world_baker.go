@@ -24,6 +24,7 @@ const (
 )
 
 type ImportedWorldBakeConfig struct {
+	PageBakeOptions       *contentderived.ImportedWorldPageBakeOptions
 	WorldID               string
 	ChunkSize             int
 	VoxelResolution       float32
@@ -43,6 +44,7 @@ type ImportedWorldBakeWarning struct {
 }
 
 type ImportedWorldBakeResult struct {
+	PageBake        *contentderived.ImportedWorldPageBake
 	Manifest        *content.ImportedWorldDef
 	Chunks          map[ChunkCoord]*content.ImportedWorldChunkDef
 	ProxyChunks     map[string]*content.ImportedWorldChunkDef
@@ -107,7 +109,7 @@ func BakeImportedWorldFromVoxFileWithProgress(path string, cfg ImportedWorldBake
 		if bakeErr != nil {
 			return ImportedWorldBakeResult{}, bakeErr
 		}
-		if result.Manifest != nil {
+		if result.Manifest != nil && cfg.PageBakeOptions == nil {
 			result.Manifest.SourceHash = hash
 		}
 		return result, nil
@@ -121,6 +123,9 @@ func BakeImportedWorldFromVox(voxFile *VoxFile, cfg ImportedWorldBakeConfig) (Im
 
 func BakeImportedWorldFromVoxWithProgress(voxFile *VoxFile, cfg ImportedWorldBakeConfig, progress ImportedWorldBakeProgressFunc) (ImportedWorldBakeResult, error) {
 	cfg = normalizeImportedWorldBakeConfig(cfg)
+	if cfg.PageBakeOptions != nil && (cfg.ChunkSize > content.ImportedWorldPageMaxPayloadSide || math.IsNaN(float64(cfg.VoxelResolution)) || math.IsInf(float64(cfg.VoxelResolution), 0) || cfg.VoxelResolution <= 0 || math.IsInf(float64(float32(cfg.ChunkSize)*cfg.VoxelResolution), 0)) {
+		return ImportedWorldBakeResult{}, fmt.Errorf("page bake requires a finite bounded source grid")
+	}
 	if voxFile == nil {
 		return ImportedWorldBakeResult{}, fmt.Errorf("vox file is nil")
 	}
@@ -179,11 +184,14 @@ func BakeImportedWorldFromVoxWithProgress(voxFile *VoxFile, cfg ImportedWorldBak
 		chunksByCoord[content.TerrainChunkCoordDef{X: coord.X, Y: coord.Y, Z: coord.Z}] = chunk
 	}
 	sectors := content.BuildImportedWorldSectors(entries, cfg.ChunkSize, cfg.VoxelResolution, content.DefaultImportedWorldSectorTargetWorldSize)
-	sectors, proxyChunks := content.BuildImportedWorldSectorProxyChunks(sectors, chunksByCoord, content.ImportedWorldSectorProxyOptions{
-		WorldID:         cfg.WorldID,
-		ChunkSize:       cfg.ChunkSize,
-		VoxelResolution: cfg.VoxelResolution,
-	})
+	proxyChunks := map[string]*content.ImportedWorldChunkDef{}
+	if cfg.PageBakeOptions == nil {
+		sectors, proxyChunks = content.BuildImportedWorldSectorProxyChunks(sectors, chunksByCoord, content.ImportedWorldSectorProxyOptions{
+			WorldID:         cfg.WorldID,
+			ChunkSize:       cfg.ChunkSize,
+			VoxelResolution: cfg.VoxelResolution,
+		})
+	}
 
 	result := ImportedWorldBakeResult{
 		Manifest: &content.ImportedWorldDef{
@@ -204,6 +212,14 @@ func BakeImportedWorldFromVoxWithProgress(voxFile *VoxFile, cfg ImportedWorldBak
 		BoundsMin:       boundsMin,
 		BoundsMax:       boundsMax,
 	}
+	if cfg.PageBakeOptions != nil {
+		pageBake, err := contentderived.BuildImportedWorldPageBake(result.Manifest, chunksByCoord, *cfg.PageBakeOptions)
+		if err != nil {
+			return ImportedWorldBakeResult{}, err
+		}
+		result.PageBake = pageBake
+		result.Manifest = pageBake.Manifest
+	}
 	emitImportedWorldBakeProgress(progress, "complete", "Bake data prepared", 1, 1, 1)
 	return result, nil
 }
@@ -213,6 +229,9 @@ func SaveImportedWorldBake(manifestPath string, bake ImportedWorldBakeResult) er
 }
 
 func SaveImportedWorldBakeWithProgress(manifestPath string, bake ImportedWorldBakeResult, progress ImportedWorldBakeProgressFunc) error {
+	if bake.PageBake != nil {
+		return contentderived.SaveImportedWorldPageBake(manifestPath, bake.PageBake)
+	}
 	if bake.Manifest == nil {
 		return fmt.Errorf("bake manifest is nil")
 	}

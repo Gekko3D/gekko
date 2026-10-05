@@ -10,6 +10,8 @@ import (
 
 const (
 	CurrentImportedWorldSchemaVersion      = 2
+	ImportedWorldPageSchemaVersion         = 3
+	ImportedWorldPageMaxPayloadSide        = 256
 	CurrentImportedWorldChunkSchemaVersion = 1
 
 	DefaultImportedWorldSectorTargetWorldSize = 25.0
@@ -32,8 +34,10 @@ const (
 )
 
 type ImportedWorldDef struct {
-	// PageIndex is derived once on load and is read-only cached metadata. A
-	// caller that changes authored fields must recompute this compatibility view.
+	Pages           []StreamPageDef            `json:"pages,omitempty"`
+	RootPageIndices []uint32                   `json:"root_page_indices,omitempty"`
+	IndexedSectors  []ImportedWorldSectorV3Def `json:"-"`
+	// PageIndex is derived once on load and owns read-only normalized metadata.
 	PageIndex          *ImportedWorldPageIndex             `json:"-"`
 	WorldID            string                              `json:"world_id"`
 	SchemaVersion      int                                 `json:"schema_version"`
@@ -101,14 +105,16 @@ type ImportedWorldMaterialAnimationFrameDef struct {
 }
 
 type ImportedWorldChunkEntryDef struct {
-	Coord              TerrainChunkCoordDef         `json:"coord"`
-	ChunkPath          string                       `json:"chunk_path"`
-	NonEmptyVoxelCount int                          `json:"non_empty_voxel_count,omitempty"`
-	PayloadKind        string                       `json:"payload_kind,omitempty"`
-	PayloadHash        string                       `json:"payload_hash,omitempty"`
-	PayloadSizeBytes   int                          `json:"payload_size_bytes,omitempty"`
-	Aux                *ImportedWorldChunkAuxRefDef `json:"aux,omitempty"`
-	Tags               []string                     `json:"tags,omitempty"`
+	OccupiedSectorCount int                          `json:"occupied_sector_count,omitempty"`
+	OccupiedBrickCount  int                          `json:"occupied_brick_count,omitempty"`
+	Coord               TerrainChunkCoordDef         `json:"coord"`
+	ChunkPath           string                       `json:"chunk_path"`
+	NonEmptyVoxelCount  int                          `json:"non_empty_voxel_count,omitempty"`
+	PayloadKind         string                       `json:"payload_kind,omitempty"`
+	PayloadHash         string                       `json:"payload_hash,omitempty"`
+	PayloadSizeBytes    int                          `json:"payload_size_bytes,omitempty"`
+	Aux                 *ImportedWorldChunkAuxRefDef `json:"aux,omitempty"`
+	Tags                []string                     `json:"tags,omitempty"`
 }
 
 type ImportedWorldChunkAuxRefDef struct {
@@ -136,17 +142,19 @@ type ImportedWorldSectorDef struct {
 }
 
 type ImportedWorldLODDef struct {
-	Level              int                          `json:"level"`
-	Kind               string                       `json:"kind"`
-	ChunkPath          string                       `json:"chunk_path"`
-	ChunkSize          int                          `json:"chunk_size,omitempty"`
-	VoxelResolution    float32                      `json:"voxel_resolution,omitempty"`
-	NonEmptyVoxelCount int                          `json:"non_empty_voxel_count,omitempty"`
-	PayloadKind        string                       `json:"payload_kind,omitempty"`
-	PayloadHash        string                       `json:"payload_hash,omitempty"`
-	PayloadSizeBytes   int                          `json:"payload_size_bytes,omitempty"`
-	Aux                *ImportedWorldChunkAuxRefDef `json:"aux,omitempty"`
-	Tags               []string                     `json:"tags,omitempty"`
+	OccupiedSectorCount int                          `json:"occupied_sector_count,omitempty"`
+	OccupiedBrickCount  int                          `json:"occupied_brick_count,omitempty"`
+	Level               int                          `json:"level"`
+	Kind                string                       `json:"kind"`
+	ChunkPath           string                       `json:"chunk_path"`
+	ChunkSize           int                          `json:"chunk_size,omitempty"`
+	VoxelResolution     float32                      `json:"voxel_resolution,omitempty"`
+	NonEmptyVoxelCount  int                          `json:"non_empty_voxel_count,omitempty"`
+	PayloadKind         string                       `json:"payload_kind,omitempty"`
+	PayloadHash         string                       `json:"payload_hash,omitempty"`
+	PayloadSizeBytes    int                          `json:"payload_size_bytes,omitempty"`
+	Aux                 *ImportedWorldChunkAuxRefDef `json:"aux,omitempty"`
+	Tags                []string                     `json:"tags,omitempty"`
 }
 
 type ImportedWorldChunkDef struct {

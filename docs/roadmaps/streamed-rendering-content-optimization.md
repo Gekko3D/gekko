@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-06. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals, P3b native workload evaluation and P3c packed mixed materials are complete, with P3 remaining partial; W3a scene BVH, W3b sector and W3c inner grid traversal are complete, with W3 remaining partial; W4a terrain brick-run construction, W4b ordered mixed-material construction, W4c1 tiled height source content and W4c2 resident height queries are complete, with W4 remaining partial; I05 shared page validation and legacy imported-world normalization are complete; other sections are proposals.
+Date: 2026-10-06. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals, P3b native workload evaluation and P3c packed mixed materials are complete, with P3 remaining partial; W3a scene BVH, W3b sector and W3c inner grid traversal are complete, with W3 remaining partial; W4a terrain brick-run construction, W4b ordered mixed-material construction, W4c1 tiled height source content and W4c2 resident height queries are complete, with W4 remaining partial; I05 shared page validation and legacy imported-world normalization and I06 explicit imported-world v3 page tooling are complete; live page residency remains pending; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -983,7 +983,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | W4b | `a73813b` | Cache ordered mixed-material construction with exact dirty/revision parity | [Construction contract](../renderer/editing.md#fresh-ordered-voxel-construction) |
 | W4c1 | `b169bd4` | Validated tiled height source codec, bake and manifest load; legacy runtime boundary retained | [Source contract](../content/streaming-and-worlds.md#tiled-terrain-source-content-v3) |
 | W4c2 | `963133d` | Bounded resident tiles, immutable snapshots and seam-aware typed ground queries | [Query contract](../content/streaming-and-worlds.md#resident-height-query-foundation) |
-| I05 | This batch | Shared page forest validation and load-time v1/v2 imported-world compatibility indexes | [Page contract](../content/streaming-and-worlds.md#streaming-page-contracts-and-legacy-normalization) |
+| I05 | `3f7dcad` | Shared page forest validation and load-time v1/v2 imported-world compatibility indexes | [Page contract](../content/streaming-and-worlds.md#streaming-page-contracts-and-legacy-normalization) |
+| I06 | This batch | Explicit imported-world v3 tooling, deterministic four-tier POI page baking and immutable publication | [Bake contract](../content/streaming-and-worlds.md#imported-world-v3-page-baking) |
 | S1a | `e3f11cf` | Hidden residency and readiness tickets | [Design](streamed-rendering-s1a.md) |
 | S1b | `a539257` | Global content budgets, ordering and atlas backpressure | [Design](streamed-rendering-s1b.md) |
 | S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
@@ -5010,7 +5011,7 @@ interactive collision/edit/reload and frame performance were not checked.
 
 ### I05: Shared page validation and legacy imported-world normalization
 
-Commit: this batch. Shared page records and pure forest validation establish
+Commit: `3f7dcad`. Shared page records and pure forest validation establish
 manifest-local parent/leaf ownership. Imported-world v1/v2 readers now build
 owned compatibility indexes once at load, preserving first-LOD, sector/PVS and
 legacy distance behavior. Writers remain v2. See the
@@ -5036,3 +5037,33 @@ Gasworks, Crossfire and Subtransit metadata loads preserve 31, 288 and 25 pages
 respectively. I06 (v3 imported-world admission and deterministic page bake) is
 next; I13/I14 remain pending. Live page scheduling, collision/edit ownership,
 GPU visuals and frame performance are not verified by this foundation.
+
+
+### I06: Imported-world v3 tooling and deterministic POI pages
+
+Commit: this batch. Content owns explicit v3 wire dispatch, indexed visibility,
+bounded payload qualification and page publication. VOX/common importers opt into
+the shared four-tier producer; default v2 output and legacy distance/PVS remain
+unchanged. Original opaque material pairs and authored landmark overrides produce
+canonical pages with real payload/aux hashes, byte sizes and occupied costs.
+Generation-qualified files remain immutable; the manifest publishes last. See
+[the owning contract](../content/streaming-and-worlds.md#imported-world-v3-page-baking).
+
+Verification passed from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./content/... . ./importers/common -run I06 -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+git diff --check
+```
+
+Consumer builds passed with
+`env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-i06-editor .`
+from `../gekko-editor` and
+`env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-i06-actiongame .`
+from `../actiongame`. Consumer test suites were not rerun; their previously
+recorded editor missing-helper and action-game bot failures remain. Gasworks,
+Crossfire and Subtransit legacy metadata still load with 31, 288 and 25 pages.
+Live runtime rejects v3 until residency/handoff exist. Native GPU visuals and
+frame-time improvement were not measured. I07 terrain page forests/normalization
+are next; its height-tile codec foundation is already delivered by W4c1.

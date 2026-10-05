@@ -26,6 +26,9 @@ func EnsureImportedWorldAuxSidecarsForManifestWithCodec(manifestPath string, cod
 	if err != nil {
 		return err
 	}
+	if manifest.SchemaVersion == 3 {
+		return fmt.Errorf("immutable v3 pages require the page bake publisher")
+	}
 	if importedWorldManifestAuxRefsCurrent(manifestPath, manifest) {
 		return nil
 	}

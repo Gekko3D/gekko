@@ -2,6 +2,8 @@ package common
 
 import (
 	"fmt"
+	"math"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -12,6 +14,7 @@ import (
 )
 
 type ImportedWorldEmitOptions struct {
+	PageBakeOptions    *contentderived.ImportedWorldPageBakeOptions
 	WorldID            string
 	ChunkSize          int
 	VoxelResolution    float32
@@ -42,6 +45,7 @@ type ImportedWorldSaveStats struct {
 }
 
 type ImportedWorldEmission struct {
+	PageBake        *contentderived.ImportedWorldPageBake
 	Manifest        *content.ImportedWorldDef
 	Chunks          map[[3]int]*content.ImportedWorldChunkDef
 	ProxyChunks     map[string]*content.ImportedWorldChunkDef
@@ -57,6 +61,9 @@ func BuildImportedWorldEmission(voxels []Voxel, materials []Material, opts Impor
 	}
 	if opts.VoxelResolution <= 0 {
 		return ImportedWorldEmission{}, fmt.Errorf("voxel resolution must be positive")
+	}
+	if opts.PageBakeOptions != nil && (opts.ChunkSize > content.ImportedWorldPageMaxPayloadSide || math.IsNaN(float64(opts.VoxelResolution)) || math.IsInf(float64(opts.VoxelResolution), 0) || math.IsInf(float64(float32(opts.ChunkSize)*opts.VoxelResolution), 0)) {
+		return ImportedWorldEmission{}, fmt.Errorf("page bake requires a finite bounded source grid")
 	}
 	if opts.ChunkDirectoryName == "" {
 		opts.ChunkDirectoryName = "chunks"
@@ -124,14 +131,17 @@ func BuildImportedWorldEmission(voxels []Voxel, materials []Material, opts Impor
 		chunksByCoord[content.TerrainChunkCoordDef{X: coord[0], Y: coord[1], Z: coord[2]}] = chunk
 	}
 	sectors := content.BuildImportedWorldSectors(entries, opts.ChunkSize, opts.VoxelResolution, content.DefaultImportedWorldSectorTargetWorldSize)
-	sectors, proxyChunks := content.BuildImportedWorldSectorProxyChunks(sectors, chunksByCoord, content.ImportedWorldSectorProxyOptions{
-		WorldID:         opts.WorldID,
-		ChunkSize:       opts.ChunkSize,
-		VoxelResolution: opts.VoxelResolution,
-		Tags:            opts.Tags,
-	})
+	proxyChunks := map[string]*content.ImportedWorldChunkDef{}
+	if opts.PageBakeOptions == nil {
+		sectors, proxyChunks = content.BuildImportedWorldSectorProxyChunks(sectors, chunksByCoord, content.ImportedWorldSectorProxyOptions{
+			WorldID:         opts.WorldID,
+			ChunkSize:       opts.ChunkSize,
+			VoxelResolution: opts.VoxelResolution,
+			Tags:            opts.Tags,
+		})
+	}
 
-	return ImportedWorldEmission{
+	result := ImportedWorldEmission{
 		Manifest: &content.ImportedWorldDef{
 			WorldID:            opts.WorldID,
 			SchemaVersion:      content.CurrentImportedWorldSchemaVersion,
@@ -151,10 +161,22 @@ func BuildImportedWorldEmission(voxels []Voxel, materials []Material, opts Impor
 		Chunks:          chunks,
 		ProxyChunks:     proxyChunks,
 		TotalVoxelCount: total,
-	}, nil
+	}
+	if opts.PageBakeOptions != nil {
+		pageBake, err := contentderived.BuildImportedWorldPageBake(result.Manifest, chunksByCoord, *opts.PageBakeOptions)
+		if err != nil {
+			return ImportedWorldEmission{}, err
+		}
+		result.PageBake = pageBake
+		result.Manifest = pageBake.Manifest
+	}
+	return result, nil
 }
 
 func SaveImportedWorldEmission(manifestPath string, emission ImportedWorldEmission) error {
+	if emission.PageBake != nil {
+		return SaveImportedWorldEmissionWithOptions(manifestPath, emission, ImportedWorldSaveOptions{})
+	}
 	return SaveImportedWorldEmissionWithOptions(manifestPath, emission, ImportedWorldSaveOptions{
 		ChunkPayloadKind: content.ImportedWorldChunkPayloadSparseJSONV1,
 	})
@@ -167,6 +189,62 @@ func SaveImportedWorldEmissionWithOptions(manifestPath string, emission Imported
 
 func SaveImportedWorldEmissionWithOptionsResult(manifestPath string, emission ImportedWorldEmission, opts ImportedWorldSaveOptions) (ImportedWorldSaveStats, error) {
 	var stats ImportedWorldSaveStats
+	if emission.PageBake != nil {
+		if emission.PageBake.Manifest == nil {
+			return stats, fmt.Errorf("page bake manifest is nil")
+		}
+		if (opts.ChunkPayloadKind != "" && opts.ChunkPayloadKind != content.ImportedWorldChunkPayloadDenseRLEBinaryV1) || opts.EmbedNormals || opts.ChunkCodec != nil {
+			return stats, fmt.Errorf("page bake save options require fixed RLE and normal sidecars")
+		}
+		existing := map[string]bool{}
+		record := func(path string) {
+			_, err := os.Stat(content.ResolveDocumentPath(path, manifestPath))
+			existing[path] = err == nil
+		}
+		for _, entry := range emission.PageBake.Manifest.Entries {
+			record(entry.ChunkPath)
+			record(content.DefaultImportedWorldChunkAuxPath(entry.ChunkPath))
+		}
+		for path := range emission.PageBake.PageChunks {
+			record(path)
+			record(content.DefaultImportedWorldChunkAuxPath(path))
+		}
+		if err := contentderived.SaveImportedWorldPageBake(manifestPath, emission.PageBake); err != nil {
+			return stats, err
+		}
+		for _, entry := range emission.PageBake.Manifest.Entries {
+			if existing[entry.ChunkPath] {
+				stats.ChunksSkipped++
+			} else {
+				stats.ChunksWritten++
+			}
+			if entry.Aux != nil {
+				if existing[entry.Aux.AuxPath] {
+					stats.ChunkAuxSkipped++
+				} else {
+					stats.ChunkAuxWritten++
+				}
+			}
+		}
+		for _, page := range emission.PageBake.Manifest.Pages {
+			if page.Level == content.StreamPageLevelLeaf {
+				continue
+			}
+			if existing[page.Payload.Path] {
+				stats.ProxyChunksSkipped++
+			} else {
+				stats.ProxyChunksWritten++
+			}
+			if page.Payload.Aux != nil {
+				if existing[page.Payload.Aux.AuxPath] {
+					stats.ProxyAuxSkipped++
+				} else {
+					stats.ProxyAuxWritten++
+				}
+			}
+		}
+		return stats, nil
+	}
 	if emission.Manifest == nil {
 		return stats, fmt.Errorf("manifest is nil")
 	}

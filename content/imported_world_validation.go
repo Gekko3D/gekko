@@ -38,6 +38,9 @@ func ValidateImportedWorld(def *ImportedWorldDef, opts ImportedWorldValidationOp
 		result.addError("nil_imported_world", "imported world definition is nil")
 		return result
 	}
+	if def.SchemaVersion == ImportedWorldPageSchemaVersion {
+		return validateImportedWorldV3Files(def, opts)
+	}
 	if def.WorldID == "" {
 		result.addError("empty_world_id", "imported world world_id is required")
 	}
