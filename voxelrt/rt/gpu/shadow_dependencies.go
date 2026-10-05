@@ -642,7 +642,7 @@ func buildDirectionalShadowRayPrism(inverse [16]float32) directionalShadowRayPri
 	return directionalShadowRayPrism{worldToRay, true}
 }
 
-func (prism directionalShadowRayPrism) intersects(caster localShadowCasterKey) bool {
+func (prism directionalShadowRayPrism) intersects(caster localShadowCasterKey, projectionCount *uint64) bool {
 	if !prism.supported || !caster.instance.world.present {
 		return true
 	}
@@ -654,30 +654,37 @@ func (prism directionalShadowRayPrism) intersects(caster localShadowCasterKey) b
 	if !finiteShadowBounds(&bounds) {
 		return true
 	}
-	minimum := mgl64.Vec3{math.Inf(1), math.Inf(1), math.Inf(1)}
-	maximum := mgl64.Vec3{math.Inf(-1), math.Inf(-1), math.Inf(-1)}
+	var minimum, maximum mgl64.Vec3
 	guard := mgl64.Vec3{1e-4, 1e-4, 1e-4}
-	for corner := 0; corner < 8; corner++ {
-		p := mgl64.Vec4{0, 0, 0, 1}
-		for axis := 0; axis < 3; axis++ {
-			p[axis] = float64(bounds[(corner>>axis)&1][axis])
+	for row := 0; row < 3; row++ {
+		var lower, upper [3]float64
+		magnitude := 0.0
+		for column := 0; column < 3; column++ {
+			coefficient := prism.worldToRay[column*4+row]
+			a := coefficient * float64(bounds[0][column])
+			b := coefficient * float64(bounds[1][column])
+			lower[column], upper[column] = math.Min(a, b), math.Max(a, b)
+			magnitude += math.Max(math.Abs(a), math.Abs(b))
 		}
-		ray := prism.worldToRay.Mul4x1(p)
-		for axis := 0; axis < 3; axis++ {
-			if math.IsNaN(ray[axis]) || math.IsInf(ray[axis], 0) {
-				return true
-			}
-			minimum[axis] = math.Min(minimum[axis], ray[axis])
-			maximum[axis] = math.Max(maximum[axis], ray[axis])
-			// Cover float32 shader arithmetic, including cancellation from large world
-			// translations; contact with a boundary is always included.
-			magnitude := 0.0
-			for column := 0; column < 4; column++ {
-				magnitude += math.Abs(prism.worldToRay[column*4+axis] * p[column])
-			}
-			guard[axis] = math.Max(guard[axis], magnitude*1e-4)
+		translation := prism.worldToRay[12+row]
+		// Each row's extrema are attainable corners. Preserve Mul4x1's
+		// left-associated column order, with translation last.
+		if projectionCount != nil {
+			*projectionCount += 2
+		}
+		minimum[row] = lower[0] + lower[1] + lower[2] + translation
+		maximum[row] = upper[0] + upper[1] + upper[2] + translation
+		// The maximum absolute product in each column is jointly attainable,
+		// preserving the corner guard even when large translations cancel.
+		magnitude += math.Abs(translation)
+		guard[row] = math.Max(guard[row], magnitude*1e-4)
+		if math.IsNaN(minimum[row]) || math.IsInf(minimum[row], 0) ||
+			math.IsNaN(maximum[row]) || math.IsInf(maximum[row], 0) ||
+			math.IsNaN(guard[row]) || math.IsInf(guard[row], 0) {
+			return true
 		}
 	}
+	// Validate every row before rejecting lateral or upstream separation.
 	return maximum[0] >= -1-guard[0] && minimum[0] <= 1+guard[0] && maximum[1] >= -1-guard[1] && minimum[1] <= 1+guard[1] && maximum[2] >= -1-guard[2]
 }
 
@@ -714,7 +721,9 @@ func (m *GpuBufferManager) prepareDirectionalShadowDependencies(scene *core.Scen
 		if !owner.active || owner.light != key || owner.membershipRevision != m.localShadowMembershipRevision {
 			prism = buildDirectionalShadowRayPrism(cascade.InvViewProj)
 		}
-		m.refreshShadowDependency(owner, key, false, func(_ int, caster localShadowCasterKey) bool { return prism.intersects(caster) })
+		m.refreshShadowDependency(owner, key, false, func(_ int, caster localShadowCasterKey) bool {
+			return prism.intersects(caster, &m.ShadowDirectionalBoundsProjectionCount)
+		})
 	}
 }
 

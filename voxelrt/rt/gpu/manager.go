@@ -292,7 +292,11 @@ type GpuBufferManager struct {
 	// ShadowPointMembershipClassificationCount cumulatively counts point caster/light
 	// footprint classifications, including conservative invalid-input fallbacks.
 	ShadowPointMembershipClassificationCount uint64
-	SceneBindingRevision                     uint64
+	// ShadowDirectionalBoundsProjectionCount cumulatively counts evaluated XYZ
+	// affine row projections during directional caster bounds membership checks.
+	// Invalid bounds and unsupported projections perform no row projections.
+	ShadowDirectionalBoundsProjectionCount uint64
+	SceneBindingRevision                   uint64
 	// Cumulative scene-record compilation and successful queue publication work.
 	SceneInstanceRecordBuildCount    uint64
 	SceneObjectParamRecordBuildCount uint64

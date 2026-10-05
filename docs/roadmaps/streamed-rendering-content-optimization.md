@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2l are complete; R2 remains partial; other sections are proposals.
+Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -803,13 +803,13 @@ Owners: app resources/frame graph, GPU render setup, resolve and feature shaders
 
 ### R2. Narrow shadow invalidation
 
-R2a–R2l completed local point/spot and per-cascade directional dependencies,
+R2a–R2m completed local point/spot and per-cascade directional dependencies,
 opacity-aware upload attribution, consistent scheduling and growth-safe update
 publication, including encoder-ordered mixed-resolution batches and dependency-driven
 local and directional reuse without camera-history force, plus world-anchored
 directional texel grids, independent point-face reuse and incremental bounds-only
 membership updates, compact shared-snapshot tokens per volume and shared point-light
-footprint classification. Full scalar capture and moving-volume predicate scans remain. [Ownership decision](streamed-rendering-r2.md);
+footprint classification and affine endpoint directional bounds projection. Full scalar capture and moving-volume predicate scans remain. [Ownership decision](streamed-rendering-r2.md);
 [runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies).
 
 Retain camera-focused cascades/local-light budgets. Track changed bounds/revisions; dirty intersecting caster volumes only, including removal/streamed activation.
@@ -886,7 +886,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | R2i | `862254b` | Refresh intersecting point faces while preserving independent acknowledgements | [Runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies) |
 | R2j | `ed0993f` | Recheck changed bounds for stable shadow volumes with conservative full-scan fallbacks | [Runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies) |
 | R2k | `ff17954` | Compact volume member snapshots while preserving exact live dependencies | [Runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies) |
-| R2l | This batch | Share preparation-local point footprints across faces needing membership work | [Runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies) |
+| R2l | `a47351e` | Share preparation-local point footprints across faces needing membership work | [Runtime contract](../renderer/runtime.md#local-shadow-cache-dependencies) |
+| R2m | This batch | Project directional caster bounds with affine endpoint intervals | [Runtime contract](../renderer/runtime.md#directional-shadow-cache-dependencies) |
 | S1a | `e3f11cf` | Hidden residency and readiness tickets | [Design](streamed-rendering-s1a.md) |
 | S1b | `a539257` | Global content budgets, ordering and atlas backpressure | [Design](streamed-rendering-s1b.md) |
 | S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
@@ -4261,3 +4262,39 @@ env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2l-consumer-3 .
 # ../examples/testing-vox
 env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-r2l-consumer-4 .
 ```
+
+
+### R2m: Affine endpoint directional bounds projection
+
+GPU-manager directional membership now evaluates six XYZ endpoint projections
+instead of 24 corner projections per valid caster/cascade. Attainable extrema,
+cancellation guards, conservative fallback, downstream rays and independent
+acknowledgements are preserved. [Contract](../renderer/runtime.md#directional-shadow-cache-dependencies).
+
+The retained ten-volume CPU diagnostic at 1,000 selected casters measured
+structural membership rescans at 908.861 µs before and 747.551 µs after (18% lower);
+at 32 casters, 33.473 µs became 28.450 µs (15% lower). Allocations are unchanged.
+Other workloads varied by roughly 3–7%; these single-run CPU measurements exclude
+selection/BVH, GPU execution and gameplay FPS. Live scalar capture and the number
+of membership predicates remain unchanged.
+
+Verification passed from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu ./voxelrt/rt/core ./voxelrt/rt/app -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race ./voxelrt/rt/gpu ./voxelrt/rt/app -run '^TestR2' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go run docs/roadmaps/diagnostics/r2j_shadow_membership_cpu.go -test.benchtime=1s
+for entry in r2c:shadow_publication r2d:shadow_batches r2e:shadow_reuse r2f:directional_reuse r2g:camera_shadow_reuse r2h:directional_stability r2i:point_face_reuse; do
+    shadow_step=${entry%%:*}
+    diagnostic_name=${entry#*:}
+    env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-${shadow_step}-native docs/roadmaps/diagnostics/${shadow_step}_${diagnostic_name}.go || exit 1
+    /tmp/gekko-${shadow_step}-native || exit 1
+done
+git diff --check
+```
+
+Rebuilt native desktop WebGPU diagnostics preserve cached/fresh-map parity.
+Consumer builds passed using `env GOCACHE=/tmp/gekko3d-gocache go build -o
+/tmp/gekko-r2m-consumer-N .` from `../gekko-editor` (N=0), `../actiongame` (1),
+`../spacegame_go` (2), `../spacesim` (3), and `../examples/testing-vox` (4).
+Gameplay appearance and FPS were not manually measured.

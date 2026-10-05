@@ -750,8 +750,15 @@ Membership follows the actual inverse-projection ray prism: orthographic XY and
 the near-plane origin, with no downstream far-plane cutoff. The shader continues
 traversal beyond its depth projection. Invalid bounds or unsupported, nonfinite,
 singular or poorly conditioned inverse projections conservatively retain casters.
-Scalar comparisons remain live while unchanged membership reuses indices.
-Removed layers release retained caster references.
+AABB projection uses affine endpoint intervals, with column-ordered sums and
+translation last. These attain the same row extrema and cancellation guard as
+eight-corner projection. All XYZ rows validate before clipping; numerical
+uncertainty retains the caster. `GpuBufferManager.ShadowDirectionalBoundsProjectionCount`
+cumulatively counts evaluated XYZ row projections: two endpoints per row, six
+per valid AABB/cascade check. Invalid bounds or unsupported projections perform
+no row projections. Membership predicate counts and dependency generations are
+unchanged. Scalar comparisons remain live while unchanged membership reuses
+indices. Removed layers release retained caster references.
 
 Valid cascades remain cached regardless of age. `CadenceFrames` remains metadata
 for compatibility but does not schedule periodic work. Initial or changed inputs

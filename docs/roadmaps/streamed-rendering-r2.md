@@ -260,3 +260,29 @@ retention/invalidation contracts; shared preparation-local masks extend current
 manager-owned snapshots without changing ECS, shader layout, selection or cache
 policy. CPU work/timing and native map parity verify this step. Full live scalar
 capture, moving-volume predicate counts and gameplay FPS remain separate limits.
+
+
+## R2m ownership decision
+
+The GPU manager projects directional caster AABBs with affine endpoint intervals
+instead of enumerating eight corners. Each row chooses minimum/maximum endpoint
+products and accumulates them in the existing corner-dot order, with translation
+last. The cancellation guard uses the maximum absolute endpoint product in each
+column, retaining the existing absolute/relative guard. This is the same attainable
+row-extrema and guard envelope as the corner calculation, not a center/extents
+approximation. All rows are validated before clipping; invalid bounds, unsupported
+projections or nonfinite arithmetic retain conservative membership. Downstream rays
+remain unbounded beyond the projection's far depth.
+
+`ShadowDirectionalBoundsProjectionCount` counts evaluated XYZ affine row projections:
+three per legacy corner and two endpoints per interval row. Membership predicate
+counts, exact inputs, generations, selected ordering and recorded acknowledgements
+keep their existing owners. No shader, projection-generation or scheduling changes
+are required.
+
+Corner enumeration repeats affine arithmetic during directional membership scans.
+Shared cross-frame projection caches require broader invalidation contracts;
+endpoint projection is a long-term geometry-kernel optimization within the current
+manager-owned snapshots. Independent corner parity, work/timing measurements and
+native map parity verify this step. Scalar capture and moving-volume predicate
+counts remain; gameplay FPS gains require separate measurement.
