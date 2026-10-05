@@ -82,6 +82,13 @@ Streamed runtime:
 - keeps terrain chunk metadata in streamed state
 - loads chunks on demand per active chunk observer
 
+Terrain geometry conversion uses the
+[uniform column builder](../renderer/editing.md#fresh-uniform-column-construction)
+to fill brick-sized runs directly. Full column coverage, source records,
+ordered revisions and normal dirty coverage remain unchanged. This reduces
+construction work without changing collision, backing/removal or streaming
+publication authority. Distant surface-band geometry is separate policy work.
+
 Workers prepare terrain registration geometry. Main commits retain live removal
 authority, terrain backing and synchronous hooks. See
 [terrain asset ownership](../assets/runtime-assets.md#streamed-terrain-registration)

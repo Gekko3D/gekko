@@ -1788,18 +1788,16 @@ func spawnAuthoredTerrainChunkEntityWithPreparedAsset(cmd *Commands, assets *Ass
 }
 
 func terrainChunkToXBrickMap(chunk *content.TerrainChunkDef) *volume.XBrickMap {
-	return volume.BuildXBrickMap(func(yield func(volume.VoxelWrite) bool) {
-		if chunk == nil {
-			return
-		}
+	if chunk == nil {
+		return volume.BuildXBrickMapColumns(nil, 0)
+	}
+	return volume.BuildXBrickMapColumns(func(yield func(volume.VoxelColumn) bool) {
 		for _, column := range chunk.Columns {
-			for y := 0; y < column.FilledVoxels; y++ {
-				if !yield(volume.VoxelWrite{X: column.X, Y: y, Z: column.Z, Value: chunk.SolidValue}) {
-					return
-				}
+			if !yield(volume.VoxelColumn{X: column.X, Z: column.Z, FilledVoxels: column.FilledVoxels}) {
+				return
 			}
 		}
-	})
+	}, chunk.SolidValue)
 }
 
 func terrainChunkPosition(chunk *content.TerrainChunkDef) mgl32.Vec3 {

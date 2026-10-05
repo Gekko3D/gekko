@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals, P3b native workload evaluation and P3c packed mixed materials are complete, with P3 remaining partial; W3a scene BVH, W3b sector and W3c inner grid traversal are complete, with W3 remaining partial; other sections are proposals.
+Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals, P3b native workload evaluation and P3c packed mixed materials are complete, with P3 remaining partial; W3a scene BVH, W3b sector and W3c inner grid traversal are complete, with W3 remaining partial; W4a terrain brick-run construction is complete, with W4 remaining partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -770,6 +770,12 @@ Keep existing near-first child ordering. Rust's exact 30-depth/32-stack constant
 
 ### W4. Generate surface bricks directly
 
+Status: partial. W4a fills uniform terrain columns in brick-confined runs while
+preserving full-column geometry and publication semantics; see the
+[column construction contract](../renderer/editing.md#fresh-uniform-column-construction).
+Imported/mixed brick construction, distant surface-band rendering and its
+heightfield collision/edit-frontier authority remain separate steps.
+
 Replace `SetVoxel` loops with bulk masks/values for baked/imported chunks and terrain pages. Distant natural terrain materializes surface bands, not full columns; height tiles retain collision authority.
 
 Apply patch deltas before publication. Retain implicit backing so excavation exposes valid interiors/frontiers. POI caves/overhangs retain full 3D voxel authority, not height data.
@@ -964,6 +970,7 @@ This workflow does not independently authorize tests, delegation or commits.
 | W3a | `57f162c` | Complete generated scene BVH traversal without arbitrary visit limits | [Runtime contract](../renderer/runtime.md#scene-bvh-traversal) |
 | W3b | `c5676cf` | Complete sector traversal and prevent stationary-axis rewinds in nested walks | [Runtime contract](../renderer/runtime.md#sector-traversal) |
 | W3c | `aafa193` | Bound sector-based brick and voxel walks by their owning grids | [Runtime contract](../renderer/runtime.md#inner-brick-and-voxel-traversal) |
+| W4a | This batch | Bulk uniform terrain column construction with ordered revision and halo parity | [Construction contract](../renderer/editing.md#fresh-uniform-column-construction) |
 | S1a | `e3f11cf` | Hidden residency and readiness tickets | [Design](streamed-rendering-s1a.md) |
 | S1b | `a539257` | Global content budgets, ordering and atlas backpressure | [Design](streamed-rendering-s1b.md) |
 | S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
@@ -4822,7 +4829,7 @@ were not verified.
 
 ### W3d scope audit: Tree64 is dormant
 
-Commit: this batch (documentation only). No managed producer or upload uses
+Commit: `4cdee14` (documentation only). No managed producer or upload uses
 `Tree64LOD`; admitted and rejected object parameters always publish the invalid
 Tree64 base. Opaque Tree64 dispatch is unreachable for those objects, and shadow
 scene traversal forces XBrickMap. The [runtime status](../renderer/runtime.md#dormant-tree64-representation)
@@ -4836,3 +4843,39 @@ documentation-only audit. Tree64 activation is deferred pending representation
 and publication design; W4 bulk surface-brick generation is the next live
 implementation candidate. W3 remains partial for CPU traversal completion and
 the particle live-count audit.
+
+
+### W4a: Bulk uniform terrain column construction
+
+Commit: this batch. Volume-owned `BuildXBrickMapColumns` fills payloads and micro
+occupancy in brick-confined runs. Eager terrain spawning and streamed worker
+preparation use it through their shared conversion. Full geometry, source
+records, ordered revisions, dirty coverage and edit/copy behavior retain parity
+with sequential writes. The [canonical contract](../renderer/editing.md#fresh-uniform-column-construction)
+owns the construction semantics.
+
+Verification passed from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume -run 'W4a|P5f|P5k' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run 'W4a|P5gTerrain|P5b|TerrainColumnsUseVoxelBacking' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . ./voxelrt/rt/volume -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^$' -bench '^BenchmarkW4aTerrainColumnConstruction$' -benchmem -benchtime=100ms -count=3
+git diff --check
+```
+
+Six CPU fixtures use 16/32-wide stepped terrain with base heights 8/64/256.
+Median construction time improved 3.07–4.04× against the existing ordered
+voxel-stream builder; the 32-wide height-256 case changed from 33.22 ms to
+8.22 ms. Allocation counts match the baseline; median allocated bytes differ
+by 16–30 bytes per build. These local construction measurements do not measure
+GPU time or frame FPS.
+
+Consumer builds passed with
+`env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-w4a-editor .` from
+`../gekko-editor` and
+`env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-w4a-actiongame .` from
+`../actiongame`. W4 remains partial for imported/mixed construction and surface
+bands with collision/backing/edit-frontier authority. No shader, persisted
+schema, surface-only geometry or collision policy changed. Native GPU visuals,
+other machines and full interactive gameplay were not checked.

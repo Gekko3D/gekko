@@ -62,6 +62,28 @@ in `GPUEditMode` uses ordinary sequential `SetVoxel` throughout, preserving
 callback observations and reentry even if a callback changes that mode. No
 intermediate write list or new shared owner is introduced.
 
+## Fresh uniform column construction
+
+`volume.BuildXBrickMapColumns(iter.Seq[volume.VoxelColumn], value)` builds a
+fresh, independently editable CPU map from uniform vertical columns. Each
+record supplies signed X/Z and `FilledVoxels`; occupied Y is `[0,FilledVoxels)`.
+The sequence is consumed synchronously once, including when the material is
+zero. Nil input, nonpositive heights and zero material produce no voxel changes.
+
+Columns retain input order. Repeated columns retain prior coverage; only a taller
+column's new suffix changes content. Content and sector revisions match ordered
+per-voxel writes, including extensions interleaved with other columns. Payloads,
+micro occupancy, material flags, bounds and initial normal-halo coverage retain
+the existing fresh-map contract. Later edits and copies use ordinary XBrickMap
+semantics. The builder does not mutate input records or publish partial maps.
+
+Construction works in runs confined to an eight-voxel brick. Each run resolves
+its sector/brick once, fills values and occupancy directly, and accounts for
+changed-cell revisions. At fixed X/Z, the first and last changed voxel's halo
+ranges cover exactly the union for that run. Material flags finalize once per
+surviving brick. This API does not create surface-only terrain, collision
+proxies, edit removals or implicit interiors; producers retain those contracts.
+
 ## Managed voxel ownership
 
 `volume.NewManagedXBrickMap(source)` explicitly seals a defensive copy behind
