@@ -194,6 +194,7 @@ func TestS1iOptionalDeferralPreservesCPUAndLookup(t *testing.T) {
 	resident.XBrickMap.ClearDirty()
 	m, scene := scheduleFixture(t, resident)
 	r := s1iResources(1 << 20)
+	r.SectorTable = 512
 	m.SetVoxelGPUAdmissionBudget(VoxelGPUAdmissionBudget{MaxBytes: 1})
 	denied := s1iObject(20, 128, true)
 	denied.RenderEnabled = false
@@ -482,7 +483,7 @@ func TestS1iHardLimitClampsHeadroomAndPreservesBlockedLookupSnapshot(t *testing.
 	}
 	obj.XBrickMap.Sectors[[3]int{}] = volume.NewSector(0, 0, 0)
 	obj.XBrickMap.SetVoxel(0, 0, 0, 2)
-	for i := 1; i < 100; i++ {
+	for i := 1; i < 257; i++ {
 		obj.XBrickMap.Sectors[[3]int{i, 0, 0}] = volume.NewSector(i, 0, 0)
 	}
 	obj.XBrickMap.StructureDirty = true
@@ -547,7 +548,7 @@ func TestS1iSharedSectorAndBrickReleaseWaitsForFinalOwner(t *testing.T) {
 	second.XBrickMap.Sectors[[3]int{}] = first.XBrickMap.Sectors[[3]int{}]
 	m, resources := s1iManager(), s1iResources(0)
 	s1iRun(t, m, &core.Scene{Objects: []*core.VoxelObject{first, second}}, &resources, s1iGrow(&resources))
-	sectorTail, brickTail, auxTail := m.SectorAlloc.Tail, m.BrickAlloc.Tail, m.VoxelAuxAlloc.Tail
+	sectorTail, auxTail := m.SectorAlloc.Tail, m.VoxelAuxAlloc.Tail
 	m.RetainVoxelMap(first.XBrickMap)
 	m.RetainVoxelMap(second.XBrickMap)
 	scene := &core.Scene{Objects: []*core.VoxelObject{second}}
@@ -557,7 +558,7 @@ func TestS1iSharedSectorAndBrickReleaseWaitsForFinalOwner(t *testing.T) {
 		t.Fatal("removing one map released its surviving alias's sector lookup")
 	}
 	m.evictRetainedVoxelMaps(map[*volume.XBrickMap]bool{second.XBrickMap: true})
-	want := uint64(256 + 32 + 64*BrickRecordSize + VoxelAuxRecordBytes + 512)
+	want := uint64(256 + 32 + BrickRecordSize + VoxelAuxRecordBytes + 512)
 	if got := m.RetainedVoxelMapStats().Bytes; got != want {
 		t.Fatalf("surviving alias lost assigned sector/brick/aux/payload storage: %d, want %d", got, want)
 	}
@@ -566,6 +567,7 @@ func TestS1iSharedSectorAndBrickReleaseWaitsForFinalOwner(t *testing.T) {
 	if ready, _, _ := m.RenderVoxelObjectReady(second, second.XBrickMap, second.XBrickMap.Revision); !ready {
 		t.Fatal("surviving aliased geometry cannot be serviced")
 	}
+	oldBase := m.SectorToInfo[second.XBrickMap.Sectors[[3]int{}]].BrickTableIndex
 	m.releaseVoxelMapAllocation(second.XBrickMap, m.Allocations[second.XBrickMap])
 	if got := m.RetainedVoxelMapStats(); got.Entries != 0 || got.Bytes != 0 {
 		t.Fatalf("final alias release retained assigned ownership: %+v", got)
@@ -577,8 +579,11 @@ func TestS1iSharedSectorAndBrickReleaseWaitsForFinalOwner(t *testing.T) {
 	schedulePutBrick(third, [6]int{}, scheduleBrick("mixed"))
 	m.SetVoxelGPUAdmissionBudget(VoxelGPUAdmissionBudget{MaxBytes: 1})
 	s1iRun(t, m, &core.Scene{Objects: []*core.VoxelObject{third}}, &resources, s1iGrow(&resources))
-	if ready, _, _ := m.RenderVoxelObjectReady(third, third.XBrickMap, third.XBrickMap.Revision); !ready || m.SectorAlloc.Tail != sectorTail || m.BrickAlloc.Tail != brickTail || m.VoxelAuxAlloc.Tail != auxTail {
-		t.Fatal("final alias release did not make its assigned sector/brick/aux slots reusable")
+	if ready, _, _ := m.RenderVoxelObjectReady(third, third.XBrickMap, third.XBrickMap.Revision); !ready || m.SectorAlloc.Tail != sectorTail || m.VoxelAuxAlloc.Tail != auxTail {
+		t.Fatal("final alias release did not make its assigned sector/aux slots reusable")
+	}
+	if m.SectorToInfo[third.XBrickMap.Sectors[[3]int{}]].BrickTableIndex == oldBase {
+		t.Fatal("unfenced final alias range was reused before submission completion")
 	}
 }
 
@@ -599,12 +604,16 @@ func TestS1iStructuralRemovalPreservesInteriorAliases(t *testing.T) {
 			scene := &core.Scene{Objects: []*core.VoxelObject{obj}}
 			s1iRun(t, m, scene, &resources, s1iGrow(&resources))
 			m.RetainVoxelMap(obj.XBrickMap)
-			sectorTail, brickTail, auxTail := m.SectorAlloc.Tail, m.BrickAlloc.Tail, m.VoxelAuxAlloc.Tail
+			sectorTail, auxTail := m.SectorAlloc.Tail, m.VoxelAuxAlloc.Tail
+			oldBases := make(map[uint32]bool)
+			for _, sector := range m.Allocations[obj.XBrickMap].Sectors {
+				oldBases[m.SectorToInfo[sector].BrickTableIndex] = true
+			}
 			delete(obj.XBrickMap.Sectors, [3]int{})
 			obj.XBrickMap.StructureDirty = true
 			s1iRun(t, m, scene, &resources, s1iGrow(&resources))
 			m.evictRetainedVoxelMaps(map[*volume.XBrickMap]bool{obj.XBrickMap: true})
-			want := uint64(256 + 32 + 64*BrickRecordSize + VoxelAuxRecordBytes + 512)
+			want := uint64(256 + 32 + BrickRecordSize + VoxelAuxRecordBytes + 512)
 			if got := m.RetainedVoxelMapStats().Bytes; got != want {
 				t.Fatalf("structural removal released surviving alias storage: %d, want %d", got, want)
 			}
@@ -622,8 +631,11 @@ func TestS1iStructuralRemovalPreservesInteriorAliases(t *testing.T) {
 			obj.XBrickMap, obj.VoxelGPUAdmissionOptional = fresh.XBrickMap, true
 			m.SetVoxelGPUAdmissionBudget(VoxelGPUAdmissionBudget{MaxBytes: 1})
 			s1iRun(t, m, scene, &resources, s1iGrow(&resources))
-			if ready, _, _ := m.RenderVoxelObjectReady(obj, obj.XBrickMap, obj.XBrickMap.Revision); !ready || m.SectorAlloc.Tail != sectorTail || m.BrickAlloc.Tail != brickTail || m.VoxelAuxAlloc.Tail != auxTail {
+			if ready, _, _ := m.RenderVoxelObjectReady(obj, obj.XBrickMap, obj.XBrickMap.Revision); !ready || m.SectorAlloc.Tail != sectorTail || m.VoxelAuxAlloc.Tail != auxTail {
 				t.Fatal("final interior alias release did not permit optional free-slot reuse under pressure")
+			}
+			if oldBases[m.SectorToInfo[obj.XBrickMap.Sectors[[3]int{}]].BrickTableIndex] {
+				t.Fatal("unfenced interior alias range was reused before submission completion")
 			}
 		})
 	}

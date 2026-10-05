@@ -38,11 +38,19 @@ func (m *GpuBufferManager) executeVoxelUpload(context func() voxelNormalBakeCont
 			continue
 		}
 		brick := work.desiredBrick(sector, i)
+		recordIndex := info.BrickTableIndex + uint32(i)
+		if info.packed != nil {
+			mask := info.packed.mask
+			if work.sectorSnapshot != nil {
+				mask = work.sectorSnapshot.mask
+			}
+			recordIndex = info.BrickTableIndex + packedBrickRank(mask, i)
+		}
 		pointers[i] = brick
 		if brick == nil {
-			mustQueueVoxelWrite(m.writeVoxelBuffer(m.BrickTableBuf, uint64(info.BrickTableIndex+uint32(i))*BrickRecordSize, make([]byte, BrickRecordSize)))
+			mustQueueVoxelWrite(m.writeVoxelBuffer(m.BrickTableBuf, uint64(recordIndex)*BrickRecordSize, make([]byte, BrickRecordSize)))
 		} else {
-			m.uploadBrick(context, work.object, xbm, brick, info.BrickTableIndex+uint32(i), brickOriginForSectorIndex(key, i))
+			m.uploadBrick(context, work.object, xbm, brick, recordIndex, brickOriginForSectorIndex(key, i))
 		}
 	}
 	if work.kind == voxelUploadSector {

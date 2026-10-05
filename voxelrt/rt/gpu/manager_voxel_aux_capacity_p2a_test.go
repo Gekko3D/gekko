@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"math/bits"
 	"testing"
 
 	"github.com/cogentcore/webgpu/wgpu"
@@ -101,7 +102,16 @@ func p2aAuxBytes(t *testing.T, m *GpuBufferManager, b *p2aNative, xbm *volume.XB
 		t.Fatal("sector was not admitted")
 	}
 	index := uint32(key[3] + key[4]*4 + key[5]*16)
-	start := uint64(info.BrickTableIndex+index) * BrickRecordSize
+	header := b.buffers[m.SectorTableBuf][uint64(info.SlotIndex)*32 : uint64(info.SlotIndex+1)*32]
+	recordBase := binary.LittleEndian.Uint32(header[16:])
+	if binary.LittleEndian.Uint32(header[28:]) == 1 {
+		mask := uint64(binary.LittleEndian.Uint32(header[20:])) | uint64(binary.LittleEndian.Uint32(header[24:]))<<32
+		if mask&(uint64(1)<<index) == 0 {
+			t.Fatalf("absent packed local index%d has no record", index)
+		}
+		index = uint32(bits.OnesCount64(mask & ((uint64(1) << index) - 1)))
+	}
+	start := uint64(recordBase+index) * BrickRecordSize
 	records := b.buffers[m.BrickTableBuf]
 	if start+BrickRecordSize > uint64(len(records)) {
 		t.Fatal("fixed sector brick record exceeds buffer")
@@ -156,8 +166,8 @@ func TestP2aSparseAuxiliaryCapacityTracksOccupiedBricks(t *testing.T) {
 			}
 			p2aStep(t, m, b, scene)
 			capacity := b.BufferSize(m.DenseOccupancyBuf)
-			if b.BufferSize(m.BrickTableBuf) < uint64(count*64*BrickRecordSize) {
-				t.Fatal("P2a changed fixed 64-record sector brick-table addressing")
+			if b.BufferSize(m.BrickTableBuf) < uint64(count*BrickRecordSize) {
+				t.Fatal("occupied packed brick rows do not fit physical table")
 			}
 			if capacity < uint64(count*VoxelAuxRecordBytes) || capacity > uint64(2*count*VoxelAuxRecordBytes+256) {
 				t.Fatalf("%d occupied %s bricks reserved %d auxiliary bytes; want aligned geometric capacity near %d", count, kind, capacity, count*VoxelAuxRecordBytes)
@@ -375,8 +385,8 @@ func TestP2aSharedFreshPointerCannotBorrowAnotherDeferredUnitsRelease(t *testing
 
 func TestP2aStructuralDirtyBrickUnitsCannotBorrowDeferredClearCredit(t *testing.T) {
 	m, b, scene := p2aFixture(t)
-	o := p2aObject(scene, 1)
-	clearKey := [6]int{0, 0, 0, 1, 0, 0}
+	o := p2aObject(scene, 2)
+	clearKey := [6]int{1, 0, 0, 1, 0, 0}
 	old := p2aBrick("uniform", 1)
 	schedulePutBrick(o, clearKey, old)
 	p2aStep(t, m, b, scene)
@@ -385,15 +395,21 @@ func TestP2aStructuralDirtyBrickUnitsCannotBorrowDeferredClearCredit(t *testing.
 	saved := bytes.Clone(oldBytes)
 	fresh := p2aBrick("uniform", 2)
 	freshKey := [6]int{}
-	s1l3ClearIndex(o, 1)
+	clearSector := o.XBrickMap.Sectors[[3]int{1, 0, 0}]
+	packed := clearSector.GetPackedIndex(1)
+	clearSector.PackedBricks = append(clearSector.PackedBricks[:packed], clearSector.PackedBricks[packed+1:]...)
+	clearSector.BrickMask64 &^= uint64(1) << 1
+	o.XBrickMap.DirtyBricks[clearKey] = true
+	o.XBrickMap.Revision++
 	schedulePutBrick(o, freshKey, fresh)
 	o.XBrickMap.DirtyBricks[freshKey] = true
-	o.XBrickMap.Sectors[[3]int{1, 0, 0}] = volume.NewSector(1, 0, 0)
+	o.XBrickMap.Sectors[[3]int{2, 0, 0}] = volume.NewSector(2, 0, 0)
 	o.XBrickMap.StructureDirty = true
 	o.XBrickMap.Revision++
-	// Coordinate ordering tries fresh index 0 before clear index 1. Only one
-	// dirty-brick unit may write; the unrelated new empty sector cannot write.
-	m.SetVoxelUploadBudget(VoxelUploadBudget{MaxBytes: 1 << 30, MaxBricks: 1})
+	// Sector ordering tries fresh sector0 before the independent clear in1.
+	// Membership changes require one full-sector transaction; the unrelated
+	// empty sector2 cannot lend a release to the earlier fresh sector.
+	m.SetVoxelUploadBudget(VoxelUploadBudget{MaxBytes: 1 << 30, MaxSectors: 1, MaxBricks: 1})
 	p2aStep(t, m, b, scene)
 	if !o.XBrickMap.DirtyBricks[freshKey] {
 		t.Fatal("fresh dirty-brick unit borrowed another deferred dirty-brick unit's release under StructureDirty")

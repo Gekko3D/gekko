@@ -38,7 +38,7 @@ func TestS1iRegressionRetainedReactivationRespectsHardLookupCapacity(t *testing.
 		t.Fatal("second retained map never reached ready")
 	}
 	m.RetainVoxelMap(second)
-	if uint64(m.VoxelAuxAlloc.Tail)*VoxelAuxRecordBytes > resources.Auxiliary || resources.Auxiliary > storageLimit || resources.SectorGrid != 65536 || m.SectorAlloc.Tail != 1 || m.BrickAlloc.Tail != 1 || resources.Material > storageLimit {
+	if uint64(m.VoxelAuxAlloc.Tail)*VoxelAuxRecordBytes > resources.Auxiliary || resources.Auxiliary > storageLimit || resources.SectorGrid != 65536 || m.SectorAlloc.Tail != 1 || m.brickRanges.tail != 1 || m.brickRanges.tail*BrickRecordSize > resources.BrickTable || resources.Material > storageLimit {
 		t.Fatalf("fixture did not establish legal shared geometry/hash capacities: %+v", resources)
 	}
 	beforeHash := s1iHashEntries(t, m, scene)
@@ -121,11 +121,11 @@ func TestS1iRegressionReplacementAndNewAdopterShareFinalCapacity(t *testing.T) {
 			s1iRun(t, m, scene, &resources, s1iGrow(&resources))
 			// Both final sectors fit the exact legal auxiliary capacity. Preparation
 			// must not consume an extra slot absent from the resource transaction.
-			if uint64(m.SectorAlloc.Tail)*32 > resources.SectorTable || uint64(m.BrickAlloc.Tail)*64*BrickRecordSize > resources.BrickTable || uint64(m.VoxelAuxAlloc.Tail)*VoxelAuxRecordBytes > resources.Auxiliary {
-				t.Fatalf("actual allocation tails escaped admitted buffers: sector=%d brick=%d auxiliary=%d resources=%+v", m.SectorAlloc.Tail, m.BrickAlloc.Tail, m.VoxelAuxAlloc.Tail, resources)
+			if uint64(m.SectorAlloc.Tail)*32 > resources.SectorTable || m.brickRanges.tail*BrickRecordSize > resources.BrickTable || uint64(m.VoxelAuxAlloc.Tail)*VoxelAuxRecordBytes > resources.Auxiliary {
+				t.Fatalf("actual allocation tails escaped admitted buffers: sector=%d brick=%d auxiliary=%d resources=%+v", m.SectorAlloc.Tail, m.brickRanges.tail, m.VoxelAuxAlloc.Tail, resources)
 			}
-			if resources.Auxiliary != finalAuxiliaryBytes || m.SectorAlloc.Tail != 2 || m.BrickAlloc.Tail != 2 || m.VoxelAuxAlloc.Tail != 128 {
-				t.Fatalf("final two-sector capacity not established: sector=%d brick=%d auxiliary=%d resources=%+v", m.SectorAlloc.Tail, m.BrickAlloc.Tail, m.VoxelAuxAlloc.Tail, resources)
+			if resources.Auxiliary != finalAuxiliaryBytes || m.SectorAlloc.Tail != 2 || m.brickRanges.tail != 128 || m.VoxelAuxAlloc.Tail != 128 {
+				t.Fatalf("final two-sector capacity not established: sector=%d brick=%d auxiliary=%d resources=%+v", m.SectorAlloc.Tail, m.brickRanges.tail, m.VoxelAuxAlloc.Tail, resources)
 			}
 			for _, obj := range []*core.VoxelObject{a, b} {
 				if ready, _, _ := m.RenderVoxelObjectReady(obj, obj.XBrickMap, obj.XBrickMap.Revision); !ready {

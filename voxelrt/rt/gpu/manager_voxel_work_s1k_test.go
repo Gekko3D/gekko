@@ -390,10 +390,12 @@ func TestS1kAcknowledgedEditsSurvivePublicationWhileUploadsPaused(t *testing.T) 
 	}
 	s1kAssertResidentBytes(t, m, b, scene, resident)
 	info := m.SectorToInfo[resident.XBrickMap.Sectors[[3]int{}]]
-	clearOffset := uint64(info.BrickTableIndex+1) * BrickRecordSize
-	if !bytes.Equal(b.buffers[m.BrickTableBuf][clearOffset:clearOffset+BrickRecordSize], make([]byte, BrickRecordSize)) {
-		t.Fatal("already acknowledged empty-brick clear was lost at publication")
+	header := b.buffers[m.SectorTableBuf][uint64(info.SlotIndex)*32 : uint64(info.SlotIndex+1)*32]
+	if binary.LittleEndian.Uint32(header[20:])&(uint32(1)<<1) != 0 {
+		t.Fatal("already acknowledged removal became reachable at publication")
 	}
+	// Packed membership rewrites surviving rows; an absent logical index has no
+	// current record to clear. Resident byte checks above validate the survivors.
 	// Established material-generation invalidation is allowed while uploads pause.
 	m.SetVoxelUploadBudget(VoxelUploadBudget{MaxBytes: 1 << 30, MaxSectors: 4096, MaxBricks: 1 << 20})
 	s1kStep(t, m, b, scene)
@@ -560,7 +562,7 @@ func TestS1kFailurePreservesCurrentAuthorityAndRetiresUsedStaging(t *testing.T) 
 	for _, submitted := range []bool{false, true} {
 		t.Run(fmt.Sprintf("used staging %t", submitted), func(t *testing.T) {
 			m, b, scene, resident := s1kFixture(t)
-			arrival := s1kArrival(scene, 20, 2, false)
+			arrival := s1kArrival(scene, 20, 18, false)
 			before, generation, liveBefore := s1kPublished(m), m.MaterialBufferGeneration, b.liveBytes()
 			m.SetVoxelGPUWorkBudget(VoxelGPUWorkBudget{Enabled: true, MaxCreates: 7, MaxCreateBytes: 1 << 30, MaxCopyBytes: 4})
 			if submitted {

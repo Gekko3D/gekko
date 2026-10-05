@@ -181,14 +181,14 @@ func TestS1jPendingGenerationAndDetachmentResetDeferredWait(t *testing.T) {
 		t.Run(reset, func(t *testing.T) {
 			m, resources := s1iManager(), s1jResources(2, 2)
 			obj := s1iObject(20, 1, false)
-			coarse := s1iObject(10, 1, false).XBrickMap
+			coarse := s1hCapacityObject(7).XBrickMap
 			if !obj.SetRenderLOD2(coarse) {
 				t.Fatal("coarse selection rejected")
 			}
 			seed := s1iObject(50, 1, false)
 			s1iRun(t, m, &core.Scene{Objects: []*core.VoxelObject{obj, seed}}, &resources, s1iGrow(&resources))
-			// Keep recurring admission opportunities at the warmed two-sector
-			// physical capacity, independently of auxiliary rows per sector.
+			// Seven occupied coarse sectors plus the seed fill the eight-sector
+			// native-legal table; subsequent contenders compete for the released seed slot.
 			m.SetVoxelGPUAdmissionBudget(VoxelGPUAdmissionBudget{MaxBytes: m.VoxelGPUAdmissionStats().TotalBytes})
 			obj.VoxelUploadPriority, obj.VoxelUploadOrder = core.VoxelUploadPriorityKeep, 9999
 			if !s1jReady(m, obj) || !obj.SetPendingFullUpload() {

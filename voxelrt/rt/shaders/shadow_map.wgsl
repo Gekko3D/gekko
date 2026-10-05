@@ -211,6 +211,15 @@ fn popcnt64_lower(mask_lo: u32, mask_hi: u32, idx: u32) -> u32 {
     }
 }
 
+// Header byte 28 selects the physical record layout. Call only for an
+// occupied local index: legacy records use fixed indices, packed records rank.
+fn sector_brick_record_index(sector: SectorRecord, local_idx: u32) -> u32 {
+    if (sector.padding == 1u) {
+        return sector.brick_table_index + popcnt64_lower(sector.brick_mask_lo, sector.brick_mask_hi, local_idx);
+    }
+    return sector.brick_table_index + local_idx;
+}
+
 fn intersect_aabb(ray: Ray, min_b: vec3<f32>, max_b: vec3<f32>) -> vec2<f32> {
     let t0s = (min_b - ray.origin) * ray.inv_dir;
     let t1s = (max_b - ray.origin) * ray.inv_dir;
@@ -359,7 +368,7 @@ fn sample_occupancy_local(v: vec3<i32>, params: ObjectParams) -> f32 {
     if (!bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local)) {
         return 0.0;
     }
-    let packed_idx = sector.brick_table_index + brick_idx_local;
+    let packed_idx = sector_brick_record_index(sector, brick_idx_local);
     let brick = bricks[packed_idx];
     let b_flags = brick.flags;
     if (!brick_is_solid(b_flags)) {
@@ -461,7 +470,7 @@ fn traverse_xbrickmap(ray_ws: Ray, inst: Instance, t_enter: f32, t_exit: f32, ob
                     let bvid = vec3<u32>(brick_pos);
                     let brick_idx_local = bvid.x + bvid.y * 4u + bvid.z * 16u;
                     if (bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local)) {
-                        let packed_idx = sector.brick_table_index + brick_idx_local;
+                        let packed_idx = sector_brick_record_index(sector, brick_idx_local);
                         let brick = bricks[packed_idx];
                         let b_flags = brick.flags;
                         let b_material = brick.material_index;

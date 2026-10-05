@@ -31,14 +31,14 @@ func TestS1iRegressionNewAdopterPrecedesReplacementAdmission(t *testing.T) {
 	b.VoxelUploadOrder = 1
 	// Scene insertion and deterministic admission order differ: B first adopts
 	// S, then A replaces its old S snapshot with T. Both final sector tables
-	// must fit, including the 64 records cleared by each sector upload.
+	// must fit, including the one packed occupied record from each sector.
 	scene.Objects = []*core.VoxelObject{a, b}
 	s1iRun(t, m, scene, &resources, s1iGrow(&resources))
-	if uint64(m.SectorAlloc.Tail)*32 > resources.SectorTable || uint64(m.BrickAlloc.Tail)*64*BrickRecordSize > resources.BrickTable || uint64(m.VoxelAuxAlloc.Tail)*VoxelAuxRecordBytes > resources.Auxiliary {
-		t.Fatalf("reverse admission order escaped physical buffer ranges: sector=%d brick=%d auxiliary=%d resources=%+v", m.SectorAlloc.Tail, m.BrickAlloc.Tail, m.VoxelAuxAlloc.Tail, resources)
+	if uint64(m.SectorAlloc.Tail)*32 > resources.SectorTable || m.brickRanges.tail*BrickRecordSize > resources.BrickTable || uint64(m.VoxelAuxAlloc.Tail)*VoxelAuxRecordBytes > resources.Auxiliary {
+		t.Fatalf("reverse admission order escaped physical buffer ranges: sector=%d brick=%d auxiliary=%d resources=%+v", m.SectorAlloc.Tail, m.brickRanges.tail, m.VoxelAuxAlloc.Tail, resources)
 	}
-	if m.SectorAlloc.Tail != 2 || m.BrickAlloc.Tail != 2 {
-		t.Fatal("final replacement/adopter maps did not receive their two sector blocks")
+	if m.SectorAlloc.Tail != 2 || m.brickRanges.tail != 2 {
+		t.Fatal("final replacement/adopter maps did not receive their two sector headers and packed rows")
 	}
 	for _, obj := range []*core.VoxelObject{a, b} {
 		if ready, _, _ := m.RenderVoxelObjectReady(obj, obj.XBrickMap, obj.XBrickMap.Revision); !ready {

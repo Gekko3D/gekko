@@ -172,6 +172,10 @@ type voxelAdmissionPlan struct {
 	auxiliaryReleaseJournal             []*volume.Brick
 	materialKeys                        map[string]bool
 	materialKeyJournal                  []string
+	recordRanges                        brickRecordRanges
+	recordRangeInvalid                  bool
+	packedReservations                  map[*volume.Sector]plannedBrickRange
+	packedReservationKeys               []*volume.Sector
 	sectorTail, brickTail, materialTail uint64
 	sectorFree, brickFree, materialFree uint64
 	sectors                             map[*volume.Sector]bool
@@ -189,8 +193,15 @@ type voxelAdmissionPlan struct {
 
 // Candidate trials share admitted sets and journal only their new entries.
 // Refusal rolls back deltas; no resident-sector set is cloned or enumerated.
-func (p *voxelAdmissionPlan) clone() voxelAdmissionPlan { return *p }
+func (p *voxelAdmissionPlan) clone() voxelAdmissionPlan {
+	b := *p
+	b.recordRanges = p.recordRanges.clone()
+	return b
+}
 func (p *voxelAdmissionPlan) rollback(previous voxelAdmissionPlan) {
+	for _, sector := range p.packedReservationKeys[len(previous.packedReservationKeys):] {
+		delete(p.packedReservations, sector)
+	}
 	for _, brick := range p.auxiliaryReservationJournal[len(previous.auxiliaryReservationJournal):] {
 		delete(p.auxiliaryReserved, brick)
 	}
@@ -320,12 +331,14 @@ func (p *voxelAdmissionPlan) addMap(m *GpuBufferManager, xbm *volume.XBrickMap) 
 				p.removedSectors[sector] = true
 				p.removedKeys = append(p.removedKeys, sector)
 				p.sectorFree++
-				p.brickFree++
+				if m.SectorToInfo[sector].packed == nil {
+					p.brickFree++
+				}
 			}
 		}
 	}
 	consumeVoxelSlots(&p.sectorTail, &p.sectorFree, newSectors)
-	consumeVoxelSlots(&p.brickTail, &p.brickFree, newSectors)
+	p.reservePackedMap(m, xbm)
 	p.addAuxiliary(m, xbm)
 }
 func (p *voxelAdmissionPlan) addMaterial(m *GpuBufferManager, obj *core.VoxelObject) {
@@ -383,7 +396,7 @@ func (p *voxelAdmissionPlan) resources(m *GpuBufferManager, current voxelGPUReso
 	if p.auxiliaryDemand == nil || p.auxiliaryDemand.legacy {
 		auxRows = max(voxelMul(p.brickTail, 64), uint64(m.VoxelAuxAlloc.Tail))
 	}
-	sizes := [7]uint64{voxelMul(p.sectorTail, 32), voxelMul(p.brickTail, 64*BrickRecordSize), voxelMul(auxRows, VoxelAuxRecordBytes), voxelMul(p.materialTail, materialBlockCapacity*64), voxelMul(voxelHashGridSize(p.hashSectors), 32), voxelMul(p.directCells, 4), 16}
+	sizes := [7]uint64{voxelMul(p.sectorTail, 32), voxelMul(max(voxelMul(p.brickTail, 64), p.recordRanges.tail), BrickRecordSize), voxelMul(auxRows, VoxelAuxRecordBytes), voxelMul(p.materialTail, materialBlockCapacity*64), voxelMul(voxelHashGridSize(p.hashSectors), 32), voxelMul(p.directCells, 4), 16}
 	fields := []*uint64{&next.SectorTable, &next.BrickTable, &next.Auxiliary, &next.Material, &next.SectorGrid, &next.DirectLookup, &next.SectorGridParams}
 	for i, dest := range fields {
 		limit := storageLimit
@@ -394,9 +407,6 @@ func (p *voxelAdmissionPlan) resources(m *GpuBufferManager, current voxelGPUReso
 		switch i {
 		case 0:
 			preferred = voxelMul(addRetainedVoxelBytes(p.sectorTail, 512), 32)
-		case 1:
-			preferred = voxelMul(addRetainedVoxelBytes(voxelMul(p.brickTail, 64), 2048), BrickRecordSize)
-
 		}
 		value, ok := voxelCapacity(*dest, sizes[i], preferred, limit)
 		if !ok {
@@ -405,7 +415,7 @@ func (p *voxelAdmissionPlan) resources(m *GpuBufferManager, current voxelGPUReso
 		*dest = value
 	}
 	// Shader indices and allocators remain 32-bit even on large devices.
-	if p.sectorTail > uint64(^uint32(0)) || p.brickTail > uint64(^uint32(0))/64 || p.materialTail > uint64(^uint32(0))/(materialBlockCapacity*4) || auxRows > uint64(^uint32(0))/volume.VoxelAuxWordCount || p.directCells > uint64(^uint32(0)) || voxelHashGridSize(p.hashSectors) > uint64(^uint32(0)) {
+	if p.recordRangeInvalid || p.recordRanges.tail > uint64(^uint32(0)) || p.sectorTail > uint64(^uint32(0)) || p.brickTail > uint64(^uint32(0))/64 || p.materialTail > uint64(^uint32(0))/(materialBlockCapacity*4) || auxRows > uint64(^uint32(0))/volume.VoxelAuxWordCount || p.directCells > uint64(^uint32(0)) || voxelHashGridSize(p.hashSectors) > uint64(^uint32(0)) {
 		return current, false
 	}
 	return next, true
@@ -482,7 +492,8 @@ func (m *GpuBufferManager) prepareVoxelGPUAdmissionCurrentFrame(scene *core.Scen
 	abandonmentAllowed := true
 	abandonedCredits := uint64(len(abandonedMaterialBlocks))
 	ordinaryMaterialFree := uint64(len(m.MaterialAlloc.Free))
-	initial := voxelAdmissionPlan{auxiliaryDemand: m.auxiliaryDemand(scene), auxiliaryTail: uint64(m.VoxelAuxAlloc.Tail), auxiliaryFree: uint64(len(m.VoxelAuxAlloc.Free)), auxiliaryReserved: make(map[*volume.Brick]bool), auxiliaryRemovedReferences: make(map[*volume.Brick]int), auxiliaryReleased: make(map[*volume.Brick]bool), materialKeys: make(map[string]bool), sectorTail: uint64(m.SectorAlloc.Tail), brickTail: uint64(m.BrickAlloc.Tail), materialTail: uint64(m.MaterialAlloc.Tail), sectorFree: uint64(len(m.SectorAlloc.Free)), brickFree: uint64(len(m.BrickAlloc.Free)), materialFree: uint64(len(m.MaterialAlloc.Free)), sectors: make(map[*volume.Sector]bool), maps: make(map[*volume.XBrickMap]bool), objects: make(map[*core.VoxelObject]bool), lookup: make(map[*volume.XBrickMap]bool), removedSectors: make(map[*volume.Sector]bool)}
+	rangesValid := m.ensureBrickRecordRanges()
+	initial := voxelAdmissionPlan{recordRanges: m.brickRanges.clone(), recordRangeInvalid: !rangesValid, packedReservations: make(map[*volume.Sector]plannedBrickRange), auxiliaryDemand: m.auxiliaryDemand(scene), auxiliaryTail: uint64(m.VoxelAuxAlloc.Tail), auxiliaryFree: uint64(len(m.VoxelAuxAlloc.Free)), auxiliaryReserved: make(map[*volume.Brick]bool), auxiliaryRemovedReferences: make(map[*volume.Brick]int), auxiliaryReleased: make(map[*volume.Brick]bool), materialKeys: make(map[string]bool), sectorTail: uint64(m.SectorAlloc.Tail), brickTail: uint64(m.BrickAlloc.Tail), materialTail: uint64(m.MaterialAlloc.Tail), sectorFree: uint64(len(m.SectorAlloc.Free)), brickFree: uint64(len(m.BrickAlloc.Free)), materialFree: uint64(len(m.MaterialAlloc.Free)), sectors: make(map[*volume.Sector]bool), maps: make(map[*volume.XBrickMap]bool), objects: make(map[*core.VoxelObject]bool), lookup: make(map[*volume.XBrickMap]bool), removedSectors: make(map[*volume.Sector]bool)}
 
 	for xbm := range active {
 		if alloc := m.Allocations[xbm]; alloc != nil && (previousLookup[xbm] || (!wasActive && m.Device == nil)) {
@@ -504,6 +515,7 @@ func (m *GpuBufferManager) prepareVoxelGPUAdmissionCurrentFrame(scene *core.Scen
 		if abandonmentAllowed {
 			initial.materialFree += abandonedCredits
 		}
+		clear(initial.packedReservations)
 		clear(initial.auxiliaryReserved)
 		clear(initial.auxiliaryRemovedReferences)
 		clear(initial.auxiliaryReleased)
@@ -626,6 +638,7 @@ func (m *GpuBufferManager) prepareVoxelGPUAdmissionCurrentFrame(scene *core.Scen
 	}
 
 	m.finishVoxelAdmissionAges(ages, plan)
+	m.plannedBrickRanges = plan.packedReservations
 	m.voxelAdmissionMaps, m.voxelAdmissionObjects = plan.maps, plan.objects
 	m.voxelLookupMaps = plan.lookup
 	for xbm, alloc := range m.Allocations {

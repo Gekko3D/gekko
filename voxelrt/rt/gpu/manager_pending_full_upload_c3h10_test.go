@@ -28,7 +28,7 @@ func TestC3h10PendingCapacityStructureAndSelectedRecords(t *testing.T) {
 	sectors, bricks := len(full.DirtySectors), len(full.DirtyBricks)
 	structure := full.StructureDirty
 	requiredSectors, requiredBricks := m.voxelAllocationRequirements(scene)
-	if requiredSectors != m.SectorAlloc.Tail+uint32(len(full.Sectors)) || requiredBricks != m.BrickAlloc.Tail*64+uint32(len(full.Sectors))*64 {
+	if requiredSectors != m.SectorAlloc.Tail+uint32(len(full.Sectors)) || requiredBricks != m.BrickAlloc.Tail*64+uint32(len(full.Sectors)) {
 		t.Fatal("pending authoritative full map absent from capacity plan", requiredSectors, requiredBricks)
 	}
 	if len(full.DirtySectors) != sectors || len(full.DirtyBricks) != bricks || full.StructureDirty != structure || m.Allocations[full] != nil {

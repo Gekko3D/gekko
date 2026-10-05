@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2b are complete; P2 remains partial; other sections are proposals.
+Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -104,16 +104,22 @@ Owners: `gpu/manager_voxel.go`, allocation metadata, scene bindings. Update `gbu
 
 P2a is complete: auxiliary occupancy/normal capacity follows distinct pending
 brick pointers, preserving deferred uploads, retained references and physical
-capacity guards. Shader indexing and normal encoding are unchanged. Full packed
-brick ranges and atomic base/mask publication remain subsequent P2 work.
+capacity guards. Normal encoding is unchanged. Packed ranges and base/mask
+publication followed in P2b–P2c.
 See the [runtime contract](../renderer/runtime.md#auxiliary-capacity-admission)
 and [delivery](#p2a-auxiliary-capacity-by-brick-demand).
 
 P2b is complete: sparse full-sector content writes use exact record budgets
-and captured first-header publication. Fixed allocation and shader indexing
-remain; capacity-class packed ranges, retirement and rank indexing are next.
+and captured first-header publication. P2c subsequently replaces fixed allocation
+and dense indexing for manager-owned sectors.
 See the [publication contract](../renderer/runtime.md#sparse-sector-publication)
 and [delivery](#p2b-sparse-sector-content-and-publication).
+
+P2c completes capacity-class packed ranges, submission-safe retirement and rank
+indexing across all four voxel consumers. See the
+[range contract](../renderer/runtime.md#packed-sector-brick-ranges) and
+[delivery](#p2c-packed-sector-brick-ranges). Dense/frequently edited workload
+benchmarks and an optional density policy remain evaluation work.
 
 ### P3. Pack mixed materials and existing normals
 
@@ -924,7 +930,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | R2m | `d72bc88` | Project directional caster bounds with affine endpoint intervals | [Runtime contract](../renderer/runtime.md#directional-shadow-cache-dependencies) |
 | P4 | `cfc07c7` | Share certified static GPU material blocks with isolated instance edits | [Runtime contract](../renderer/runtime.md#immutable-gpu-material-blocks) |
 | P2a | `362f10d` | Size auxiliary buffers by distinct brick demand with safe admission/reuse | [Runtime contract](../renderer/runtime.md#auxiliary-capacity-admission) |
-| P2b | This batch | Upload sparse sector records with captured header publication | [Runtime contract](../renderer/runtime.md#sparse-sector-publication) |
+| P2b | `c2356df` | Upload sparse sector records with captured header publication | [Runtime contract](../renderer/runtime.md#sparse-sector-publication) |
+| P2c | This batch | Pack sector ranges with fenced reuse and shared publication | [Runtime contract](../renderer/runtime.md#packed-sector-brick-ranges) |
 | S1a | `e3f11cf` | Hidden residency and readiness tickets | [Design](streamed-rendering-s1a.md) |
 | S1b | `a539257` | Global content budgets, ordering and atlas backpressure | [Design](streamed-rendering-s1b.md) |
 | S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
@@ -4439,6 +4446,46 @@ Consumer builds passed with
 `../gekko-editor` (N=0), `../actiongame` (1), `../spacegame_go` (2),
 `../spacesim` (3) and `../examples/testing-vox` (4).
 
-The GPU brick table still reserves 64 records per sector; foreign allocation
-snapshots keep dense uploads. Packed ranges and submission-safe retirement remain
-P2 work. Full interactive gameplay/editor appearance and FPS were not measured.
+At this delivery, the GPU brick table still reserved 64 records per sector;
+packed ranges and submission-safe retirement follow in P2c. Foreign allocation
+snapshots keep dense uploads. Full interactive gameplay/editor appearance and
+FPS were not measured.
+
+### P2c: Packed sector brick ranges
+
+This batch packs manager-owned sector records by occupancy across G-buffer,
+shadows, transparency and particles. GPU allocation/publication owns the change;
+editor and voxel apps retain material and fitted-normal encoding. The
+[runtime contract](../renderer/runtime.md#packed-sector-brick-ranges) records
+header ordering, shared ownership, deferred admission and submission-safe reuse.
+
+The native 128 one-brick-sector fixture reduces physical brick-table capacity
+from 327,680 bytes at `c2356df` to 4,096 bytes (98.75% less). After growth,
+753,664 becomes 11,264 bytes. Initial content remains 128 records/147,584 bytes;
+P2b already supplied the content-traffic reduction.
+
+Verification from the engine module passed; native build/run commands are
+grouped below:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . ./voxelrt/rt/gpu ./voxelrt/rt/core ./voxelrt/rt/app ./voxelrt/rt/volume -count=1
+for native_fixture in p2c_packed_sector_ranges p2b_sparse_sector_publication p4_material_sharing r2c_shadow_publication r2d_shadow_batches r2e_shadow_reuse r2f_directional_reuse r2g_camera_shadow_reuse r2h_directional_stability r2i_point_face_reuse; do
+  native_step=${native_fixture%%_*}
+  env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-${native_step}-p2c-frozen docs/roadmaps/diagnostics/${native_fixture}.go
+  /tmp/gekko-${native_step}-p2c-frozen || exit 1
+done
+git diff --check
+```
+
+All ten native diagnostics passed against unchanged compiled sources: actual
+GPU header/record/auxiliary readbacks, boundary ranks and holes in all four
+production shader helpers, edits/growth/deferred reuse, and rendered R2/P4 parity.
+Consumer builds passed with
+`env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p2c-consumer-N .` from
+`../gekko-editor` (N=0), `../actiongame` (1), `../spacegame_go` (2),
+`../spacesim` (3) and `../examples/testing-vox` (4).
+
+FPS, full interactive gameplay/editor appearance, complete particle trajectories
+and exhaustive traversal branches were not measured. Dense/frequently edited
+workload benchmarks and an optional density policy remain P2 evaluation work.

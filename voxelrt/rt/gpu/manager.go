@@ -493,10 +493,18 @@ type GpuBufferManager struct {
 	PendingUpdates map[*volume.XBrickMap]bool // Maps with pending updates in current batch
 
 	// Allocators for global pools
-	SectorAlloc   SlotAllocator
-	BrickAlloc    SlotAllocator                     // Allocates blocks of 64 bricks
-	PayloadAlloc  [MaxVoxelAtlasPages]SlotAllocator // Allocates bricks (512 bytes each) per atlas page
-	VoxelAuxAlloc SlotAllocator                     // Allocates one occupancy/normal record per brick
+	SectorAlloc             SlotAllocator
+	plannedBrickRanges      map[*volume.Sector]plannedBrickRange
+	brickRanges             brickRecordRanges
+	brickRangesInitialized  bool
+	brickPackedLeased       bool
+	voxelPreparationSectors map[*volume.Sector]bool
+	voxelPreparationBricks  map[*volume.Brick]bool
+	brickLegacyPrefix       uint64
+	retiredBrickRanges      []retiredBrickRange
+	BrickAlloc              SlotAllocator                     // Legacy dense-block allocator; managed records use brickRanges.
+	PayloadAlloc            [MaxVoxelAtlasPages]SlotAllocator // Allocates bricks (512 bytes each) per atlas page
+	VoxelAuxAlloc           SlotAllocator                     // Allocates one occupancy/normal record per brick
 
 	// Mapping from volume objects to GPU slots
 	SectorToInfo   map[*volume.Sector]SectorGpuInfo
@@ -634,9 +642,10 @@ type MaterialGpuAllocation struct {
 
 type SectorGpuInfo struct {
 	// pending hides a newly managed slot until its first complete header is queued.
+	packed          *packedSectorRange
 	pending         bool
 	SlotIndex       uint32
-	BrickTableIndex uint32 // Index into global BrickTableBuf (64 slots per sector)
+	BrickTableIndex uint32 // Published base record in BrickTableBuf (dense or packed).
 }
 
 type PayloadSlot struct {

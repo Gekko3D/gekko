@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math"
+	"math/bits"
 	"testing"
 
 	"github.com/cogentcore/webgpu/wgpu"
@@ -85,8 +86,8 @@ func TestP2bMidWriteTopologyUsesCapturedRecordsAndDefersChangedTarget(t *testing
 				p2aAssertBrick(t, m, b.p2aNative, o.XBrickMap, [6]int{0, 0, 0, 3, 3, 3}, changed)
 			} else if edit == "replace" {
 				p2aAssertBrick(t, m, b.p2aNative, o.XBrickMap, [6]int{0, 0, 0, 3, 3, 1}, changed)
-			} else if !bytes.Equal(p2bRecord(t, m, b, sector, 31), make([]byte, BrickRecordSize)) {
-				t.Fatal("resumed removal did not clear the previously captured record")
+			} else if binary.LittleEndian.Uint32(p2bHeader(t, m, b, sector)[20:])&(uint32(1)<<31) != 0 {
+				t.Fatal("resumed removal kept the removed captured record reachable")
 			}
 			s1kReady(t, m, o, true)
 		})
@@ -161,11 +162,20 @@ func p2bHeader(t *testing.T, m *GpuBufferManager, b *p2bNative, sector *volume.S
 
 func p2bRecord(t *testing.T, m *GpuBufferManager, b *p2bNative, sector *volume.Sector, index int) []byte {
 	t.Helper()
-	info, ok := m.SectorToInfo[sector]
+	_, ok := m.SectorToInfo[sector]
 	if !ok {
 		t.Fatal("sector was not allocated")
 	}
-	start := uint64(info.BrickTableIndex+uint32(index)) * BrickRecordSize
+	header := p2bHeader(t, m, b, sector)
+	base := binary.LittleEndian.Uint32(header[16:])
+	if binary.LittleEndian.Uint32(header[28:]) == 1 {
+		mask := uint64(binary.LittleEndian.Uint32(header[20:])) | uint64(binary.LittleEndian.Uint32(header[24:]))<<32
+		if mask&(uint64(1)<<index) == 0 {
+			t.Fatalf("absent packed local index%d has no physical record", index)
+		}
+		index = bits.OnesCount64(mask & ((uint64(1) << index) - 1))
+	}
+	start := uint64(base+uint32(index)) * BrickRecordSize
 	return b.buffers[m.BrickTableBuf][start : start+BrickRecordSize]
 }
 
@@ -254,7 +264,7 @@ func TestP2bSparseAndDenseFullSectorWriteOnlySelectedRecords(t *testing.T) {
 	}
 }
 
-func TestP2bSparseSectorMasksKeepFixedIndicesAcrossLowHighWords(t *testing.T) {
+func TestP2bSparseSectorMasksPreserveLogicalIndicesAcrossLowHighWords(t *testing.T) {
 	m, b, scene := p2bFixture(t)
 	o := p2aObject(scene, 1)
 	indices := []int{0, 31, 32, 63}
@@ -323,7 +333,7 @@ func TestP2bMaterialAndSparseSectorShareOneExactFrameBudget(t *testing.T) {
 	s1kReady(t, m, o, true)
 }
 
-func TestP2bFullSectorRemovalWritesExplicitCommittedClear(t *testing.T) {
+func TestP2bFullSectorRemovalMakesRemovedRecordUnreachable(t *testing.T) {
 	m, b, scene := p2bFixture(t)
 	o := p2aObject(scene, 1)
 	first, removed := p2aBrick("uniform", 1), p2aBrick("uniform", 2)
@@ -335,16 +345,23 @@ func TestP2bFullSectorRemovalWritesExplicitCommittedClear(t *testing.T) {
 	oldRecord := bytes.Clone(p2bRecord(t, m, b, sector, 63))
 	s1l3ClearIndex(o, 63)
 	o.XBrickMap.DirtySectors[[3]int{}] = true
-	const sectorBytes = 32 + 2*BrickRecordSize + VoxelAuxRecordBytes
-	m.SetVoxelUploadBudget(VoxelUploadBudget{MaxBytes: sectorBytes - 1, MaxSectors: 1, MaxBricks: 2})
+	oldBuffer := m.BrickTableBuf
+	oldStart := uint64(binary.LittleEndian.Uint32(oldHeader[16:])) * BrickRecordSize
+	oldLength := uint64(2 * BrickRecordSize)
+	if binary.LittleEndian.Uint32(oldHeader[28:]) == 0 {
+		oldLength = 64 * BrickRecordSize
+	}
+	oldRows := bytes.Clone(b.buffers[oldBuffer][oldStart : oldStart+oldLength])
+	const sectorBytes = 32 + BrickRecordSize + VoxelAuxRecordBytes
+	m.SetVoxelUploadBudget(VoxelUploadBudget{MaxBytes: sectorBytes - 1, MaxSectors: 1, MaxBricks: 1})
 	p2bStep(t, m, b, scene)
 	if !bytes.Equal(oldHeader, p2bHeader(t, m, b, sector)) || !bytes.Equal(oldRecord, p2bRecord(t, m, b, sector, 63)) || m.VoxelUploadBytes != 0 {
 		t.Fatal("deferred removal altered committed header or old occupied record")
 	}
-	m.SetVoxelUploadBudget(VoxelUploadBudget{MaxBytes: sectorBytes, MaxSectors: 1, MaxBricks: 2})
+	m.SetVoxelUploadBudget(VoxelUploadBudget{MaxBytes: sectorBytes, MaxSectors: 1, MaxBricks: 1})
 	p2bStep(t, m, b, scene)
-	if m.VoxelBricksUploaded != 2 || m.VoxelUploadBytes != sectorBytes || !bytes.Equal(p2bRecord(t, m, b, sector, 63), make([]byte, BrickRecordSize)) {
-		t.Fatal("full-sector removal omitted its committed nil clear or charged unreachable holes")
+	if m.VoxelBricksUploaded != 1 || m.VoxelUploadBytes != sectorBytes || !bytes.Equal(oldRows, b.buffers[oldBuffer][oldStart:oldStart+oldLength]) {
+		t.Fatal("packed removal overwrote old range or charged removed records")
 	}
 	if binary.LittleEndian.Uint32(p2bHeader(t, m, b, sector)[24:]) != 0 {
 		t.Fatal("removed high-bit brick remained reachable through sector mask")
@@ -360,7 +377,13 @@ func TestP2bReusedSectorHidesOldHeaderAndLeavesUnreachableHoles(t *testing.T) {
 	schedulePutBrick(old, [6]int{0, 0, 0, 3, 3, 3}, p2aBrick("uniform", 1))
 	p2bStep(t, m, b, scene)
 	oldInfo := m.SectorToInfo[old.XBrickMap.Sectors[[3]int{}]]
-	stale := bytes.Clone(p2bRecord(t, m, b, old.XBrickMap.Sectors[[3]int{}], 63))
+	oldBuffer := m.BrickTableBuf
+	oldHeader := p2bHeader(t, m, b, old.XBrickMap.Sectors[[3]int{}])
+	oldOffset := uint64(binary.LittleEndian.Uint32(oldHeader[16:])) * BrickRecordSize
+	if binary.LittleEndian.Uint32(oldHeader[28:]) == 0 {
+		oldOffset += 63 * BrickRecordSize
+	}
+	stale := bytes.Clone(b.buffers[oldBuffer][oldOffset : oldOffset+BrickRecordSize])
 	scene.Objects = nil
 	p2bStep(t, m, b, scene)
 	next := p2aObject(scene, 1)
@@ -370,14 +393,14 @@ func TestP2bReusedSectorHidesOldHeaderAndLeavesUnreachableHoles(t *testing.T) {
 	m.SetVoxelUploadBudget(VoxelUploadBudget{MaxBytes: 64})
 	p2bStep(t, m, b, scene)
 	info := m.SectorToInfo[next.XBrickMap.Sectors[[3]int{}]]
-	if info.SlotIndex != oldInfo.SlotIndex || info.BrickTableIndex != oldInfo.BrickTableIndex {
-		t.Fatal("fixture did not reuse old fixed-stride sector/table slots")
+	if info.SlotIndex != oldInfo.SlotIndex {
+		t.Fatal("fixture did not reuse the released sector slot")
 	}
 	p2bAssertLookup(t, m, b, next, [3]int{}, false)
 	m.SetVoxelUploadBudget(VoxelUploadBudget{MaxBytes: 32 + BrickRecordSize + VoxelAuxRecordBytes, MaxSectors: 1, MaxBricks: 1})
 	p2bStep(t, m, b, scene)
 	sector := next.XBrickMap.Sectors[[3]int{}]
-	if m.VoxelBricksUploaded != 1 || !bytes.Equal(stale, p2bRecord(t, m, b, sector, 63)) || binary.LittleEndian.Uint32(p2bHeader(t, m, b, sector)[24:]) != 0 {
+	if m.VoxelBricksUploaded != 1 || !bytes.Equal(stale, b.buffers[oldBuffer][oldOffset:oldOffset+BrickRecordSize]) || binary.LittleEndian.Uint32(p2bHeader(t, m, b, sector)[24:]) != 0 {
 		t.Fatal("reused fresh sector wrote unreachable stale holes or exposed old high-bit header")
 	}
 	p2aAssertBrick(t, m, b.p2aNative, next.XBrickMap, [6]int{}, brick)
@@ -487,6 +510,7 @@ func TestP2bLateFreshRecordDemandRechecksBudgetBeforePublication(t *testing.T) {
 
 func TestP2bSparseSectorMirrorsChargeBytesOncePerGeneration(t *testing.T) {
 	m, b, scene := p2bFixture(t)
+	b.buffers[m.BrickTableBuf] = make([]byte, 256)
 	o := p2aObject(scene, 1)
 	brick := p2aBrick("uniform", 1)
 	schedulePutBrick(o, [6]int{}, brick)

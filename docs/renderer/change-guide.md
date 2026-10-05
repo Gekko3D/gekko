@@ -82,6 +82,12 @@ Voxel atlas resource changes now also fan out more widely. The paged payload atl
 - `BrickRecord` is no longer 16 bytes.
   - The live layout is `material_index`, `payload_offset`, `occupancy_mask_lo`, `occupancy_mask_hi`, `payload_page`, `flags`, `voxel_aux_word_base`, and padding for 32 bytes total.
   - Any CPU writer or WGSL struct drift here will corrupt voxel reads.
+- Sector brick addressing is format-aware.
+  - The 32-byte header publishes range base, membership mask and layout together;
+    byte 28 selects dense or packed addressing. All four voxel-reading shaders
+    must follow the [packed range contract](runtime.md#packed-sector-brick-ranges).
+  - Membership changes replace the range. Reuse requires its stamped GPU
+    submission to complete; a frame count is insufficient.
 - `ObjectParams` is now 128 bytes.
   - The trailing `32` bytes carry hybrid sector-lookup metadata: signed sector origin, lookup mode, dense lookup extents, and the direct-table base.
   - CPU writers in `manager_scene.go` and `manager_voxel.go` plus every voxel-reading shader must stay aligned.

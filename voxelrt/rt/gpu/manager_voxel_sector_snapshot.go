@@ -5,11 +5,12 @@ import "github.com/gekko3d/gekko/voxelrt/rt/volume"
 // Only admitted full-sector work owns this bounded topology capture. Brick data
 // and normal bake inputs retain their existing runtime ownership contract.
 type voxelSectorUploadSnapshot struct {
-	sector  *volume.Sector
-	info    SectorGpuInfo
-	coords  [3]int
-	mask    uint64
-	desired [64]*volume.Brick
+	newRange bool
+	sector   *volume.Sector
+	info     SectorGpuInfo
+	coords   [3]int
+	mask     uint64
+	desired  [64]*volume.Brick
 }
 
 func (m *GpuBufferManager) captureSectorUpload(w voxelUploadWork) *voxelSectorUploadSnapshot {
@@ -22,6 +23,9 @@ func (m *GpuBufferManager) captureSectorUpload(w voxelUploadWork) *voxelSectorUp
 }
 
 func (w voxelUploadWork) desiredBrick(sector *volume.Sector, i int) *volume.Brick {
+	if w.brickSnapshot != nil && i == w.brickSnapshot.index {
+		return w.brickSnapshot.brick
+	}
 	if w.sectorSnapshot != nil {
 		return w.sectorSnapshot.desired[i]
 	}
@@ -39,4 +43,23 @@ func (s *voxelSectorUploadSnapshot) current(w voxelUploadWork) bool {
 		}
 	}
 	return true
+}
+
+// Ordinary dirty-brick updates capture one written pointer, never all 64 rows.
+type voxelBrickUploadSnapshot struct {
+	coords [3]int
+	sector *volume.Sector
+	mask   uint64
+	index  int
+	brick  *volume.Brick
+}
+
+func (m *GpuBufferManager) captureBrickUpload(w voxelUploadWork) *voxelBrickUploadSnapshot {
+	sector := w.targetMap().Sectors[w.sectorCoordinate()]
+	start, _ := w.brickRange()
+	return &voxelBrickUploadSnapshot{sector.Coords, sector, sector.BrickMask64, start, sector.GetBrick(start%4, (start/4)%4, start/16)}
+}
+func (s *voxelBrickUploadSnapshot) current(w voxelUploadWork) bool {
+	sector := w.targetMap().Sectors[w.sectorCoordinate()]
+	return sector == s.sector && sector.Coords == s.coords && sector.BrickMask64 == s.mask && sector.GetBrick(s.index%4, (s.index/4)%4, s.index/16) == s.brick
 }

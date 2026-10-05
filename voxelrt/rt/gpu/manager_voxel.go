@@ -65,6 +65,8 @@ func (m *GpuBufferManager) updateVoxelData(scene *core.Scene, backend voxelNativ
 	m.beginVoxelOwnership()
 	defer m.endVoxelOwnership()
 	m.voxelNative = backend
+	m.ensureBrickRecordRanges()
+	m.promotePackedDirtySectors(scene)
 	m.voxelGPUWorkStats = VoxelGPUWorkStats{}
 	m.voxelWorkAdvanced = false
 	recreated := false
@@ -140,7 +142,18 @@ func (m *GpuBufferManager) voxelAllocationRequirements(scene *core.Scene) (requi
 		return 0, 0
 	}
 	m.VoxelCapacityPlanningSectorVisitsLastUpdate = 0
-	requiredSectors, requiredBricks = m.SectorAlloc.Tail, m.BrickAlloc.Tail*64
+	requiredSectors = m.SectorAlloc.Tail
+	ranges := m.brickRanges.clone()
+	if !m.brickRangesInitialized {
+		ranges.tail = uint64(m.BrickAlloc.Tail) * 64
+		for _, info := range m.SectorToInfo {
+			if info.packed == nil {
+				ranges.tail = max(ranges.tail, uint64(info.BrickTableIndex)+64)
+			}
+		}
+	}
+	plan := voxelAdmissionPlan{recordRanges: ranges, packedReservations: make(map[*volume.Sector]plannedBrickRange)}
+	requiredBricks = uint32(min(ranges.tail, uint64(^uint32(0))))
 	if scene == nil {
 		return requiredSectors, requiredBricks
 	}
@@ -150,13 +163,14 @@ func (m *GpuBufferManager) voxelAllocationRequirements(scene *core.Scene) (requi
 	for _, target := range voxelServiceTargets(scene) {
 		xbm := target.mapRef
 		alloc, exists := m.Allocations[xbm]
-		if exists && !xbm.StructureDirty {
-			continue
-		}
 		if seenMaps[xbm] {
 			continue
 		}
 		seenMaps[xbm] = true
+		plan.reservePackedMap(m, xbm)
+		if exists && !xbm.StructureDirty {
+			continue
+		}
 		for sKey, sector := range xbm.Sectors {
 			m.VoxelCapacityPlanningSectorVisitsLastUpdate++
 			if alloc == nil || alloc.Sectors[sKey] != sector {
@@ -167,7 +181,7 @@ func (m *GpuBufferManager) voxelAllocationRequirements(scene *core.Scene) (requi
 			}
 		}
 	}
-	return requiredSectors + newSectors, requiredBricks + newSectors*64
+	return requiredSectors + newSectors, uint32(min(plan.recordRanges.tail, uint64(^uint32(0))))
 }
 
 func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
@@ -188,6 +202,33 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 	}
 	if m.BrickToAuxSlot == nil {
 		m.BrickToAuxSlot = make(map[*volume.Brick]uint32)
+	}
+	m.voxelPreparationSectors = make(map[*volume.Sector]bool)
+	m.voxelPreparationBricks = make(map[*volume.Brick]bool)
+	defer func() { m.voxelPreparationSectors = nil; m.voxelPreparationBricks = nil }()
+	preparationMaps := make(map[*volume.XBrickMap]bool)
+	for _, target := range voxelServiceTargets(scene) {
+		xbm := target.mapRef
+		if preparationMaps[xbm] {
+			continue
+		}
+		preparationMaps[xbm] = true
+		if !m.voxelMapAdmitted(xbm) {
+			continue
+		}
+		if m.Allocations[xbm] != nil && !xbm.StructureDirty {
+			continue
+		}
+		for _, sector := range xbm.Sectors {
+			m.voxelPreparationSectors[sector] = true
+			if info := m.SectorToInfo[sector]; info.packed != nil {
+				for _, brick := range info.packed.pointers {
+					if brick != nil {
+						m.voxelPreparationBricks[brick] = true
+					}
+				}
+			}
+		}
 	}
 	seenMaps := make(map[*volume.XBrickMap]bool)
 	var changedMaps []*volume.XBrickMap
@@ -231,6 +272,9 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 			pointers := alloc.Bricks[k]
 			delete(alloc.Sectors, k)
 			delete(alloc.Bricks, k)
+			if info := m.SectorToInfo[oldSector]; info.packed != nil {
+				delete(info.packed.owners, packedSectorOwner{xbm, k})
+			}
 			m.removeVoxelSnapshotEdges(oldSector, pointers)
 			m.releaseUnreferencedSector(oldSector)
 			m.releaseUnreferencedBricks(pointers)
@@ -253,16 +297,29 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 			info, hasInfo := m.SectorToInfo[sector]
 			if !hasInfo {
 				sSlot := m.SectorAlloc.Alloc()
-				bSlot := m.BrickAlloc.Alloc()
+				state := &packedSectorRange{owners: make(map[packedSectorOwner]bool)}
 				info = SectorGpuInfo{
-					pending:         true,
-					SlotIndex:       sSlot,
-					BrickTableIndex: bSlot * 64,
+					pending:   true,
+					SlotIndex: sSlot,
+					packed:    state,
 				}
 				m.SectorToInfo[sector] = info
 			}
 			alloc.Sectors[sKey] = sector
 			alloc.Bricks[sKey] = &[64]*volume.Brick{}
+			if info.packed != nil {
+				info.packed.owners[packedSectorOwner{xbm, sKey}] = true
+				if info.packed.published {
+					*alloc.Bricks[sKey] = info.packed.pointers
+					if !m.voxelOwnership.legacy {
+						for _, b := range info.packed.pointers {
+							if b != nil {
+								m.voxelOwnership.bricks[b]++
+							}
+						}
+					}
+				}
+			}
 			if !m.voxelOwnership.legacy {
 				m.voxelOwnership.sectors[sector]++
 			}
@@ -426,6 +483,9 @@ func (m *GpuBufferManager) releaseVoxelMapAllocation(xbm *volume.XBrickMap, allo
 	// Remove this owner before checking the surviving allocation snapshots.
 	delete(m.Allocations, xbm)
 	for sKey, sector := range alloc.Sectors {
+		if info := m.SectorToInfo[sector]; info.packed != nil {
+			delete(info.packed.owners, packedSectorOwner{xbm, sKey})
+		}
 		m.releaseUnreferencedSector(sector)
 		m.releaseUnreferencedBricks(alloc.Bricks[sKey])
 	}
@@ -436,6 +496,9 @@ func (m *GpuBufferManager) releaseVoxelMapAllocation(xbm *volume.XBrickMap, allo
 }
 
 func (m *GpuBufferManager) releaseUnreferencedSector(sector *volume.Sector) {
+	if m.voxelPreparationSectors[sector] {
+		return
+	}
 	m.beginVoxelOwnership()
 	defer m.endVoxelOwnership()
 	if !m.voxelOwnership.legacy {
@@ -453,7 +516,11 @@ func (m *GpuBufferManager) releaseUnreferencedSector(sector *volume.Sector) {
 	}
 	if info, ok := m.SectorToInfo[sector]; ok {
 		m.SectorAlloc.FreeSlot(info.SlotIndex)
-		m.BrickAlloc.FreeSlot(info.BrickTableIndex / 64)
+		if info.packed != nil {
+			m.retireBrickRange(info.packed.base, info.packed.capacity)
+		} else {
+			m.BrickAlloc.FreeSlot(info.BrickTableIndex / 64)
+		}
 		delete(m.SectorToInfo, sector)
 	}
 }
@@ -486,7 +553,7 @@ func (m *GpuBufferManager) releaseUnreferencedBricks(pointers *[64]*volume.Brick
 	m.beginVoxelOwnership()
 	defer m.endVoxelOwnership()
 	for _, brick := range pointers {
-		if brick != nil && !m.voxelBrickReferenced(brick) {
+		if brick != nil && !m.voxelPreparationBricks[brick] && !m.voxelBrickReferenced(brick) {
 			m.releaseBrickSlot(brick)
 			m.releaseVoxelAuxSlot(brick)
 		}
@@ -592,7 +659,9 @@ func (m *GpuBufferManager) writeSectorRecord(coords [3]int, mask uint64, info Se
 	binary.LittleEndian.PutUint32(sData[16:20], info.BrickTableIndex)
 	binary.LittleEndian.PutUint32(sData[20:24], uint32(mask))
 	binary.LittleEndian.PutUint32(sData[24:28], uint32(mask>>32))
-	// 28:32 padding
+	if info.packed != nil {
+		binary.LittleEndian.PutUint32(sData[28:32], 1)
+	}
 
 	mustQueueVoxelWrite(m.writeVoxelBuffer(m.SectorTableBuf, uint64(info.SlotIndex)*32, sData))
 }

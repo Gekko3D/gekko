@@ -158,8 +158,8 @@ func TestS1l3UntrackedSnapshotsPreserveFinalOwnerLifetime(t *testing.T) {
 			if len(m.SectorToInfo) != 0 || len(m.BrickToSlot) != 0 || len(m.BrickToAuxSlot) != 0 {
 				t.Fatal("final untracked snapshot release left assigned resources")
 			}
-			if m.SectorAlloc.Alloc() != info.SlotIndex || m.BrickAlloc.Alloc() != info.BrickTableIndex/64 || m.PayloadAlloc[payload.Page].Alloc() != payload.Slot || m.VoxelAuxAlloc.Alloc() != auxiliary {
-				t.Fatal("final untracked snapshot release did not return assigned slots")
+			if m.SectorAlloc.Alloc() != info.SlotIndex || m.PayloadAlloc[payload.Page].Alloc() != payload.Slot || m.VoxelAuxAlloc.Alloc() != auxiliary {
+				t.Fatal("final untracked snapshot release did not return sector/payload/auxiliary slots; packed record ranges retire behind submission fences")
 			}
 		})
 	}

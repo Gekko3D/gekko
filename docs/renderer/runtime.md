@@ -472,7 +472,7 @@ values disable only the byte cap; the legacy sector cap remains independent.
 Configuration takes effect during the next complete voxel update.
 
 Each exact retained `XBrickMap` charges once: 256 bytes of entry metadata, actual
-32-byte sector slots, 64-record brick-table blocks, and actual auxiliary/payload
+32-byte sector slots, assigned brick-range capacity, and actual auxiliary/payload
 slots. Slot identities are deduplicated within that map. Charge uses allocated
 snapshots rather than current CPU contents or flags; uniform bricks without a
 payload slot pay no payload charge. Empty/unallocated entries still pay metadata.
@@ -925,10 +925,12 @@ Current transparency modes:
 ### Voxel capacity planning
 
 Before structural preparation, capacity planning walks sectors only for unique
-new maps or maps with `StructureDirty`. Clean allocated maps use existing
-allocator tails. Hidden upload candidates remain eligible. Required sector and
-brick records retain pointer deduplication, the fixed 64-record sector stride and
-existing buffer headroom; planning reserves no slots and changes no maps.
+new maps or maps with `StructureDirty`. Existing maps contribute pending range
+demand through their dirty sector/brick frontier. Clean allocated maps use
+existing allocator capacity. Hidden upload candidates remain eligible. Planning
+deduplicates physical sector pointers and simulates contiguous range reservations;
+it assigns no slots and changes no maps. Required capacity includes current,
+replacement and quarantined ranges, without fixed 2,048-record headroom.
 
 `VoxelCapacityPlanningSectorVisitsLastUpdate` resets each update and counts
 sector entries inspected by this planning step. Other scene scans and the work
@@ -936,8 +938,8 @@ within one new or dirty map remain.
 
 ### Auxiliary capacity admission
 
-Auxiliary occupancy/normal storage is independent of the fixed 64-record sector
-brick stride. All nonnil brick modes, including solid bricks, require one
+Auxiliary occupancy/normal storage is independent of sector brick-range capacity.
+All nonnil brick modes, including solid bricks, require one
 1,088-byte sidecar per distinct brick pointer. Admission inventories new and
 structurally changed maps plus the dirty sector/brick frontier of existing maps,
 including pending full targets. Clean resident sectors require no auxiliary walk.
@@ -962,15 +964,13 @@ and bind-group recreation path. Released slots do not shrink buffers.
 Conservative reservations may defer alias-heavy replacements until additional
 capacity or final-reference releases become available. Unsupported public
 allocation headers retain conservative compatibility handling. The brick record
-layout, auxiliary word offsets, fitted normals and shader indexing are unchanged;
-packed sector brick ranges remain subsequent P2 work.
+layout, auxiliary word offsets and fitted normals are unchanged.
 
 ### Sparse sector publication
 
-Manager-owned full-sector uploads select current occupied brick records plus
-explicit clears of previously committed records. Inactive holes need no write.
-The sector retains its fixed 64-record stride; only content traffic is sparse.
-Foreign/manual allocation snapshots use the conservative dense upload path.
+Manager-owned full-sector uploads write current occupied brick records. Packed
+holes have no physical record. Legacy dense sectors retain explicit clears of
+previously committed records and conservative full-block compatibility uploads.
 
 Upload service captures sector membership before execution. Selected records,
 payloads and auxiliary bytes queue before that captured sector header. A topology
@@ -988,7 +988,54 @@ frame budget. Brick counts describe logical selected records; migration mirrors
 double the affected buffer bytes, not record counts. Header-only empty-sector
 work consumes no brick records but still consumes sector/header budgets. Dirty
 completion, shared ownership and auxiliary/payload capacity guards remain in the
-same service boundary. Packed allocation and rank indexing are subsequent work.
+same service boundary.
+
+### Packed sector brick ranges
+
+One physical `Sector` owns a committed brick range and mask, shared by all map
+allocations referencing it. Occupied records are contiguous in ascending local
+brick-index order. Capacity rounds to `0, 1, 2, 4, 8, 16, 32, 64` records; empty
+sectors need no range. A unified record-coordinate allocator splits and coalesces
+free intervals. Class padding is reserved capacity, never an uploaded live row.
+
+The 32-byte sector header stores base at byte 16, mask words at bytes 20/24 and
+layout at byte 28: zero denotes legacy dense indexing and one denotes packed
+indexing. All four voxel consumers reject absent mask bits before reading
+`base + popcount(mask below local index)` for packed sectors. Brick records,
+material addressing, payload textures and auxiliary encoding remain unchanged.
+
+Every membership change allocates a replacement range, including same-class
+changes and shrinking. Service captures the complete occupied set, writes its
+records first, then publishes the captured base/mask/layout together. A stable
+membership edit reuses its range; a dirty-brick membership mismatch promotes to
+a complete sector transaction and obeys sector, record and byte budgets. Denied
+capacity or content budgets preserve the old publication. New pending sectors
+receive no brick range until content service admits their first complete upload.
+
+Admission reserves virtual offsets, not assigned ranges. Service claims those
+exact spans so differing admission and content priorities cannot fragment an
+otherwise feasible plan. Deferred content leaves its real range unassigned;
+late growth can use spare capacity only after excluding other pending spans.
+A completed free suffix can join unused tail capacity without buffer growth.
+
+Publication synchronizes committed receipts of indexed owners sharing the
+physical sector and invalidates their retention accounting and shadow epochs.
+These receipts describe captured written pointers, including edits during
+execution, rather than newer live CPU topology.
+
+Replaced and final-owner ranges remain quarantined until
+`MarkRetiredBuffersSubmitted` stamps an actual submission and its completion is
+observed through `AdvanceRetiredBuffers`. Frame aging cannot release an unfenced
+range. Admission cannot borrow quarantined capacity; it pays simultaneous old/new
+ranges. Quarantine is physical capacity, excluded from assigned-map retention
+charges. Released intervals can be reused without shrinking buffers.
+
+Before the first nonempty managed lease, the allocator reserves the existing
+legacy dense address prefix, including public `BrickAlloc` demand. Existing dense headers stay
+layout zero. Ownership bookkeeping fallback cannot reinterpret an established
+packed sector as dense. Arbitrary subsequent derived GPU allocation/allocator
+mutations remain unsupported producers; conflicting legacy address growth must
+fail closed rather than overlap managed ranges.
 
 ### Normal neighbor preparation
 
@@ -1280,13 +1327,14 @@ pauses every content write.
 
 The byte cap covers material rows, sector/brick records, auxiliary
 occupancy/normals and mixed payloads, including duplicate buffer writes into an
-active staging generation. Managed full sectors consume occupied records and
-required clears; unknown allocation snapshots retain the 64-record fallback.
+active staging generation. Packed full sectors consume occupied records;
+legacy dense sectors retain the 64-record compatibility fallback.
 Allocation/migration copies, lookup rebuilding, scene
 buffers and CPU queue/normal-halo preparation remain outside this cap.
 
 Shared maps upload geometry once, using their best instance priority/order.
-Materials remain per object. Work sorts by priority, order, map ID, kind and
+Material attachments remain per object and certified immutable tables share
+physical blocks. Work sorts by priority, order, map ID, kind and
 signed coordinates. Waiting work gains one priority level every eight service
 frames; older work wins equal effective priority. Removed work loses its age.
 New core objects default to visible priority.

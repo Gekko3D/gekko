@@ -85,10 +85,14 @@ func (m *GpuBufferManager) retainedVoxelMapBytes(xbm *volume.XBrickMap) uint64 {
 				sectorSlots[info.SlotIndex] = true
 				bytes = addRetainedVoxelBytes(bytes, 32)
 			}
-			block := info.BrickTableIndex / 64
-			if !tableSlots[block] {
+			block := info.BrickTableIndex
+			capacity := uint32(64)
+			if info.packed != nil {
+				capacity = info.packed.capacity
+			}
+			if capacity != 0 && !tableSlots[block] {
 				tableSlots[block] = true
-				bytes = addRetainedVoxelBytes(bytes, 64*BrickRecordSize)
+				bytes = addRetainedVoxelBytes(bytes, uint64(capacity)*BrickRecordSize)
 			}
 		}
 	}

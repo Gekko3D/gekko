@@ -264,6 +264,15 @@ fn popcnt64_lower(mask_lo: u32, mask_hi: u32, idx: u32) -> u32 {
   }
 }
 
+// Header byte 28 selects the physical record layout. Call only for an
+// occupied local index: legacy records use fixed indices, packed records rank.
+fn sector_brick_record_index(sector: SectorRecord, local_idx: u32) -> u32 {
+  if (sector.padding == 1u) {
+    return sector.brick_table_index + popcnt64_lower(sector.brick_mask_lo, sector.brick_mask_hi, local_idx);
+  }
+  return sector.brick_table_index + local_idx;
+}
+
 fn intersect_aabb(ray: Ray, min_b: vec3<f32>, max_b: vec3<f32>) -> vec2<f32> {
   let t0s = (min_b - ray.origin) * ray.inv_dir;
   let t1s = (max_b - ray.origin) * ray.inv_dir;
@@ -500,7 +509,7 @@ fn sample_occupancy(v: vec3<i32>, params: ObjectParams) -> f32 {
   if (!bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local)) {
     return 0.0;
   }
-  let packed_idx = sector.brick_table_index + brick_idx_local;
+  let packed_idx = sector_brick_record_index(sector, brick_idx_local);
   let brick = bricks[packed_idx];
   let b_flags = brick.flags;
   if (!brick_is_solid(b_flags)) {
@@ -537,7 +546,7 @@ fn load_baked_voxel_normal_local(vi: vec3<i32>, params: ObjectParams) -> BakedVo
   if (!bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local)) {
     return BakedVoxelNormal(vec3<f32>(0.0), false, false);
   }
-  let brick = bricks[sector.brick_table_index + brick_idx_local];
+  let brick = bricks[sector_brick_record_index(sector, brick_idx_local)];
   let vx = vi.x & 7;
   let vy = vi.y & 7;
   let vz = vi.z & 7;
@@ -1305,7 +1314,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>, @location(0) uv: vec2<f32>) -
                     let brick_idx_local = bvid.x + bvid.y * 4u + bvid.z * 16u;
 
                     if (bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, brick_idx_local)) {
-                      let packed_idx = sector.brick_table_index + brick_idx_local;
+                      let packed_idx = sector_brick_record_index(sector, brick_idx_local);
                       let brick = bricks[packed_idx];
                       let b_flags = brick.flags;
                       let b_material = brick.material_index;

@@ -28,26 +28,26 @@ func TestS1hVoxelCapacityPlanningSkipsCleanResidentSectors(t *testing.T) {
 	for _, obj := range scene.Objects {
 		obj.XBrickMap.ClearDirty()
 	}
-	sectorTail, brickTail := m.SectorAlloc.Tail, m.BrickAlloc.Tail
+	sectorTail, recordTail := m.SectorAlloc.Tail, uint32(m.brickRanges.tail)
 	arrival := s1hCapacityObject(3)
 	arrival.XBrickMap.ClearDirty()
 	scene.Objects = append(scene.Objects, arrival)
 	sectors, bricks := m.voxelAllocationRequirements(scene)
-	if sectors != sectorTail+3 || bricks != brickTail*64+3*64 {
-		t.Fatalf("arrival capacity=(%d,%d), want (%d,%d)", sectors, bricks, sectorTail+3, brickTail*64+3*64)
+	if sectors != sectorTail+3 || bricks != recordTail+3 {
+		t.Fatalf("arrival capacity=(%d,%d), want (%d,%d)", sectors, bricks, sectorTail+3, recordTail+3)
 	}
 	if visits := m.VoxelCapacityPlanningSectorVisitsLastUpdate; visits != 3 {
 		t.Fatalf("small arrival visited %d sector entries; want 3 despite %d clean resident sectors", visits, residentMaps*sectorsPerMap)
 	}
 	// Planning is observational: repeated planning still needs the arrival.
 	sectors, bricks = m.voxelAllocationRequirements(scene)
-	if sectors != sectorTail+3 || bricks != brickTail*64+3*64 || m.VoxelCapacityPlanningSectorVisitsLastUpdate != 3 {
+	if sectors != sectorTail+3 || bricks != recordTail+3 || m.VoxelCapacityPlanningSectorVisitsLastUpdate != 3 {
 		t.Fatalf("repeated planning changed requirements or accumulated visits: sectors=%d bricks=%d visits=%d", sectors, bricks, m.VoxelCapacityPlanningSectorVisitsLastUpdate)
 	}
 	// An idle invocation resets its diagnostic even after an arrival frame.
 	scene.Objects = scene.Objects[:residentMaps]
 	sectors, bricks = m.voxelAllocationRequirements(scene)
-	if sectors != sectorTail || bricks != brickTail*64 || m.VoxelCapacityPlanningSectorVisitsLastUpdate != 0 {
+	if sectors != sectorTail || bricks != recordTail || m.VoxelCapacityPlanningSectorVisitsLastUpdate != 0 {
 		t.Fatalf("idle planning did not preserve tails/reset work: sectors=%d bricks=%d visits=%d", sectors, bricks, m.VoxelCapacityPlanningSectorVisitsLastUpdate)
 	}
 }
@@ -58,7 +58,7 @@ func TestS1hVoxelCapacityPlanningPointerChangesAndSharedHiddenMaps(t *testing.T)
 	m.prepareVoxelStructureDirtyState(&core.Scene{Objects: []*core.VoxelObject{changed, clean}})
 	changed.XBrickMap.ClearDirty()
 	clean.XBrickMap.ClearDirty()
-	sectorTail, brickTail := m.SectorAlloc.Tail, m.BrickAlloc.Tail
+	sectorTail, recordTail := m.SectorAlloc.Tail, uint32(m.brickRanges.tail)
 	replacement := s1hCapacityObject(1).XBrickMap.Sectors[[3]int{}]
 	// Keep the sector count and coordinate unchanged but replace its pointer.
 	changed.XBrickMap.Sectors[[3]int{}] = replacement
@@ -77,17 +77,18 @@ func TestS1hVoxelCapacityPlanningPointerChangesAndSharedHiddenMaps(t *testing.T)
 	nilMap.XBrickMap = nil
 	scene := &core.Scene{Objects: []*core.VoxelObject{nil, nilMap, clean, changed, changed, hidden, alias}}
 	sectors, bricks := m.voxelAllocationRequirements(scene)
-	// The assigned pointer needs no capacity. The replacement is shared by
-	// both eligible maps and two coordinates, so only two new sectors remain.
-	if sectors != sectorTail+2 || bricks != brickTail*64+2*64 {
-		t.Fatalf("shared replacement capacity=(%d,%d), want (%d,%d)", sectors, bricks, sectorTail+2, brickTail*64+2*64)
+	// Only two new sector headers remain because replacement pointers share
+	// ownership. The already prepared but unpublished assigned pointer also
+	// needs its one packed row: three prospective rows, deduplicated globally.
+	if sectors != sectorTail+2 || bricks != recordTail+3 {
+		t.Fatalf("shared replacement capacity=(%d,%d), want (%d,%d)", sectors, bricks, sectorTail+2, recordTail+3)
 	}
 	if visits := m.VoxelCapacityPlanningSectorVisitsLastUpdate; visits != 5 {
 		t.Fatalf("unique eligible maps must visit 1+4 entries, got %d", visits)
 	}
 	// A clean assigned map, nil object and nil geometry are all idle inputs.
 	sectors, bricks = m.voxelAllocationRequirements(&core.Scene{Objects: []*core.VoxelObject{nil, nilMap, clean}})
-	if sectors != sectorTail || bricks != brickTail*64 || m.VoxelCapacityPlanningSectorVisitsLastUpdate != 0 {
+	if sectors != sectorTail || bricks != recordTail || m.VoxelCapacityPlanningSectorVisitsLastUpdate != 0 {
 		t.Fatalf("idle/nil inputs changed capacity or retained visits: sectors=%d bricks=%d visits=%d", sectors, bricks, m.VoxelCapacityPlanningSectorVisitsLastUpdate)
 	}
 }

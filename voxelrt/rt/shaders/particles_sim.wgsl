@@ -119,6 +119,24 @@ fn bit_test64(mask_lo: u32, mask_hi: u32, idx: u32) -> bool {
     else { return (mask_hi & (1u << (idx - 32u))) != 0u; }
 }
 
+fn popcnt64_lower(mask_lo: u32, mask_hi: u32, idx: u32) -> u32 {
+    if (idx == 0u) { return 0u; }
+    if (idx < 32u) {
+        return countOneBits(mask_lo & ((1u << idx) - 1u));
+    }
+    if (idx == 32u) { return countOneBits(mask_lo); }
+    return countOneBits(mask_lo) + countOneBits(mask_hi & ((1u << (idx - 32u)) - 1u));
+}
+
+// Header byte 28 selects the physical record layout. Call only for an
+// occupied local index: legacy records use fixed indices, packed records rank.
+fn sector_brick_record_index(sector: SectorRecord, local_idx: u32) -> u32 {
+    if (sector.padding == 1u) {
+        return sector.brick_table_index + popcnt64_lower(sector.brick_mask_lo, sector.brick_mask_hi, local_idx);
+    }
+    return sector.brick_table_index + local_idx;
+}
+
 fn brick_is_solid(flags: u32) -> bool {
     return (flags & BRICK_FLAG_SOLID) != 0u;
 }
@@ -204,7 +222,7 @@ fn load_baked_voxel_normal(pos: vec3<f32>, op: ObjectParams) -> vec3<f32> {
     if (!bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, b_idx)) {
         return vec3<f32>(0.0, 1.0, 0.0);
     }
-    let brick = bricks[sector.brick_table_index + b_idx];
+    let brick = bricks[sector_brick_record_index(sector, b_idx)];
     if (brick.voxel_aux_word_base == 0xFFFFFFFFu) {
         return vec3<f32>(0.0, 1.0, 0.0);
     }
@@ -228,7 +246,7 @@ fn check_voxel_occupancy(pos: vec3<f32>, op: ObjectParams) -> bool {
     let b_idx = u32(bx + by*4 + bz*16);
     
     if (bit_test64(sector.brick_mask_lo, sector.brick_mask_hi, b_idx)) {
-        let brick = bricks[sector.brick_table_index + b_idx];
+        let brick = bricks[sector_brick_record_index(sector, b_idx)];
         if (brick_is_solid(brick.flags)) { return true; } // Solid brick
         
         let mx = (vox_pos.x >> 1) & 3; let my = (vox_pos.y >> 1) & 3; let mz = (vox_pos.z >> 1) & 3;

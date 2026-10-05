@@ -15,6 +15,7 @@ import (
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 	"github.com/go-gl/glfw/v3.3/glfw"
 	"github.com/go-gl/mathgl/mgl32"
+	"math/bits"
 	"runtime"
 )
 
@@ -94,13 +95,29 @@ func verify(a *app.App, o *core.VoxelObject) {
 		require(binary.LittleEndian.Uint32(header[16:]) == info.BrickTableIndex, "GPU sector base differs from assigned range")
 		mask := uint64(binary.LittleEndian.Uint32(header[20:])) | uint64(binary.LittleEndian.Uint32(header[24:]))<<32
 		require(mask == s.BrickMask64, "GPU sector mask differs from CPU authority")
-		records := readBuffer(a, m.BrickTableBuf, uint64(info.BrickTableIndex)*gpu.BrickRecordSize, 64*gpu.BrickRecordSize)
+		// P2b publication remains valid for both legacy dense and P2c packed
+		// record layouts; use the header's published base/mask/layout together.
+		layout := binary.LittleEndian.Uint32(header[28:])
+		require(layout == 0 || layout == 1, "unknown sector record layout")
+		count := 64
+		if layout == 1 {
+			count = bits.OnesCount64(mask)
+		}
+		if count == 0 {
+			continue
+		}
+		base := binary.LittleEndian.Uint32(header[16:])
+		records := readBuffer(a, m.BrickTableBuf, uint64(base)*gpu.BrickRecordSize, uint64(count)*gpu.BrickRecordSize)
 		for i := 0; i < 64; i++ {
 			b := s.GetBrick(i%4, (i/4)%4, i/16)
 			if b == nil {
 				continue
 			}
-			word := binary.LittleEndian.Uint32(records[i*int(gpu.BrickRecordSize)+24:])
+			recordIndex := i
+			if layout == 1 {
+				recordIndex = bits.OnesCount64(mask & ((uint64(1) << i) - 1))
+			}
+			word := binary.LittleEndian.Uint32(records[recordIndex*int(gpu.BrickRecordSize)+24:])
 			require(word != gpu.VoxelAuxInvalidWordBase, "occupied brick has no auxiliary offset")
 			require(uint64(word)*4+volume.VoxelAuxRecordBytes <= m.DenseOccupancyBuf.GetSize(), "native auxiliary offset exceeds physical buffer")
 			origin := [3]int{coord[0]*32 + i%4*8, coord[1]*32 + (i/4)%4*8, coord[2]*32 + i/16*8}
