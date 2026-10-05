@@ -96,7 +96,7 @@ func (m *GpuBufferManager) retainedVoxelMapBytes(xbm *volume.XBrickMap) uint64 {
 			}
 		}
 	}
-	if m.packedVoxelNormals {
+	if m.usesVoxelAuxiliaryPackets() {
 		seen := make(map[auxiliaryPacketLocation]bool)
 		for _, sector := range alloc.Sectors {
 			for index := 0; index < 64; index++ {

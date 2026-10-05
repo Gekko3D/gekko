@@ -80,7 +80,7 @@ Voxel atlas resource changes now also fan out more widely. The paged payload atl
 - Voxel payload bindings move as a set.
   - `gbuffer.wgsl`, `shadow_map.wgsl`, `transparent_overlay.wgsl`, and `particles_sim.wgsl` all expect `voxel_payload_0..3`, and their bind-group builders must match.
 - `BrickRecord` is no longer 16 bytes.
-  - The live layout is `material_index`, `payload_offset`, `occupancy_mask_lo`, `occupancy_mask_hi`, `payload_page`, `flags`, `voxel_aux_word_base`, and auxiliary layout for 32 bytes total.
+  - The live layout is `material_index`, `payload_offset`, `occupancy_mask_lo`, `occupancy_mask_hi`, `payload_page`, `flags`, `voxel_aux_word_base`, and auxiliary layout bits for 32 bytes total.
   - Any CPU writer or WGSL struct drift here will corrupt voxel reads.
 - Sector brick addressing is format-aware.
   - The 32-byte header publishes range base, membership mask and layout together;
@@ -101,7 +101,7 @@ Voxel atlas resource changes now also fan out more widely. The paged payload atl
 - Exact empty-voxel rejection is no longer payload-driven for non-solid bricks.
   - The live hot path is sector brick mask, then micro mask, then voxel-aux dense occupancy, then payload/material fetch only for confirmed occupied voxels.
 - Baked normals live in the voxel auxiliary sidecar.
-  - CPU sidecars and default GPU storage remain dense. Opt-in GPU packets retain occupancy and rank packed 16-bit normals; BrickRecord byte 28 selects the [layout](runtime.md#packed-fitted-normal-storage).
+  - CPU sidecars and default GPU storage remain dense. BrickRecord byte 28 bit 0 packs 16-bit normals; bit 1 independently packs mixed materials into the same fenced packet. Keep [normal](runtime.md#packed-fitted-normal-storage) and [material](runtime.md#packed-mixed-material-storage) accessors synchronized across consumers.
   - G-buffer, transparent overlay, and particles load the baked normal for the hit voxel; AO remains a separate neighbor-sampling feature.
   - Cross-object voxel adjacency and planet tile seams depend on scene-level dirty propagation, not only `XBrickMap.SetVoxel` dirtying within the edited object.
   - Prepare structural dirty state before cross-object normal halo propagation; otherwise newly loaded adjacent chunks can leave already-uploaded boundary normals stale.

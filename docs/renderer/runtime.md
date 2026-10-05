@@ -1044,10 +1044,12 @@ opts in before geometry or auxiliary allocation and staged growth. Same-value
 calls are idempotent; changing modes after allocation, including after release,
 is rejected. CPU sidecars and authored `PrecomputedAux` remain 1,088 bytes.
 
-BrickRecord byte 28 selects auxiliary layout: zero is dense; one retains the
-first sixteen occupancy words and follows them with two original 16-bit normal
-lanes per word, in ascending occupied voxel order (`x + y*8 + z*64`). The packet
-occupies `16 + ceil(occupied/2)` words, with a zero odd padding lane. Valid
+BrickRecord byte 28 contains auxiliary layout bits: bit 0 selects packed
+normals and bit 1 selects [packed mixed materials](#packed-mixed-material-storage).
+With bit 0 set, the first sixteen occupancy words precede two original 16-bit normal
+lanes per word, in ascending occupied voxel order (`x + y*8 + z*64`). This normal
+prefix occupies `16 + ceil(occupied/2)` words, with a zero odd padding lane;
+optional mixed-material lanes follow it. Valid
 1,088-byte precomputed data is authoritative, including its occupancy header;
 otherwise the existing normal baker supplies the dense source. Invalid-sized
 precomputed slices are ignored. Encoding, validity and two-sided bits are copied
@@ -1055,13 +1057,15 @@ exactly, including invalid raw values. This selector is independent of the secto
 header's byte-28 brick-addressing selector.
 
 G-buffer, transparency and particle normal loads rank occupied voxels against
-these occupancy words. Packed empty-voxel loads return zero; dense raw loads
+these occupancy words. Packed empty-voxel normal loads return zero; dense raw loads
 retain their previous behavior. Shadow traversal uses the unchanged occupancy
-header. Material tables, payload atlas and bindings remain unchanged.
+header. Material tables and bindings remain unchanged. With material packing
+disabled, mixed material reads continue to use the payload atlas.
 
+Either packing policy uses the following packet ownership and publication rules.
 A live packet belongs to a physical sector/local brick index. Shared physical
 sectors share it; sharing a CPU brick between distinct sectors does not share
-normal packets. Every actual packed upload replaces its packet, including
+packets. Every actual packet upload replaces its packet, including
 identical uploads in later updates and normal-only halos. Replaced, removed and
 final-owner packets remain quarantined until an actual queue submission is
 stamped and completed. Admission pays simultaneous old/new capacity, and retained
@@ -1084,6 +1088,46 @@ Target revision, pending generation and source checks still guard acknowledgemen
 Existing public dense auxiliary slots keep a reserved legacy prefix; conflicting
 later prefix growth fails closed. Packed allocation uses independent word
 coordinates, with no change to the legacy dense slot API.
+
+### Packed mixed-material storage
+
+`GpuBufferManager.SetPackedVoxelMaterials(true)` independently selects packed
+mixed-material storage before geometry, auxiliary allocation or staged growth.
+Same-value calls are idempotent; later policy changes, including after release,
+are rejected. Atlas materials and dense normals remain the defaults. CPU bricks,
+authored sidecars and 256-entry local palette addressing are unchanged.
+
+A mixed brick appends one original material byte per occupied voxel to its
+auxiliary packet, in ascending canonical occupancy rank. Four bytes share each
+little-endian `u32`; unused final lanes are zero. Occupancy comes from the valid
+authored auxiliary header or the existing baker, including authored occupancy
+that differs from raw payload. Material bytes come from captured `VoxelValue`
+cells, including IDs 0 and 255. Uniform and solid bricks retain their scalar
+material and normal sidecar, with no material suffix or material layout bit.
+
+For `n` occupied voxels, mixed packets contain `272 + ceil(n/4)` words with dense
+normals, or `16 + ceil(n/2) + ceil(n/4)` words with packed normals. Byte 28 is
+therefore 0, 1, 2 or 3. A packed mixed record publishes its absolute material word
+base in `payload_offset`; `payload_page` is zero and unused. G-buffer,
+transparency and shadow material accessors rank against the packet occupancy,
+extract the selected eight-bit lane, and return zero for empty or out-of-range
+mixed voxel indices. Particle collisions consume occupancy and normals only.
+
+The existing bound auxiliary pool owns the complete packet under the preceding
+[fenced publication rules](#packed-fitted-normal-storage). Admission charges the
+material suffix and simultaneous old/new packets, actual uploads include
+migration mirrors, and retained accounting charges committed packet words.
+Packed mixed uploads require neither atlas slots nor texture writes. The pool
+is the first-page prototype: existing buffer/storage binding limits and 32-bit
+word indices bound admission; unavailable capacity defers the complete unit.
+No additional shader binding is required.
+
+Atlas textures and bindings remain allocated for the default path and shared
+pipeline layouts. Avoided assigned payload bytes are not physical atlas savings.
+Declared texture capacity does not measure resident GPU memory.
+Use [paired workload measurements](verification.md#packed-normal-workload-benchmark)
+before choosing a policy; this prototype does not select a density threshold or
+remove the atlas.
 
 ### Normal neighbor preparation
 
@@ -1481,22 +1525,22 @@ destination, `App.Update()` must rebuild dependent bind groups and advance
 `SceneBindingRevision`. Renderer bugs after object-count growth, destination
 replacement or shadow-capacity growth are usually stale-bind-group issues.
 
-Voxel payload uploads follow the same rule. `BrickRecord` is now 32 bytes and uses explicit fields rather than overloaded payload/material storage:
+Voxel payload uploads follow the same rule. `BrickRecord` remains 32 bytes with format-aware payload addressing:
 
 - `material_index`
   - used by `Solid` and `UniformMaterial` bricks
 - `payload_offset`
-  - packed 3D payload-atlas offset used only by payload-backed sparse bricks
+  - packed 3D atlas offset, or absolute material word base when auxiliary bit 1 is set
 - `occupancy_mask_lo` / `occupancy_mask_hi`
   - coarse `2x2x2` microblock occupancy mask
 - `payload_page`
-  - payload atlas page for payload-backed sparse bricks
+  - payload atlas page; zero and unused for packed material records
 - `flags`
   - includes `BrickFlagSolid` and `BrickFlagUniformMaterial`
 - `voxel_aux_word_base`
-  - exact `8x8x8` occupancy and fitted-normal packet pointer
+  - exact `8x8x8` occupancy, fitted-normal and optional mixed-material packet pointer
 - `auxiliary_layout` (byte 28)
-  - dense zero or packed-normal one; see [storage contract](#packed-fitted-normal-storage)
+  - bit 0 packs normals; bit 1 packs mixed materials; see [storage contract](#packed-fitted-normal-storage)
 
 The live brick-mode contract is:
 
@@ -1504,17 +1548,17 @@ The live brick-mode contract is:
   - whole brick occupied
   - reads `material_index`
   - does not allocate payload atlas storage
-  - does not allocate dense occupancy
+  - retains its occupancy/normal sidecar
 - `UniformMaterial`
   - sparse occupancy
   - reads `material_index`
-  - allocates dense occupancy
+  - retains its occupancy/normal sidecar
   - does not allocate payload atlas storage
 - payload-backed sparse
   - sparse occupancy
-  - reads `payload_offset` and `payload_page`
-  - allocates dense occupancy
-  - allocates payload atlas storage
+  - uses the atlas by default or occupancy-ranked material lanes when opted in
+  - retains its occupancy/normal sidecar
+  - assigns atlas slots only with material packing disabled
 
 Any bind group or shader that reads voxel payload data must be recreated if payload pages or voxel-table resources were recreated, and any pass that reads `BrickRecord` must keep this field order aligned with the GPU upload path in `voxelrt/rt/gpu/manager_voxel.go`.
 Hybrid sector lookup is now part of that same contract. `ObjectParams` is 128 bytes, qualifying objects use object-local direct lookup, `SectorGridBuf` still holds the hash-probed `SectorGridEntry` array, and `DirectSectorLookupBuf` now carries the compact direct-lookup words as a dedicated storage buffer. Any pass that reads voxel occupancy must keep its shader structs, bind groups, and hand-written pipeline layouts aligned with that live layout. This split depends on `App.Init()` requesting adapter-supported limits when creating the native WebGPU device.

@@ -686,7 +686,7 @@ func (m *GpuBufferManager) uploadBrick(context func() voxelNormalBakeContext, ob
 	var payloadOffset uint32
 	var payloadPage uint32
 	auxWordBase := VoxelAuxInvalidWordBase
-	if mode.usesPayload {
+	if mode.usesPayload && !m.packedVoxelMaterials {
 		payloadSlot, exists := m.BrickToSlot[identity]
 		if !exists {
 			var ok bool
@@ -724,7 +724,7 @@ func (m *GpuBufferManager) uploadBrick(context func() voxelNormalBakeContext, ob
 		auxWordBase = captured.lease.base
 		mustQueueVoxelWrite(m.writeVoxelBuffer(m.DenseOccupancyBuf, uint64(auxWordBase)*4, captured.packet))
 	} else if mode.usesAux {
-		if m.packedVoxelNormals {
+		if m.usesVoxelAuxiliaryPackets() {
 			panic("packed voxel auxiliary upload requires a complete-unit capture")
 		}
 		auxSlot, exists := m.BrickToAuxSlot[brick]
@@ -752,7 +752,14 @@ func (m *GpuBufferManager) uploadBrick(context func() voxelNormalBakeContext, ob
 
 	record := buildGpuBrickRecord(brick, mode, payloadOffset, payloadPage, auxWordBase)
 	if captured != nil {
-		record.auxiliaryLayout = 1
+		if m.packedVoxelNormals {
+			record.auxiliaryLayout |= 1
+		}
+		if m.packedVoxelMaterials && mode.usesPayload {
+			record.auxiliaryLayout |= 2
+			record.payloadOffset = auxWordBase + captured.materialStart
+			record.payloadPage = 0
+		}
 	}
 	bbuf := encodeGpuBrickRecord(record)
 	mustQueueVoxelWrite(m.writeVoxelBuffer(m.BrickTableBuf, uint64(slotIdx)*BrickRecordSize, bbuf))

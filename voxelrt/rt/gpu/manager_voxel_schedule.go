@@ -160,9 +160,12 @@ func brickUploadBytes(brick *volume.Brick) uint64 {
 func (m *GpuBufferManager) voxelBrickUploadBytes(brick *volume.Brick) uint64 {
 	bytes := brickUploadBytes(brick)
 	auxBytes := uint64(VoxelAuxRecordBytes)
-	if m.packedVoxelNormals && brick != nil && resolveBrickUploadMode(brick.Flags).usesAux {
-		auxBytes = uint64(packedAuxiliaryWordCount(brick)) * 4
+	if m.usesVoxelAuxiliaryPackets() && brick != nil && resolveBrickUploadMode(brick.Flags).usesAux {
+		auxBytes = uint64(m.auxiliaryPacketWordCount(brick)) * 4
 		bytes = bytes - VoxelAuxRecordBytes + auxBytes
+		if m.packedVoxelMaterials && resolveBrickUploadMode(brick.Flags).usesPayload {
+			bytes -= payloadBytesPerBrick
+		}
 	}
 	if m.voxelBufferMirrored(1) {
 		bytes += BrickRecordSize
@@ -405,10 +408,10 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 		if w.kind == voxelUploadSector {
 			w = m.qualifySectorUpload(w)
 		}
-		if (!m.packedVoxelNormals || w.kind == voxelUploadMaterial) && (w.bytes > remaining.MaxBytes || w.sectors > remaining.MaxSectors || w.bricks > remaining.MaxBricks) {
+		if (!m.usesVoxelAuxiliaryPackets() || w.kind == voxelUploadMaterial) && (w.bytes > remaining.MaxBytes || w.sectors > remaining.MaxSectors || w.bricks > remaining.MaxBricks) {
 			continue
 		}
-		if !m.packedVoxelNormals && w.kind != voxelUploadMaterial && (!m.voxelUploadPayloadFits(w) || !m.voxelUploadAuxiliaryFits(w) || !m.packedUploadFits(w)) {
+		if !m.usesVoxelAuxiliaryPackets() && w.kind != voxelUploadMaterial && (!m.voxelUploadPayloadFits(w) || !m.voxelUploadAuxiliaryFits(w) || !m.packedUploadFits(w)) {
 			continue
 		}
 		if w.kind == voxelUploadSector {
@@ -419,7 +422,7 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 		}
 		var auxiliaryBefore voxelIndexRanges
 		auxiliaryClaimed := false
-		if m.packedVoxelNormals && w.kind != voxelUploadMaterial {
+		if m.usesVoxelAuxiliaryPackets() && w.kind != voxelUploadMaterial {
 			w = m.capturePackedAuxiliaryUpload(w, context)
 			previous, completed := completedPhysical[w.packedAuxiliarySnapshot.sector]
 			if completed && samePackedPhysicalUpload(previous, w) {
@@ -683,6 +686,9 @@ func (m *GpuBufferManager) voxelBrickReferencedOutsideUpload(brick *volume.Brick
 }
 
 func (m *GpuBufferManager) voxelUploadPayloadFits(w voxelUploadWork) bool {
+	if m.packedVoxelMaterials {
+		return true
+	}
 	m.beginVoxelOwnership()
 	defer m.endVoxelOwnership()
 	key := w.sectorCoordinate()

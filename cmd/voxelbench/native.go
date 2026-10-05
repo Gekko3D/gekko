@@ -424,8 +424,8 @@ func releaseManager(m *gpu.GpuBufferManager) {
 	}
 }
 
-func benchmark(mode string, cfg settings) (r report, err error) {
-	r = report{Version: 1, Mode: mode, Settings: cfg, GPUUnit: "raw_gpu_ticks", Shader: fmt.Sprintf("%x", sha256.Sum256([]byte(shaders.GBufferWGSL)))}
+func benchmark(mode, materials string, cfg settings) (r report, err error) {
+	r = report{Version: 2, Mode: mode, Materials: materials, Settings: cfg, GPUUnit: "raw_gpu_ticks", Shader: fmt.Sprintf("%x", sha256.Sum256([]byte(shaders.GBufferWGSL)))}
 	r.GPUTimingMethod = "compute_pass_boundaries_completed_resolve_v1"
 	r.QueryCohortSize = timestampCohortSize
 	r.QueryCohortCount, r.QueryMaxCount = timestampQueryLayout(cfg.Samples)
@@ -459,6 +459,9 @@ func benchmark(mode string, cfg settings) (r report, err error) {
 	manager := gpu.NewGpuBufferManager(device, core.NewProfiler())
 	defer releaseManager(manager)
 	if err = manager.SetPackedVoxelNormals(mode == "packed"); err != nil {
+		return r, err
+	}
+	if err = manager.SetPackedVoxelMaterials(materials == "packed"); err != nil {
 		return r, err
 	}
 	manager.CreateGBufferTextures(uint32(cfg.Width), uint32(cfg.Height))
@@ -605,6 +608,15 @@ func benchmark(mode string, cfg settings) (r report, err error) {
 		return r, fmt.Errorf("edited fixture did not change rendered depth or normals")
 	}
 	r.AuxiliaryCapacityBytes = manager.DenseOccupancyBuf.GetSize()
+	// R8Uint payload textures retain their physical capacity even when packed
+	// material records avoid assigning atlas slots. Count all bound textures,
+	// including mandatory placeholder pages, using their actual dimensions.
+	for _, texture := range manager.VoxelPayloadTex {
+		if texture != nil {
+			r.PayloadAtlasCapacityBytes += uint64(texture.GetWidth()) * uint64(texture.GetHeight()) * uint64(texture.GetDepthOrArrayLayers())
+		}
+	}
+	r.PayloadAssignedBytes = uint64(len(manager.BrickToSlot)) * 512
 	r.FinalGeometry = geometry(obj)
 	device.Poll(true, nil)
 	manager.AdvanceRetiredBuffers()

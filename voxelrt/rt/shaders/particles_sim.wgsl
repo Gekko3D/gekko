@@ -86,7 +86,7 @@ struct SpawnRequest {
 
 // Group 2: Voxel Data (Shared with Renderer)
 struct SectorRecord { origin_vox: vec4<i32>, brick_table_index: u32, brick_mask_lo: u32, brick_mask_hi: u32, padding: u32 };
-struct BrickRecord { material_index: u32, payload_offset: u32, occupancy_mask_lo: u32, occupancy_mask_hi: u32, payload_page: u32, flags: u32, voxel_aux_word_base: u32, padding: u32 }; // Auxiliary layout: 0 dense, 1 occupancy-ranked normals.
+struct BrickRecord { material_index: u32, payload_offset: u32, occupancy_mask_lo: u32, occupancy_mask_hi: u32, payload_page: u32, flags: u32, voxel_aux_word_base: u32, padding: u32 }; // Auxiliary layout bits: 1 occupancy-ranked normals, 2 occupancy-ranked mixed materials.
 struct SectorGridEntry { coords: vec4<i32>, base_idx: u32, sector_idx: i32, padding: vec2<u32> };
 struct SectorGridParams { grid_size: u32, grid_mask: u32, padding0: u32, padding1: u32 };
 struct ObjectParams { sector_table_base: u32, brick_table_base: u32, payload_base: u32, material_table_base: u32, tree64_base: u32, lod_threshold: f32, sector_count: u32, ambient_occlusion_mode: u32, shadow_group_id: u32, shadow_seam_epsilon: f32, is_terrain_chunk: u32, terrain_group_id: u32, terrain_chunk: vec4<i32>, is_planet_tile: u32, planet_tile_group_id: u32, emitter_link_id: u32, padding2: u32, planet_tile: vec4<i32>, direct_lookup_origin_mode: vec4<i32>, direct_lookup_extent_base: vec4<u32> };
@@ -214,8 +214,8 @@ fn decode_baked_voxel_normal(encoded: u32) -> vec3<f32> {
 fn load_baked_voxel_normal_encoded_from_brick(brick: BrickRecord, voxel_idx: u32) -> u32 {
     if (brick.voxel_aux_word_base == 0xFFFFFFFFu) { return 0u; }
     var normal_idx = voxel_idx;
-    // Layout zero retains dense raw values, including empty-voxel values.
-    if (brick.padding == 1u) {
+    // A clear normal bit retains dense raw values, including empty-voxel values.
+    if ((brick.padding & 1u) != 0u) {
         if (voxel_idx >= 512u) { return 0u; }
         let occupancy_idx = voxel_idx >> 5u;
         let occupancy = voxel_aux_words[brick.voxel_aux_word_base + occupancy_idx];

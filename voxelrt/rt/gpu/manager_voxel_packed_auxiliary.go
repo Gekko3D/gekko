@@ -28,6 +28,69 @@ func (m *GpuBufferManager) SetPackedVoxelNormals(enabled bool) error {
 	return nil
 }
 
+// SetPackedVoxelMaterials selects occupancy-ranked mixed material bytes before
+// geometry owns any allocations. It is independent of the normal policy.
+func (m *GpuBufferManager) SetPackedVoxelMaterials(enabled bool) error {
+	if m == nil {
+		return errors.New("nil voxel GPU manager")
+	}
+	if m.packedVoxelMaterials == enabled {
+		return nil
+	}
+	if len(m.Allocations) != 0 || len(m.SectorToInfo) != 0 || m.SectorAlloc.Tail != 0 || m.BrickAlloc.Tail != 0 || m.brickPackedLeased || m.VoxelAuxAlloc.Tail != 0 || len(m.BrickToAuxSlot) != 0 || m.auxiliaryPackedLeased || m.voxelGrowth != nil {
+		return errors.New("packed voxel materials must be selected before geometry, auxiliary allocation or staged growth")
+	}
+	m.packedVoxelMaterials = enabled
+	return nil
+}
+func (m *GpuBufferManager) usesVoxelAuxiliaryPackets() bool {
+	return m.packedVoxelNormals || m.packedVoxelMaterials
+}
+func (m *GpuBufferManager) auxiliaryPacketWordCount(brick *volume.Brick) uint32 {
+	if brick == nil {
+		return 0
+	}
+	// Admission and encoding derive lanes from the same canonical occupancy.
+	occupied := 0
+	if len(brick.PrecomputedAux) == VoxelAuxRecordBytes {
+		for i := 0; i < volume.DenseOccupancyWordCount; i++ {
+			occupied += bits.OnesCount32(binary.LittleEndian.Uint32(brick.PrecomputedAux[4*i:]))
+		}
+	} else {
+		for _, word := range brick.DenseOccupancyWords() {
+			occupied += bits.OnesCount32(word)
+		}
+	}
+	count := uint32(volume.VoxelNormalWordCount)
+	if m.packedVoxelNormals {
+		count = uint32((occupied + 1) / 2)
+	}
+	if m.packedVoxelMaterials && resolveBrickUploadMode(brick.Flags).usesPayload {
+		count += uint32((occupied + 3) / 4)
+	}
+	return volume.DenseOccupancyWordCount + count
+}
+func (m *GpuBufferManager) packVoxelPacket(brick *volume.Brick, dense []byte) ([]byte, uint32) {
+	packet := dense
+	if m.packedVoxelNormals {
+		packet = packVoxelAuxiliaryBytes(dense)
+	}
+	materialStart := uint32(len(packet) / 4)
+	if m.packedVoxelMaterials && resolveBrickUploadMode(brick.Flags).usesPayload {
+		materials := make([]byte, 0, 512)
+		for index := 0; index < 512; index++ {
+			word := binary.LittleEndian.Uint32(dense[4*(index/32):])
+			if word&(uint32(1)<<uint(index%32)) != 0 {
+				materials = append(materials, brick.VoxelValue(index%8, (index/8)%8, index/64))
+			}
+		}
+		tail := make([]byte, 4*((len(materials)+3)/4))
+		copy(tail, materials)
+		packet = append(packet, tail...)
+	}
+	return packet, materialStart
+}
+
 type auxiliaryPacketLocation struct {
 	sector *volume.Sector
 	index  int
@@ -134,7 +197,7 @@ func packVoxelAuxiliaryBytes(dense []byte) []byte {
 }
 
 func (p *voxelAdmissionPlan) reservePackedAuxiliaryMap(m *GpuBufferManager, xbm *volume.XBrickMap) {
-	if !m.packedVoxelNormals {
+	if !m.usesVoxelAuxiliaryPackets() {
 		return
 	}
 	inventory := p.auxiliaryDemand
@@ -187,7 +250,7 @@ func (p *voxelAdmissionPlan) reservePackedAuxiliaryMap(m *GpuBufferManager, xbm 
 		if _, exists := p.auxiliaryPacketReservations[location]; exists {
 			continue
 		}
-		words := packedAuxiliaryWordCount(locations[location])
+		words := m.auxiliaryPacketWordCount(locations[location])
 		base, ok := p.auxiliaryWordRanges.alloc(words, uint64(^uint32(0)))
 		p.auxiliaryPacketReservations[location] = auxiliaryPacketLease{base, words}
 		p.auxiliaryPacketReservationKeys = append(p.auxiliaryPacketReservationKeys, location)
@@ -200,10 +263,11 @@ func (p *voxelAdmissionPlan) reservePackedAuxiliaryMap(m *GpuBufferManager, xbm 
 // Captures belong only to one selected complete upload unit (at most 64 rows).
 // Neighbor bake inputs retain the existing revision/halo ownership contract.
 type capturedVoxelBrick struct {
-	identity *volume.Brick
-	source   volume.Brick
-	packet   []byte
-	lease    auxiliaryPacketLease
+	identity      *volume.Brick
+	source        volume.Brick
+	packet        []byte
+	lease         auxiliaryPacketLease
+	materialStart uint32
 }
 type packedAuxiliaryUploadSnapshot struct {
 	sector   *volume.Sector
@@ -264,7 +328,7 @@ func (m *GpuBufferManager) capturePackedAuxiliaryUpload(w voxelUploadWork, conte
 			continue
 		}
 		mode := resolveBrickUploadMode(row.source.Flags)
-		if mode.usesPayload {
+		if mode.usesPayload && !m.packedVoxelMaterials {
 			w.bytes += payloadBytesPerBrick
 		}
 		if mode.usesAux {
@@ -280,7 +344,7 @@ func (m *GpuBufferManager) capturePackedAuxiliaryUpload(w voxelUploadWork, conte
 				dense = buildVoxelAuxBytesForTarget(ctx, w.object, w.targetMap(), &row.source, brickOriginForSectorIndex(w.sectorCoordinate(), index))
 				m.VoxelRuntimeNormalBakeDuration += time.Since(begin)
 			}
-			row.packet = packVoxelAuxiliaryBytes(dense)
+			row.packet, row.materialStart = m.packVoxelPacket(&row.source, dense)
 			w.bytes += uint64(len(row.packet))
 			if m.voxelBufferMirrored(2) {
 				w.bytes += uint64(len(row.packet))

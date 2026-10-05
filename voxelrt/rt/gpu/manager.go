@@ -496,6 +496,7 @@ type GpuBufferManager struct {
 	SectorAlloc                SlotAllocator
 	plannedBrickRanges         map[*volume.Sector]plannedBrickRange
 	packedVoxelNormals         bool
+	packedVoxelMaterials       bool
 	auxiliaryRanges            voxelIndexRanges
 	auxiliaryRangesInitialized bool
 	auxiliaryPackedLeased      bool

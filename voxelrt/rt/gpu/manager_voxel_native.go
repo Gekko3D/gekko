@@ -22,7 +22,7 @@ func (m *GpuBufferManager) currentVoxelGPUResources() voxelGPUResources {
 		r.RetiredBytes = addRetainedVoxelBytes(r.RetiredBytes, retired.VoxelBytes)
 	}
 	pageBytes := voxelMul(voxelMul(uint64(m.VoxelPayloadPageSize), uint64(m.VoxelPayloadPageSize)), uint64(m.VoxelPayloadPageSize))
-	for i := uint32(0); i < m.VoxelPayloadPageCount; i++ {
+	for i := range m.VoxelPayloadTex {
 		if m.VoxelPayloadTex[i] != nil {
 			r.AtlasBytes = addRetainedVoxelBytes(r.AtlasBytes, pageBytes)
 		}

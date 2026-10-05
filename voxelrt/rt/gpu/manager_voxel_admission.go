@@ -349,7 +349,7 @@ func (p *voxelAdmissionPlan) addMap(m *GpuBufferManager, xbm *volume.XBrickMap) 
 	}
 	consumeVoxelSlots(&p.sectorTail, &p.sectorFree, newSectors)
 	p.reservePackedMap(m, xbm)
-	if m.packedVoxelNormals {
+	if m.usesVoxelAuxiliaryPackets() {
 		p.reservePackedAuxiliaryMap(m, xbm)
 	} else {
 		p.addAuxiliary(m, xbm)
@@ -411,7 +411,7 @@ func (p *voxelAdmissionPlan) resources(m *GpuBufferManager, current voxelGPUReso
 		auxRows = max(voxelMul(p.brickTail, 64), uint64(m.VoxelAuxAlloc.Tail))
 	}
 	sizes := [7]uint64{voxelMul(p.sectorTail, 32), voxelMul(max(voxelMul(p.brickTail, 64), p.recordRanges.tail), BrickRecordSize), voxelMul(auxRows, VoxelAuxRecordBytes), voxelMul(p.materialTail, materialBlockCapacity*64), voxelMul(voxelHashGridSize(p.hashSectors), 32), voxelMul(p.directCells, 4), 16}
-	if m.packedVoxelNormals {
+	if m.usesVoxelAuxiliaryPackets() {
 		sizes[2] = voxelMul(p.auxiliaryWordRanges.tail, 4)
 	}
 	fields := []*uint64{&next.SectorTable, &next.BrickTable, &next.Auxiliary, &next.Material, &next.SectorGrid, &next.DirectLookup, &next.SectorGridParams}
@@ -425,6 +425,11 @@ func (p *voxelAdmissionPlan) resources(m *GpuBufferManager, current voxelGPUReso
 		case 0:
 			preferred = voxelMul(addRetainedVoxelBytes(p.sectorTail, 512), 32)
 		}
+		// Packet words require four-byte alignment; an existing bound pool can
+		// satisfy exact demand without rounding its capacity up for a new allocation.
+		if i == 2 && m.usesVoxelAuxiliaryPackets() && *dest >= sizes[i] && *dest <= limit {
+			continue
+		}
 		value, ok := voxelCapacity(*dest, sizes[i], preferred, limit)
 		if !ok {
 			return current, false
@@ -432,7 +437,7 @@ func (p *voxelAdmissionPlan) resources(m *GpuBufferManager, current voxelGPUReso
 		*dest = value
 	}
 	// Shader indices and allocators remain 32-bit even on large devices.
-	if p.auxiliaryWordRangeInvalid || (m.packedVoxelNormals && p.auxiliaryWordRanges.tail > uint64(^uint32(0))) || p.recordRangeInvalid || p.recordRanges.tail > uint64(^uint32(0)) || p.sectorTail > uint64(^uint32(0)) || p.brickTail > uint64(^uint32(0))/64 || p.materialTail > uint64(^uint32(0))/(materialBlockCapacity*4) || auxRows > uint64(^uint32(0))/volume.VoxelAuxWordCount || p.directCells > uint64(^uint32(0)) || voxelHashGridSize(p.hashSectors) > uint64(^uint32(0)) {
+	if p.auxiliaryWordRangeInvalid || (m.usesVoxelAuxiliaryPackets() && p.auxiliaryWordRanges.tail > uint64(^uint32(0))) || p.recordRangeInvalid || p.recordRanges.tail > uint64(^uint32(0)) || p.sectorTail > uint64(^uint32(0)) || p.brickTail > uint64(^uint32(0))/64 || p.materialTail > uint64(^uint32(0))/(materialBlockCapacity*4) || auxRows > uint64(^uint32(0))/volume.VoxelAuxWordCount || p.directCells > uint64(^uint32(0)) || voxelHashGridSize(p.hashSectors) > uint64(^uint32(0)) {
 		return current, false
 	}
 	return next, true
@@ -511,7 +516,7 @@ func (m *GpuBufferManager) prepareVoxelGPUAdmissionCurrentFrame(scene *core.Scen
 	ordinaryMaterialFree := uint64(len(m.MaterialAlloc.Free))
 	rangesValid := m.ensureBrickRecordRanges()
 	auxiliaryValid := true
-	if m.packedVoxelNormals {
+	if m.usesVoxelAuxiliaryPackets() {
 		auxiliaryValid = m.ensureAuxiliaryWordRanges()
 	}
 	initial := voxelAdmissionPlan{auxiliaryWordRanges: m.auxiliaryRanges.clone(), auxiliaryWordRangeInvalid: !auxiliaryValid, auxiliaryPacketReservations: make(map[auxiliaryPacketLocation]auxiliaryPacketLease), recordRanges: m.brickRanges.clone(), recordRangeInvalid: !rangesValid, packedReservations: make(map[*volume.Sector]plannedBrickRange), auxiliaryDemand: m.auxiliaryDemand(scene), auxiliaryTail: uint64(m.VoxelAuxAlloc.Tail), auxiliaryFree: uint64(len(m.VoxelAuxAlloc.Free)), auxiliaryReserved: make(map[*volume.Brick]bool), auxiliaryRemovedReferences: make(map[*volume.Brick]int), auxiliaryReleased: make(map[*volume.Brick]bool), materialKeys: make(map[string]bool), sectorTail: uint64(m.SectorAlloc.Tail), brickTail: uint64(m.BrickAlloc.Tail), materialTail: uint64(m.MaterialAlloc.Tail), sectorFree: uint64(len(m.SectorAlloc.Free)), brickFree: uint64(len(m.BrickAlloc.Free)), materialFree: uint64(len(m.MaterialAlloc.Free)), sectors: make(map[*volume.Sector]bool), maps: make(map[*volume.XBrickMap]bool), objects: make(map[*core.VoxelObject]bool), lookup: make(map[*volume.XBrickMap]bool), removedSectors: make(map[*volume.Sector]bool)}

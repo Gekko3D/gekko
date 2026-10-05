@@ -87,36 +87,59 @@ type geometryStats struct {
 	ContentSHA256  string `json:"content_sha256"`
 }
 type report struct {
-	GPUTimingMethod          string         `json:"gpu_timing_method"`
-	QueryCohortSize          int            `json:"gpu_query_cohort_size"`
-	QueryCohortCount         int            `json:"gpu_query_cohort_count"`
-	QueryMaxCount            uint32         `json:"gpu_query_max_count"`
-	CalibrationCount         int            `json:"gpu_calibration_count"`
-	CalibrationTicks         []uint64       `json:"gpu_calibration_timestamp_pairs,omitempty"`
-	InitialGeometry          geometryStats  `json:"initial_geometry"`
-	FinalGeometry            geometryStats  `json:"final_geometry"`
-	Version                  int            `json:"version"`
-	Mode                     string         `json:"mode"`
-	Settings                 settings       `json:"settings"`
-	Adapter                  string         `json:"adapter"`
-	Backend                  string         `json:"backend"`
-	Fixture                  string         `json:"fixture"`
-	Shader                   string         `json:"shader_sha256"`
-	GPUAvailable             bool           `json:"gpu_timing_available"`
-	GPUUnit                  string         `json:"gpu_timing_unit"`
-	Warning                  string         `json:"warning,omitempty"`
-	RawTicks                 []uint64       `json:"raw_timestamp_pairs,omitempty"`
-	GPU                      *sampleSummary `json:"gpu_per_dispatch,omitempty"`
-	Initial                  cpuCost        `json:"initial_admission"`
-	CPU                      []cpuCost      `json:"cpu_updates"`
-	AuxiliaryCapacityBytes   uint64         `json:"auxiliary_physical_capacity_bytes"`
-	InitialCapture           capture        `json:"initial_capture"`
-	FinalCapture             capture        `json:"final_capture"`
-	PackedToDenseMedianRatio *float64       `json:"packed_to_dense_median_ratio,omitempty"`
+	GPUTimingMethod                  string         `json:"gpu_timing_method"`
+	QueryCohortSize                  int            `json:"gpu_query_cohort_size"`
+	QueryCohortCount                 int            `json:"gpu_query_cohort_count"`
+	QueryMaxCount                    uint32         `json:"gpu_query_max_count"`
+	CalibrationCount                 int            `json:"gpu_calibration_count"`
+	CalibrationTicks                 []uint64       `json:"gpu_calibration_timestamp_pairs,omitempty"`
+	InitialGeometry                  geometryStats  `json:"initial_geometry"`
+	FinalGeometry                    geometryStats  `json:"final_geometry"`
+	Version                          int            `json:"version"`
+	Mode                             string         `json:"mode"`
+	Materials                        string         `json:"material_storage"`
+	Settings                         settings       `json:"settings"`
+	Adapter                          string         `json:"adapter"`
+	Backend                          string         `json:"backend"`
+	Fixture                          string         `json:"fixture"`
+	Shader                           string         `json:"shader_sha256"`
+	GPUAvailable                     bool           `json:"gpu_timing_available"`
+	GPUUnit                          string         `json:"gpu_timing_unit"`
+	Warning                          string         `json:"warning,omitempty"`
+	RawTicks                         []uint64       `json:"raw_timestamp_pairs,omitempty"`
+	GPU                              *sampleSummary `json:"gpu_per_dispatch,omitempty"`
+	Initial                          cpuCost        `json:"initial_admission"`
+	CPU                              []cpuCost      `json:"cpu_updates"`
+	AuxiliaryCapacityBytes           uint64         `json:"auxiliary_physical_capacity_bytes"`
+	PayloadAtlasCapacityBytes        uint64         `json:"payload_atlas_physical_capacity_bytes"`
+	PayloadAssignedBytes             uint64         `json:"payload_assigned_bytes"`
+	InitialCapture                   capture        `json:"initial_capture"`
+	FinalCapture                     capture        `json:"final_capture"`
+	PackedToDenseMedianRatio         *float64       `json:"packed_to_dense_median_ratio,omitempty"`
+	PackedMaterialToAtlasMedianRatio *float64       `json:"packed_material_to_atlas_median_ratio,omitempty"`
+}
+
+func reportMaterials(r report) (string, error) {
+	if r.Version == 1 && (r.Materials == "" || r.Materials == "atlas") {
+		return "atlas", nil
+	}
+	if r.Version == 2 && (r.Materials == "atlas" || r.Materials == "packed") {
+		return r.Materials, nil
+	}
+	return "", errors.New("incomparable reports: unsupported version or material storage policy")
 }
 
 func compareReports(a, b report) (*float64, error) {
-	if a.GPUTimingMethod != b.GPUTimingMethod || a.QueryCohortSize != b.QueryCohortSize || a.QueryCohortCount != b.QueryCohortCount || a.QueryMaxCount != b.QueryMaxCount || a.Version != b.Version || a.Mode == b.Mode || (a.Mode != "packed" && a.Mode != "dense") || (b.Mode != "packed" && b.Mode != "dense") || a.Adapter != b.Adapter || a.Backend != b.Backend || a.Settings != b.Settings || a.Fixture != b.Fixture || a.InitialGeometry != b.InitialGeometry || a.FinalGeometry != b.FinalGeometry || a.Shader != b.Shader || a.InitialCapture != b.InitialCapture || a.FinalCapture != b.FinalCapture || a.InitialCapture.HitPixels <= 0 || a.FinalCapture.HitPixels <= 0 {
+	am, err := reportMaterials(a)
+	if err != nil {
+		return nil, err
+	}
+	bm, err := reportMaterials(b)
+	if err != nil {
+		return nil, err
+	}
+	// Exactly one storage axis must differ; changing both obscures the cause.
+	if a.GPUTimingMethod != b.GPUTimingMethod || a.QueryCohortSize != b.QueryCohortSize || a.QueryCohortCount != b.QueryCohortCount || a.QueryMaxCount != b.QueryMaxCount || a.Version != b.Version || (a.Mode == b.Mode) == (am == bm) || (a.Mode != "packed" && a.Mode != "dense") || (b.Mode != "packed" && b.Mode != "dense") || a.Adapter != b.Adapter || a.Backend != b.Backend || a.Settings != b.Settings || a.Fixture != b.Fixture || a.InitialGeometry != b.InitialGeometry || a.FinalGeometry != b.FinalGeometry || a.Shader != b.Shader || a.InitialCapture != b.InitialCapture || a.FinalCapture != b.FinalCapture || a.InitialCapture.HitPixels <= 0 || a.FinalCapture.HitPixels <= 0 {
 		return nil, errors.New("incomparable reports: modes, adapter/backend, settings, fixture, shader, or G-buffer parity differ")
 	}
 	if !a.GPUAvailable || !b.GPUAvailable {
@@ -134,16 +157,17 @@ func compareReports(a, b report) (*float64, error) {
 	if len(a.RawTicks) != 2*a.Settings.Samples || len(b.RawTicks) != 2*b.Settings.Samples || a.GPUUnit != "raw_gpu_ticks" || b.GPUUnit != a.GPUUnit || a.GPU == nil || b.GPU == nil || !reflect.DeepEqual(x, *a.GPU) || !reflect.DeepEqual(y, *b.GPU) {
 		return nil, errors.New("incomparable GPU samples or units")
 	}
-	ratio := x.MedianTicks / y.MedianTicks
-	if a.Mode == "dense" {
-		ratio = 1 / ratio
+	if (a.Mode != b.Mode && a.Mode == "dense") || (a.Mode == b.Mode && am == "atlas") {
+		x, y = y, x
 	}
+	ratio := x.MedianTicks / y.MedianTicks
 	return &ratio, nil
 }
 func run(args []string, output io.Writer) error {
 	fs := flag.NewFlagSet("voxelbench", flag.ContinueOnError)
 	fs.SetOutput(output)
 	mode := fs.String("mode", "dense", "normal storage: dense or packed")
+	materials := fs.String("materials", "atlas", "material storage: atlas or packed")
 	var cfg settings
 	fs.StringVar(&cfg.Workload, "workload", "sparse", "deterministic sparse, dense, or edited fixture")
 	fs.IntVar(&cfg.Width, "width", 640, "render width (1..4096)")
@@ -152,7 +176,7 @@ func run(args []string, output io.Writer) error {
 	fs.IntVar(&cfg.Warmup, "warmup", 10, "warmup batches (0..1000)")
 	fs.IntVar(&cfg.Batch, "batch", 8, "dispatches per batch (1..1024)")
 	path := fs.String("output", "", "optional JSON report path")
-	comparison := fs.String("compare", "", "opposite-mode JSON report to validate and compare")
+	comparison := fs.String("compare", "", "JSON report with exactly one different storage policy to validate and compare")
 	fs.Usage = func() { fmt.Fprintln(output, "Usage: voxelbench [flags]"); fs.PrintDefaults() }
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -165,6 +189,9 @@ func run(args []string, output io.Writer) error {
 	}
 	if *mode != "dense" && *mode != "packed" {
 		return errors.New("mode must be dense or packed")
+	}
+	if *materials != "atlas" && *materials != "packed" {
+		return errors.New("materials must be atlas or packed")
 	}
 	if cfg.Workload != "sparse" && cfg.Workload != "dense" && cfg.Workload != "edited" {
 		return errors.New("workload must be sparse, dense or edited")
@@ -187,14 +214,19 @@ func run(args []string, output io.Writer) error {
 			return fmt.Errorf("compare report: %w", err)
 		}
 	}
-	r, err := benchmark(*mode, cfg)
+	r, err := benchmark(*mode, *materials, cfg)
 	if err != nil {
 		return err
 	}
 	if *comparison != "" {
-		r.PackedToDenseMedianRatio, err = compareReports(r, previous)
+		ratio, err := compareReports(r, previous)
 		if err != nil {
 			return err
+		}
+		if r.Mode == previous.Mode {
+			r.PackedMaterialToAtlasMedianRatio = ratio
+		} else {
+			r.PackedToDenseMedianRatio = ratio
 		}
 	}
 	data, err := json.MarshalIndent(r, "", "  ")

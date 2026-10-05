@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals and P3b native workload evaluation are complete, with P3 remaining partial; other sections are proposals.
+Date: 2026-10-05. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals, P3b native workload evaluation and P3c packed mixed materials are complete, with P3 remaining partial; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -139,8 +139,10 @@ P3a completes an opt-in packed fitted-normal GPU prototype while retaining the
 material atlas and dense default. See the [storage contract](../renderer/runtime.md#packed-fitted-normal-storage)
 and [delivery](#p3a-packed-fitted-normal-gpu-storage). P3b adds a fixed native
 sparse/dense/edited benchmark and retains the dense default based on its measured
-tradeoffs. Packed mixed-material storage, broader workload evaluation and any
-default policy remain P3 work.
+tradeoffs. P3c completes independent opt-in mixed-material packets and native
+parity/timing evaluation. Atlas materials and dense normals remain defaults;
+broader workload/density policy, additional pool pages and atlas removal remain
+P3 work. See the [material contract](../renderer/runtime.md#packed-mixed-material-storage).
 
 ### P4. Share immutable GPU material blocks
 
@@ -940,7 +942,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | P2b | `c2356df` | Upload sparse sector records with captured header publication | [Runtime contract](../renderer/runtime.md#sparse-sector-publication) |
 | P2c | `d0e13a6` | Pack sector ranges with fenced reuse and shared publication | [Runtime contract](../renderer/runtime.md#packed-sector-brick-ranges) |
 | P3a | `b52551d` | Opt-in occupancy-ranked fitted normals with fenced packet reuse | [Runtime contract](../renderer/runtime.md#packed-fitted-normal-storage) |
-| P3b | This batch | Measure sparse, dense and edited packed-normal traversal with native GPU queries | [Verification](../renderer/verification.md#packed-normal-workload-benchmark) |
+| P3b | `de9cc6e` | Measure sparse, dense and edited packed-normal traversal with native GPU queries | [Verification](../renderer/verification.md#packed-normal-workload-benchmark) |
+| P3c | This batch | Independently pack mixed-material bytes with fenced packet ownership and native parity | [Runtime contract](../renderer/runtime.md#packed-mixed-material-storage) |
 | S1a | `e3f11cf` | Hidden residency and readiness tickets | [Design](streamed-rendering-s1a.md) |
 | S1b | `a539257` | Global content budgets, ordering and atlas backpressure | [Design](streamed-rendering-s1b.md) |
 | S1c | `1c9e7d6` | Renderer-qualified v2 sector/proxy handoff | [Design](streamed-rendering-s1c.md) |
@@ -4597,5 +4600,86 @@ per cohort. JSON output matched saved reports. No engine, shader or bridge
 changes required consumer rebuilds.
 
 Full-frame FPS, transparency/particle timing, larger scenes, other adapters and
-camera angles remain unmeasured. Native timing uses the current workspace WebGPU
-bindings. Packed mixed materials and broader storage-policy evaluation remain.
+camera angles remained unmeasured at this delivery. Native timing uses the
+current workspace WebGPU bindings. P3c subsequently delivers mixed-material
+packing; broader storage-policy evaluation remains.
+
+
+### P3c: Packed mixed-material GPU storage
+
+Renderer GPU storage now independently opts into occupancy-ranked material bytes
+through `SetPackedVoxelMaterials(true)`. The [runtime contract](../renderer/runtime.md#packed-mixed-material-storage)
+records packet layout, canonical occupancy, publication and ownership. CPU
+content and bridge semantics are unchanged. `voxelbench` reports both policies
+and compares one axis at a time; the [verification guide](../renderer/verification.md#packed-material-native-parity)
+records native parity commands and limitations.
+
+Three alternating atlas/packed material pairs per fixture on Apple M4 Pro /
+Metal, holding normal policy fixed (640×480, 30 samples, ten warmup batches,
+eight dispatches per batch):
+
+| Normal policy | Fixture | Packed material / atlas GPU median ratio, median [range] |
+| --- | --- | --- |
+| Dense | Sparse | 0.9949 [0.9906–0.9977] |
+| Dense | Dense mixed 511/512 | 1.0303 [1.0289–1.0316] |
+| Dense | Edited | 1.0012 [0.9988–1.0134] |
+| Packed | Sparse | 0.9978 [0.9861–1.0054] |
+| Packed | Dense mixed 511/512 | 1.0329 [1.0329–1.0330] |
+| Packed | Edited | 1.0060 [0.9968–1.0082] |
+
+Dense traversal costs increased consistently by 3.0–3.3%; sparse/edited results
+stay near parity within the observed spread. Retain atlas materials and dense
+normals as defaults. With packed normals fixed, material packing reduced initial
+sparse uploads from 47,328 to 18,656 bytes (60.6%), and thirty edits from
+1,386,720 to 549,600 bytes (60.4%). Dense fixture uploads were unchanged.
+Assigned atlas payload fell from 32,768 bytes to zero (32,256 in the final edited
+fixture). Auxiliary capacity grew: sparse 12,288 to 16,384, dense 69,632 to
+102,400 and edited 24,576 to 32,768 bytes under packed normals. Fixed atlas
+texture descriptor capacity remained 4 GiB; this is not resident GPU memory or
+an atlas capacity saving. These are fixture results, not full-frame FPS.
+
+Verification passed from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . ./voxelrt/rt/gpu ./voxelrt/rt/core ./voxelrt/rt/app ./voxelrt/rt/volume ./cmd/voxelbench -count=1
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p3c-native docs/roadmaps/diagnostics/p3c_packed_voxel_materials.go
+/tmp/gekko-p3c-native -mode dense -materials atlas -output /tmp/p3c-dense-atlas
+for native_policy in dense-packed packed-atlas packed-packed; do
+  /tmp/gekko-p3c-native -mode "${native_policy%-*}" -materials "${native_policy#*-}" -output "/tmp/p3c-${native_policy}" -compare /tmp/p3c-dense-atlas || exit 1
+done
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/voxelbench-p3c ./cmd/voxelbench
+mkdir -p /tmp/p3c-benchmark
+for native_normals in dense packed; do
+  for native_workload in sparse dense edited; do
+    for native_repeat in 1 2 3; do
+      if [ "$native_repeat" -eq 2 ]; then native_first=packed; native_second=atlas; else native_first=atlas; native_second=packed; fi
+      native_prefix="/tmp/p3c-benchmark/${native_normals}-${native_workload}-pair${native_repeat}"
+      /tmp/voxelbench-p3c -mode "$native_normals" -materials "$native_first" -workload "$native_workload" -output "${native_prefix}-${native_first}.json" || exit 1
+      /tmp/voxelbench-p3c -mode "$native_normals" -materials "$native_second" -workload "$native_workload" -output "${native_prefix}-${native_second}.json" -compare "${native_prefix}-${native_first}.json" || exit 1
+    done
+  done
+done
+env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p3a-after-p3c docs/roadmaps/diagnostics/p3a_packed_voxel_normals.go
+/tmp/gekko-p3a-after-p3c -mode dense -output /tmp/p3a-p3c-dense
+/tmp/gekko-p3a-after-p3c -mode packed -output /tmp/p3a-p3c-packed -compare /tmp/p3a-p3c-dense
+for native_fixture in p2c_packed_sector_ranges p4_material_sharing r2c_shadow_publication r2i_point_face_reuse; do
+  env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-${native_fixture}-p3c docs/roadmaps/diagnostics/${native_fixture}.go
+  /tmp/gekko-${native_fixture}-p3c || exit 1
+done
+git diff --check
+```
+
+All four P3c native combinations matched 81 canonical captures per comparison,
+including nonempty WBOIT/spotlight output and a visible material-only edit. All
+36 workload processes supplied 1,080 positive, monotonic measured timestamp
+pairs, exact rendered parity and independently recomputed summaries/ratios.
+Six fresh native P3a/P2c/P4/R2c/R2i regressions also passed. Consumer builds passed
+with `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p3c-editor .` from
+`../gekko-editor`, and `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p3c-voxel-demo .`
+from `../examples/testing-vox`.
+
+Full-frame FPS, other adapters/camera angles, interactive editor/gameplay and
+full particle trajectories remain unverified. Native timing uses the current
+workspace WebGPU bindings. Density policy, broader scenes, additional pool
+pages and atlas removal remain evaluation/implementation work.
