@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-06. Status: staged implementation; S1a–S1k and S1l1–S1l14 and S1m–S1o, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals, P3b native workload evaluation and P3c packed mixed materials are complete, with P3 remaining partial; W3a scene BVH, W3b sector and W3c inner grid traversal are complete, with W3 remaining partial; W4a terrain brick-run construction, W4b ordered mixed-material construction, W4c1 tiled height source content and W4c2 resident height queries are complete, with W4 remaining partial; I05 shared page validation and legacy imported-world normalization and I06 explicit imported-world v3 page tooling and I07 terrain v3 page tooling are complete; live page residency remains pending; other sections are proposals.
+Date: 2026-10-06. Status: staged implementation; S1a–S1k and S1l1–S1l14 and S1m–S1p, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals, P3b native workload evaluation and P3c packed mixed materials are complete, with P3 remaining partial; W3a scene BVH, W3b sector and W3c inner grid traversal are complete, with W3 remaining partial; W4a terrain brick-run construction, W4b ordered mixed-material construction, W4c1 tiled height source content and W4c2 resident height queries are complete, with W4 remaining partial; I05 shared page validation and legacy imported-world normalization and I06 explicit imported-world v3 page tooling and I07 terrain v3 page tooling are complete; live page residency remains pending; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -5738,3 +5738,49 @@ owners retain compatibility paths. Thresholds remain unmeasured. Native smoke
 checks publication, not drawing; full arena visual checks and frame profiles
 were not performed. No FPS gain or whole-frame/aggregate-memory bound is claimed.
 Known examples/testing compilation failure remains outside this block.
+
+
+### S1p: Certified warm compiled ordinary reuse
+
+Commit: `feat(streaming): qualify untouched warm compiled assets`. AssetServer
+owns never-borrowed compiled construction certificates; streamed placement
+admission checks them at transfer. Untouched siblings, chunks and restart receive
+independent managed authority and renderer maps. Raw borrows permanently select
+current ordinary fallback; existing aliases, edits, palette content, provenance
+and chunk leases are preserved.
+[Canonical contract](../assets/runtime-assets.md#worker-prepared-ordinary-managed-assets-s1n).
+
+Verification passed from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run 'TestS1[nop]' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run 'TestC3[cfgh]' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test .
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^(TestS1p|TestS1n|TestC3f3)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache GEKKO_NATIVE_S1N=1 go test . -run '^TestS1pNativeWarmStreamingConfigWorkerBridgePublishesUnderFiniteNativeWork$' -count=1 -v
+git diff --check
+```
+
+Actiongame startup configuration remained green:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./src/modules/startup -run '^TestS1o' -count=1
+```
+
+Consumer builds passed from their respective module directories:
+
+| Module | Command |
+| --- | --- |
+| `gekko-editor` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1p-build/gekko-editor/ ./...` |
+| `actiongame` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1p-build/actiongame/ ./...` |
+| `spacegame_go` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1p-build/spacegame_go/ ./...` |
+| `spacesim` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1p-build/spacesim/ ./...` |
+| `examples/testing-vox` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1p-build/examples-testing-vox/ ./...` |
+
+Real Apple M4 Pro/Metal warm publication, structural successor and retirement
+passed; [native scope](../renderer/verification.md#verified-warm-streaming-native-integration).
+Certificates follow global asset lifetime; raw borrows, legacy inputs and other
+owners retain compatibility. Full gameplay visuals, profiles and consumer-wide
+test suites were not rerun. S1o's pre-existing actiongame bot failures and known
+examples/testing compile failure remain outside this block. No FPS gain,
+whole-frame elapsed-time bound or aggregate live-memory ceiling is claimed.

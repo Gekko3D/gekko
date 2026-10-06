@@ -50,6 +50,7 @@ func (server *AssetServer) adoptCompiledAssetModelGeometryOutcome(contentID stri
 	server.voxModels[id] = asset
 	server.voxModelKeys[key] = id
 	server.recordVerifiedAuthoredVoxelBaseLocked(id, lattice, baseIdentity)
+	server.recordCompiledAssetWarmCertificateLocked(id, key, lattice, baseIdentity, true, asset)
 	if rendererCopy != nil {
 		if server.preparedVoxelRendererCopies == nil {
 			server.preparedVoxelRendererCopies = make(map[AssetId]preparedVoxelRendererCopy)

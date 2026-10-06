@@ -132,6 +132,13 @@ func validateManagedVoxelEntity(cmd *Commands, assets *AssetServer, eid EntityId
 	if !ok || assets == nil {
 		return vmc, fmt.Errorf("entity %d has no voxel geometry", eid)
 	}
+	return validateManagedVoxelEntityWithModel(cmd, assets, eid, vmc)
+}
+
+// Binding can validate the proposed independent override before queuing it,
+// without borrowing an unrelated shared global map. Ordinary callers pass their
+// current model through validateManagedVoxelEntity.
+func validateManagedVoxelEntityWithModel(cmd *Commands, assets *AssetServer, eid EntityId, vmc VoxelModelComponent) (VoxelModelComponent, error) {
 	if vmc.IsTerrainChunk || vmc.ShareTerrainGeometry || vmc.IsPlanetTile || vmc.RetainRendererGeometry {
 		return vmc, fmt.Errorf("entity %d requires its existing geometry owner", eid)
 	}

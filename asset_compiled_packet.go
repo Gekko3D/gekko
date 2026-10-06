@@ -177,7 +177,6 @@ func publishCompiledAssetPacket(packet *compiledAssetPacket, assets *AssetServer
 	}
 	prepared := &PreparedAuthoredAsset{def: packet.def, documentPath: packet.documentPath, animations: packet.animations, parts: make(map[string]preparedAuthoredPart, len(packet.def.Parts))}
 	models := make(map[string]AssetId, len(packet.shapes))
-	coldModels := make(map[string]bool, len(packet.shapes))
 	if assets != nil {
 		for _, part := range packet.def.Parts {
 			contentID, exists := packet.parts[part.ID]
@@ -191,7 +190,7 @@ func publishCompiledAssetPacket(packet *compiledAssetPacket, assets *AssetServer
 			if shape == nil {
 				return nil, fmt.Errorf("compiled packet shape is missing")
 			}
-			id, adopted, cold := adoptCompiledAssetPacketGeometryOutcome(assets, shape, shape.source, shape.registration)
+			id, adopted := adoptCompiledAssetPacketGeometry(assets, shape, shape.source, shape.registration)
 			if !adopted {
 				// A warm conflict must never be bypassed by defensive registration.
 				// Rebuild only a consumed cold handle after public key deletion.
@@ -210,7 +209,6 @@ func publishCompiledAssetPacket(packet *compiledAssetPacket, assets *AssetServer
 				}
 			}
 			models[contentID] = id
-			coldModels[contentID] = cold
 		}
 	}
 	if assets != nil {
@@ -263,7 +261,7 @@ func publishCompiledAssetPacket(packet *compiledAssetPacket, assets *AssetServer
 		preparedPart := preparedAuthoredPart{}
 		if assets != nil {
 			if contentID, exists := packet.parts[part.ID]; exists {
-				preparedPart = preparedAuthoredPart{model: models[contentID], palette: palettes[packet.partPalettes[part.ID]], compiledCold: coldModels[contentID]}
+				preparedPart = preparedAuthoredPart{model: models[contentID], palette: palettes[packet.partPalettes[part.ID]]}
 				if _, declared := packet.partLODs[part.ID]; declared {
 					if binding, exists := assets.compiledAssetLODForGeometry(preparedPart.model); exists {
 						preparedPart.compiledLOD = binding.coarseID

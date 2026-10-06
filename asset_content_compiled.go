@@ -250,7 +250,13 @@ func prepareCompiledAuthoredAsset(path string, assets *AssetServer, loader *Runt
 			id, warm := assets.SharedVoxelGeometryByCacheKey(key)
 			if !warm {
 				geometry, _ := compiledShapeGeometry(shape.definition)
-				id = assets.RegisterSharedVoxelGeometryWithCacheKey(key, geometry, key)
+				registration := prepareStreamedGeometryRegistration(geometry)
+				var adopted bool
+				id, adopted = assets.adoptCompiledAssetGeometry(shape.contentID, shape.definition.Lattice, shape.baseIdentity, geometry, registration)
+				registration.release()
+				if !adopted {
+					return nil, fmt.Errorf("compiled asset geometry adoption rejected")
+				}
 			}
 			assets.recordVerifiedAuthoredVoxelBase(id, shape.definition.Lattice, shape.baseIdentity)
 			palette, err := authoredVoxelShapePalette(assets, definition, part)

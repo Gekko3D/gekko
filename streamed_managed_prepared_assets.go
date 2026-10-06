@@ -183,9 +183,9 @@ func prepareStreamedManagedAssets(payload *streamedPreparedChunk, job streamedCh
 	})
 }
 
-// The call-local cold publication proof is consumed before root creation or
-// callbacks can expose mutable global geometry. No dense copy or comparison is
-// performed on the main thread. Warm assets retain ordinary compatibility.
+// Recheck the unborrowed compiled registration at actual transfer, before root
+// creation or callbacks can expose mutable global geometry. No dense copy or
+// comparison is performed on the main thread; borrowed globals retain fallback.
 func adoptStreamedManagedParts(cmd *Commands, assets *AssetServer, state *StreamedLevelRuntimeState, placement string, prepared *PreparedAuthoredAsset, candidates *streamedManagedPreparedAsset) map[string]AssetId {
 	adopted := make(map[string]AssetId)
 	if candidates == nil || state == nil || !state.Config.EnableManagedPreparedAssets || prepared == nil || filepath.Clean(candidates.path) != filepath.Clean(prepared.documentPath) {
@@ -193,7 +193,7 @@ func adoptStreamedManagedParts(cmd *Commands, assets *AssetServer, state *Stream
 	}
 	for partID, candidate := range candidates.parts {
 		part := prepared.parts[partID]
-		if !part.compiledCold || part.compiledLOD != (AssetId{}) || state.voxelOverrideMap[voxelObjectRuntimeKey(placement, partID)].SnapshotPath != "" {
+		if part.compiledLOD != (AssetId{}) || state.voxelOverrideMap[voxelObjectRuntimeKey(placement, partID)].SnapshotPath != "" {
 			continue
 		}
 		candidate.mu.Lock()
@@ -203,7 +203,7 @@ func adoptStreamedManagedParts(cmd *Commands, assets *AssetServer, state *Stream
 		}
 		assets.mu.Lock()
 		base, exists := assets.voxModels[part.model]
-		if !exists || assets.voxModelKeys[compiledAssetPacketGeometryKey(candidate.shape)] != part.model {
+		if !exists || !assets.compiledAssetWarmCertificateMatchesLocked(part.model, candidate.shape, base) {
 			assets.mu.Unlock()
 			candidate.mu.Unlock()
 			continue
@@ -291,16 +291,16 @@ func bindStreamedManagedPart(cmd *Commands, assets *AssetServer, eid EntityId, i
 	if state == nil || state.managedVoxelCommit == nil || state.managedVoxelCommit.generation != state.Generation {
 		return
 	}
-	if _, err := validateManagedVoxelEntity(cmd, assets, eid); err != nil {
-		return
-	}
 	vmc, ok := voxelModelComponentForEdit(cmd, eid)
 	entry := assets.managedVoxelEntry(id)
 	if !ok || entry == nil || entry.app != cmd.app || entry.entity != 0 {
 		return
 	}
-	entry.entity = eid
 	vmc.OverrideGeometry = id
+	if _, err := validateManagedVoxelEntityWithModel(cmd, assets, eid, vmc); err != nil {
+		return
+	}
+	entry.entity = eid
 	cmd.AddComponents(eid, &vmc)
 }
 

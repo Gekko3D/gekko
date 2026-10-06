@@ -56,21 +56,22 @@ const (
 )
 
 type AssetServer struct {
-	mu                    sync.RWMutex
-	managedVoxelGeometry  map[AssetId]*managedVoxelGeometry
-	compiledAssetLODs     map[AssetId]*compiledAssetLODBinding
-	compiledAssetLODStats compiledAssetLODStats
-	authoredVoxelBases    map[AssetId]map[content.VoxelObjectLatticeDef]string
-	meshes                map[AssetId]MeshAsset
-	materials             map[AssetId]MaterialAsset
-	textures              map[AssetId]TextureAsset
-	textureKeys           map[string]AssetId
-	samplers              map[AssetId]SamplerAsset
-	voxModels             map[AssetId]VoxelGeometryAsset
-	voxModelKeys          map[string]AssetId
-	voxPalettes           map[AssetId]VoxelPaletteAsset
-	voxPaletteKeys        map[string]AssetId
-	voxFiles              map[AssetId]*VoxFile
+	mu                            sync.RWMutex
+	managedVoxelGeometry          map[AssetId]*managedVoxelGeometry
+	compiledAssetLODs             map[AssetId]*compiledAssetLODBinding
+	compiledAssetLODStats         compiledAssetLODStats
+	compiledAssetWarmCertificates map[AssetId]compiledAssetWarmCertificate
+	authoredVoxelBases            map[AssetId]map[content.VoxelObjectLatticeDef]string
+	meshes                        map[AssetId]MeshAsset
+	materials                     map[AssetId]MaterialAsset
+	textures                      map[AssetId]TextureAsset
+	textureKeys                   map[string]AssetId
+	samplers                      map[AssetId]SamplerAsset
+	voxModels                     map[AssetId]VoxelGeometryAsset
+	voxModelKeys                  map[string]AssetId
+	voxPalettes                   map[AssetId]VoxelPaletteAsset
+	voxPaletteKeys                map[string]AssetId
+	voxFiles                      map[AssetId]*VoxFile
 
 	preparedVoxelRendererCopies    map[AssetId]preparedVoxelRendererCopy
 	preparedVoxelRendererCopyStats PreparedVoxelRendererCopyStats
@@ -127,10 +128,12 @@ func (server *AssetServer) GetVoxelGeometry(id AssetId) (VoxelGeometryAsset, boo
 	return server.getVoxelGeometry(id)
 }
 
-// Internal reads preserve managed sealing and never expose mutable authority.
+// Internal reads preserve managed sealing. Ordinary returned maps are mutable
+// aliases, so even read-only borrows revoke verified compiled warm eligibility.
 func (server *AssetServer) getVoxelGeometry(id AssetId) (VoxelGeometryAsset, bool) {
 	server.mu.Lock()
 	defer server.mu.Unlock()
+	server.revokeCompiledAssetWarmCertificateLocked(id)
 	m, ok := server.voxModels[id]
 	if ok && m.XBrickMap == nil && len(m.VoxModel.Voxels) > 0 {
 		hydrated := buildVoxelGeometryAsset(m.VoxModel, m.SourcePath)

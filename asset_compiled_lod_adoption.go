@@ -75,12 +75,16 @@ func (server *AssetServer) adoptCompiledAssetPacketLOD(fullID AssetId, lod *comp
 	server.ensureVoxelStorage()
 	server.mu.Lock()
 	defer server.mu.Unlock()
+	// LOD ownership directly borrows full/coarse maps. Their ordinary compiled
+	// certificates must not survive that borrow, including failed binding attempts.
+	server.revokeCompiledAssetWarmCertificateLocked(fullID)
 	proof := lod.proof
 	full, fullExists := server.voxModels[fullID]
 	if !fullExists || full.XBrickMap == nil || server.voxModelKeys["compiled-asset-shape:"+proof.sourceContentID] != fullID || server.authoredVoxelBases[fullID][proof.lattice] == "" {
 		return false
 	}
 	if binding, exists := server.compiledAssetLODs[fullID]; exists {
+		server.revokeCompiledAssetWarmCertificateLocked(binding.coarseID)
 		lod.registration.release()
 		return server.compiledAssetLODBindingValidLocked(fullID, binding) &&
 			binding.proof.sourceContentID == proof.sourceContentID && binding.proof.contentID == proof.contentID &&
@@ -88,6 +92,7 @@ func (server *AssetServer) adoptCompiledAssetPacketLOD(fullID AssetId, lod *comp
 	}
 	key := "compiled-asset-lod:" + proof.contentID
 	coarseID, warm := server.voxModelKeys[key]
+	server.revokeCompiledAssetWarmCertificateLocked(coarseID)
 	if warm {
 		lod.registration.release()
 		asset, exists := server.voxModels[coarseID]

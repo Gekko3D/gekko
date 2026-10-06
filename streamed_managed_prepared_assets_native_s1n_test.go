@@ -15,7 +15,7 @@ import (
 // This smoke checks real submission and bounded publication through the engine
 // worker/commit/bridge. Production G-buffer pixel parity is owned by voxelbench.
 func TestS1nNativeWorkerBridgePublishesBoundedGeometryAndLookup(t *testing.T) {
-	s1nNativeWorkerBridgePublishesBoundedGeometryAndLookup(t, nil)
+	s1nNativeWorkerBridgePublishesBoundedGeometryAndLookup(t, nil, false)
 }
 
 func TestS1oNativeStreamingConfigWorkerBridgePublishesUnderFiniteNativeWork(t *testing.T) {
@@ -23,10 +23,18 @@ func TestS1oNativeStreamingConfigWorkerBridgePublishesUnderFiniteNativeWork(t *t
 	config.ManagedFrame = gpu.ManagedGeometryFrameBudget{Enabled: true, MaxEntries: 1}
 	config.SectorLookup = gpu.SectorLookupFrameBudget{Enabled: true, MaxEntries: 64, MaxUploadBytes: 256, MaxStageBytes: 128 << 20}
 	config.NativeWork = &gpu.VoxelGPUWorkBudget{Enabled: true, MaxCreateBytes: 1 << 20, MaxCreates: 1, MaxCopyBytes: 64 << 10}
-	s1nNativeWorkerBridgePublishesBoundedGeometryAndLookup(t, &config)
+	s1nNativeWorkerBridgePublishesBoundedGeometryAndLookup(t, &config, false)
 }
 
-func s1nNativeWorkerBridgePublishesBoundedGeometryAndLookup(t *testing.T, config *VoxelRtStreamingConfig) {
+func TestS1pNativeWarmStreamingConfigWorkerBridgePublishesUnderFiniteNativeWork(t *testing.T) {
+	config := DefaultVoxelRtStreamingConfig()
+	config.ManagedFrame = gpu.ManagedGeometryFrameBudget{Enabled: true, MaxEntries: 1}
+	config.SectorLookup = gpu.SectorLookupFrameBudget{Enabled: true, MaxEntries: 64, MaxUploadBytes: 256, MaxStageBytes: 128 << 20}
+	config.NativeWork = &gpu.VoxelGPUWorkBudget{Enabled: true, MaxCreateBytes: 1 << 20, MaxCreates: 1, MaxCopyBytes: 64 << 10}
+	s1nNativeWorkerBridgePublishesBoundedGeometryAndLookup(t, &config, true)
+}
+
+func s1nNativeWorkerBridgePublishesBoundedGeometryAndLookup(t *testing.T, config *VoxelRtStreamingConfig, warm bool) {
 	t.Helper()
 	expected := config
 	var nativeCreates uint64
@@ -100,7 +108,10 @@ func s1nNativeWorkerBridgePublishesBoundedGeometryAndLookup(t *testing.T, config
 		config.Apply(manager)
 		s1oAssertStreamingConfig(t, manager, *config)
 	}
-	f, _ := s1nRuntime(t, true, 1)
+	f, path := s1nRuntime(t, true, 1)
+	if warm {
+		s1pWarm(t, f, path, "body")
+	}
 	s1fPrepared(t, f.streamedRenderHarness, ChunkCoord{}, false)
 	f.commitStage()
 	eid := s1nBody(t, f, 0)

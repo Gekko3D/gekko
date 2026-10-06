@@ -390,6 +390,7 @@ func (server *AssetServer) DeleteVoxelGeometry(id AssetId) bool {
 	server.mu.Lock()
 	defer server.mu.Unlock()
 	server.removePreparedVoxelRendererCopyLocked(id)
+	server.revokeCompiledAssetWarmCertificateLocked(id)
 	if _, ok := server.voxModels[id]; !ok {
 		return false
 	}

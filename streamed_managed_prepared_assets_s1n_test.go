@@ -81,8 +81,8 @@ func TestS1nColdWorkerCommitHasIndependentManagedAuthorityAndRenderer(t *testing
 	if a.OverrideGeometry == (AssetId{}) || f.assets.managedVoxelEntry(a.OverrideGeometry) == nil {
 		t.Fatal("opt-in cold compiled placement has no managed authority")
 	}
-	if a.SharedGeometry != b.SharedGeometry || b.OverrideGeometry != (AssetId{}) {
-		t.Fatal("cold adoption changed shared global ID or warm compatibility")
+	if a.SharedGeometry != b.SharedGeometry || b.OverrideGeometry == (AssetId{}) || a.OverrideGeometry == b.OverrideGeometry {
+		t.Fatal("cold and untouched warm sibling did not receive independent managed overrides")
 	}
 	if f.assets.authoredVoxelBaseIdentity(a.SharedGeometry, shape.lattice) != shape.baseIdentity {
 		t.Fatal("global authored provenance changed")
@@ -92,13 +92,13 @@ func TestS1nColdWorkerCommitHasIndependentManagedAuthorityAndRenderer(t *testing
 	}
 	state := s1nRenderer(f)
 	beforeCopies := f.assets.PreparedVoxelRendererCopyStats()
-	if beforeCopies.Entries != 1 || beforeCopies.Bytes <= 0 {
-		t.Fatal("cold adoption did not retain exactly one first renderer derivative")
+	if beforeCopies.Entries != 2 || beforeCopies.Bytes <= 0 {
+		t.Fatal("cold adoption did not retain two independent first renderer derivatives")
 	}
 	s1nBridge(f, state)
 	obj := state.GetVoxelObject(first)
 	afterCopies := f.assets.PreparedVoxelRendererCopyStats()
-	if afterCopies.Adoptions != beforeCopies.Adoptions+1 || afterCopies.Entries != 0 || afterCopies.Bytes != 0 {
+	if afterCopies.Adoptions != beforeCopies.Adoptions+2 || afterCopies.Entries != 0 || afterCopies.Bytes != 0 {
 		t.Fatal("bridge did not consume first renderer derivative exactly once")
 	}
 	initial := s1l6Input(t, obj)
@@ -120,11 +120,14 @@ func TestS1nColdWorkerCommitHasIndependentManagedAuthorityAndRenderer(t *testing
 	p1dVoxel(t, s1l6Map(t, initial), 0, 1)
 	global, _ := f.assets.getVoxelGeometry(a.SharedGeometry)
 	p1dVoxel(t, global.XBrickMap, 0, 1)
-	// The warm sibling retains legacy ownership until its consumer explicitly enables edits.
+	// Explicit enable remains idempotent for an already adopted warm sibling.
 	if err := EnableManagedVoxelGeometry(f.cmd, f.assets, second); err != nil {
 		t.Fatal(err)
 	}
 	f.app.FlushCommands()
+	if current := s3cComponent[VoxelModelComponent](t, f.cmd, second); current.OverrideGeometry != b.OverrideGeometry {
+		t.Fatal("explicit enable replaced warm managed authority")
+	}
 	s1nBridge(f, state)
 	sibling := s1l6Input(t, state.GetVoxelObject(second))
 	if sibling.SameSource(edited) {

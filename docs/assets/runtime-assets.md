@@ -476,7 +476,9 @@ other AssetServer records. See
 [S2a](../roadmaps/streamed-rendering-s2a.md) for the storage-charge definition,
 defaults and remaining memory bounds.
 
-### Worker-prepared ordinary managed assets (S1n)
+<a id="worker-prepared-ordinary-managed-assets-s1n"></a>
+
+### Worker-prepared ordinary managed assets (S1n/S1p)
 
 Games can install the corresponding GPU policies through
 `VoxelRtModule.StreamingConfig` and `DefaultVoxelRtStreamingConfig()`; see
@@ -493,14 +495,31 @@ these inputs, metadata and construction peak before creating owners; cancellatio
 stale results and unused handles drain idempotently. Existing shared pending-byte
 policy, including its sole oversized-result exception, remains unchanged.
 
-Only fresh cold geometry from the exact compiled publication qualifies. Its proof
-is local to that publication: multiple parts can share one ordinary global ID
-while receiving independent managed overrides. Later warm reuse always takes the
-existing path, including edited or exposed shared assets. No pointer/revision test
-certifies immutable warm content. Legacy authored inputs, declared LODs, collapsed
-composites and restored snapshots retain their existing preparation. This first
+Verified cold compiled registration creates a private certificate for its global
+ID, content namespace, lattice, base identity, dimensions, bounds and registered
+source. Untouched registrations retain eligibility across siblings, chunks and
+runtime Stop/Start. Actual managed transfer rechecks that certificate and the
+current key/ID and source metadata under the AssetServer lock; it does not trust
+an earlier publication result. Each placement still receives independent owners,
+authority and renderer storage.
+
+Every public or internal mutable geometry borrow permanently revokes that ID's
+certificate, even for read-only use. Direct full/coarse LOD binding also revokes
+eligibility. Warm preparation never recreates a revoked certificate from current
+content, provenance, pointer or revision. Borrowed globals keep their current
+mutable geometry and ordinary compatibility path; palette IDs and mutable palette
+storage retain their existing semantics. Deletion removes the certificate; a
+fresh verified ID may qualify without sharing storage with old aliases. Legacy
+authored inputs, declared LODs, collapsed composites and restored snapshots retain
+their existing preparation. This first
 consumer does not migrate terrain, imported-world, retained, planet or backing
 ownership.
+
+The compiled publication APIs' warm metadata behavior is unchanged: they preserve
+the registered global asset and its mutable values. The S1p certificate only
+decides whether an independent worker candidate can supply a managed override.
+Certificate metadata follows the ordinary global asset lifetime; it is not a
+separate bounded cache or an aggregate live-memory limit.
 
 Main-thread adoption transfers prepared authority into an entity-owned
 `OverrideGeometry` before spawn callbacks. It preserves the ordinary shared ID,

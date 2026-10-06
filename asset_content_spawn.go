@@ -55,7 +55,6 @@ type preparedAuthoredPart struct {
 	palette AssetId
 	// Explicit per-part intent; shared geometry availability never grants opt-in.
 	compiledLOD     AssetId
-	compiledCold    bool
 	managedOverride AssetId
 }
 

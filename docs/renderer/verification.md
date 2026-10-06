@@ -278,3 +278,20 @@ Pro/Metal. The test has no GLFW surface or rendered readback. Separately, a real
 GLFW module installation probe passed for both the explicit preset and nil
 configuration before normal frame service. Full actiongame visual checks and
 performance profiles remain unverified.
+
+## Verified Warm Streaming Native Integration
+
+S1p exercises the configured native worker/bridge smoke after warming a compiled
+global registration without borrowing its mutable geometry:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache GEKKO_NATIVE_S1N=1 go test . -run '^TestS1pNativeWarmStreamingConfigWorkerBridgePublishesUnderFiniteNativeWork$' -count=1 -v
+```
+
+It checks independent managed adoption, finite native work, structural successor
+publication and retirement through the same S1o pipeline. Root-package S1p tests
+cover permanent borrow revocation, current raw edits and auxiliary data, late hook
+exposure, pending siblings, chunks, restart, bounds and deletion. It passed on
+Apple M4 Pro/Metal. This native smoke has no GLFW surface or rendered readback;
+full gameplay visuals and performance profiles remain unverified. No warm
+frame-performance gain is established.
