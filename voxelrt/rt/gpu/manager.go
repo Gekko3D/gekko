@@ -173,6 +173,11 @@ type GpuBufferManager struct {
 	managedGeometryBudget ManagedGeometryAdmissionBudget
 	managedGeometryOwners *managedGeometryOwner
 	managedGeometryStats  ManagedGeometryAdmissionStats
+	managedFrameBudget    ManagedGeometryFrameBudget
+	managedFrameStats     ManagedGeometryFrameStats
+	managedDrain          uint32
+	managedGPUOwners      map[*core.VoxelObject]*managedGPUOwner
+	managedGPUMaps        map[*volume.XBrickMap]*managedGPUTarget
 
 	Device   *wgpu.Device
 	Profiler *core.Profiler

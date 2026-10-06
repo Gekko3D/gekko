@@ -96,6 +96,7 @@ type VoxelObject struct {
 	worldAABBMap              *volume.XBrickMap
 	worldAABBMapRevision      uint64
 	renderRepresentation      *voxelRenderRepresentation
+	managedRenderGeometry     *managedRenderGeometry
 	immutableMaterialTable    *ImmutableMaterialTable
 	managedGeometryProducer   *managedGeometryProducer
 

@@ -171,7 +171,7 @@ func (m *GpuBufferManager) prepareSceneObject(obj *core.VoxelObject, origin mgl3
 	}
 	row.seen = true
 	o2w, w2o := obj.RenderObjectToWorld(), obj.RenderWorldToObject()
-	localMin, localMax := obj.RenderVoxelMap().ComputeAABB()
+	localMin, localMax := obj.RenderLocalBounds()
 	instanceKey := sceneInstanceKey{
 		objectToWorld: sceneMatBits(o2w), worldToObject: sceneMatBits(w2o),
 		localMin: sceneVecBits(localMin), localMax: sceneVecBits(localMax),

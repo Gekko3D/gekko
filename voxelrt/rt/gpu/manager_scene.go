@@ -112,14 +112,18 @@ func buildDirectSectorLookupForMap(xbm *volume.XBrickMap, sectorToInfo map[*volu
 	return meta, table, true
 }
 
-func buildDirectSectorLookupData(scene *core.Scene, sectorToInfo map[*volume.Sector]SectorGpuInfo, allocations map[*volume.XBrickMap]*ObjectGpuAllocation, baseWordOffset uint32) []byte {
+func buildDirectSectorLookupData(scene *core.Scene, sectorToInfo map[*volume.Sector]SectorGpuInfo, allocations map[*volume.XBrickMap]*ObjectGpuAllocation, baseWordOffset uint32, managers ...*GpuBufferManager) []byte {
 	if scene == nil {
 		return make([]byte, 4)
 	}
 
 	tables := make([]uint32, 0)
 	processedMaps := make(map[*volume.XBrickMap]bool)
-	for _, target := range voxelServiceTargets(scene) {
+	targets := voxelServiceTargets(scene)
+	if len(managers) > 0 {
+		targets = managers[0].voxelServiceTargets(scene)
+	}
+	for _, target := range targets {
 		xbm := target.mapRef
 		if processedMaps[xbm] {
 			continue
@@ -272,7 +276,7 @@ func buildInstanceData(objects []*core.VoxelObject, renderOrigin mgl32.Vec3) []b
 		instData = appendVec3PaddedLE(instData, minB)
 		instData = appendVec3PaddedLE(instData, maxB)
 
-		lMin, lMax := obj.RenderVoxelMap().ComputeAABB()
+		lMin, lMax := obj.RenderLocalBounds()
 		instData = appendVec3PaddedLE(instData, [3]float32{lMin.X(), lMin.Y(), lMin.Z()})
 		instData = appendVec3PaddedLE(instData, [3]float32{lMax.X(), lMax.Y(), lMax.Z()})
 
@@ -809,7 +813,7 @@ func (m *GpuBufferManager) sectorGridSelectionChanged(scene *core.Scene) bool {
 	changed := false
 	count := 0
 	if scene != nil {
-		for _, target := range voxelServiceTargets(scene) {
+		for _, target := range m.voxelServiceTargets(scene) {
 			xbm := target.mapRef
 			if xbm == nil {
 				continue
@@ -839,7 +843,7 @@ func (m *GpuBufferManager) sectorGridSelectionChanged(scene *core.Scene) bool {
 func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 	selectionChanged := m.sectorGridSelectionChanged(scene)
 	totalSectors := 0
-	for _, target := range voxelServiceTargets(scene) {
+	for _, target := range m.voxelServiceTargets(scene) {
 		if xbm := target.mapRef; xbm != nil {
 			if alloc := m.Allocations[xbm]; alloc != nil && (!alloc.lookupAdmissionKnown || alloc.lookupAdmitted) {
 				totalSectors += len(alloc.Sectors)
@@ -860,7 +864,7 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 	// Always ensure buffers exist even if empty to avoid bind group panics
 	if totalSectors == 0 {
 		recreated := false
-		for _, target := range voxelServiceTargets(scene) {
+		for _, target := range m.voxelServiceTargets(scene) {
 			if alloc := m.Allocations[target.mapRef]; alloc != nil {
 				alloc.DirectLookup = defaultDirectSectorLookupMetadata()
 			}
@@ -879,7 +883,7 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 
 	gridData, gridSize := m.buildSectorGridData(scene)
 
-	directData := buildDirectSectorLookupData(scene, m.SectorToInfo, m.Allocations, 0)
+	directData := buildDirectSectorLookupData(scene, m.SectorToInfo, m.Allocations, 0, m)
 
 	recreated := false
 	if m.publishVoxelLookupBuffer("SectorGridBuf", &m.SectorGridBuf, gridData, wgpu.BufferUsageStorage) {
@@ -903,7 +907,7 @@ func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
 func (m *GpuBufferManager) buildSectorGridData(scene *core.Scene) ([]byte, uint32) {
 	totalSectors := 0
 	processed := make(map[*volume.XBrickMap]bool)
-	for _, target := range voxelServiceTargets(scene) {
+	for _, target := range m.voxelServiceTargets(scene) {
 		if processed[target.mapRef] {
 			continue
 		}
@@ -946,7 +950,7 @@ func (m *GpuBufferManager) buildSectorGridData(scene *core.Scene) ([]byte, uint3
 	}
 
 	processedMaps := make(map[*volume.XBrickMap]bool)
-	for _, target := range voxelServiceTargets(scene) {
+	for _, target := range m.voxelServiceTargets(scene) {
 		xbm := target.mapRef
 		if xbm == nil || processedMaps[xbm] {
 			continue

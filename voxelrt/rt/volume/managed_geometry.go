@@ -11,6 +11,7 @@ import (
 // forks or exposure. The zero view is empty.
 type ManagedGeometryView struct {
 	root          *managedIndexNode[*managedSectorRecord]
+	topology      *managedTopologyNode
 	retainedBytes uint64
 	copyBytes     uint64
 }
@@ -77,7 +78,15 @@ func (m *ManagedXBrickMap) CaptureGeometry() (ManagedGeometryView, bool) {
 		return ManagedGeometryView{}, false
 	}
 	m.exclusive = nil
-	return ManagedGeometryView{root: m.geometry, retainedBytes: m.geometryRetainedBytes, copyBytes: m.geometryCopyBytes}, true
+	return ManagedGeometryView{root: m.geometry, topology: m.topology, retainedBytes: m.geometryRetainedBytes, copyBytes: m.geometryCopyBytes}, true
+}
+
+// SameTopology compares immutable coordinate-frontier identity in constant time.
+// Content and halo edits preserve it; independently built nonempty frontiers
+// conservatively differ even when their coordinates are equal. Empty frontiers
+// share the nil root. Coordinate-only topology remains outside RetainedBytes.
+func (v ManagedGeometryView) SameTopology(other ManagedGeometryView) bool {
+	return v.topology == other.topology
 }
 
 // Len returns the captured sector count in constant time without allocation.

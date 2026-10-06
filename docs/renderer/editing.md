@@ -389,22 +389,22 @@ or total-process-memory ceiling is established here.
 
 After `ApplyManagedVoxelWrites` finishes material finalization and asset/renderer
 publication, it clears the active-producer guard and feeds changed assignments to
-the explicitly enabled manager's existing accepted-generation content journal.
-An applied panic prefix follows the same path before the original panic resumes.
-Nil, empty and entirely no-op sequences emit nothing. Transient changes that
-return to their initial values still notify; final removal still notifies the
-accepted coordinate. Notification neither admits nor advances generations.
+the manager's accepted CPU generation and independently owned GPU current/staging
+content journals. An applied panic prefix follows the same path before the original
+panic resumes. Nil, empty and entirely no-op sequences emit nothing. Transient
+changes that return to their initial values and final removals still notify.
+Notification neither admits nor advances generations.
 
-The feed reuses the existing changed-write list. It requires the current live
+The feed reuses the existing changed-write list. It requires current live
 entity/asset/binding and pending-command qualification, matching derivative and
-core source/selection, and a publication generation no older than the accepted
-input. Missing state, app, manager or admission, disabled budgets and stale or
-exposed attachments skip the feed. Rejection preserves retained journal work.
-Notifications use the accepted input identity, even when a successor exists;
-added coordinates remain outside accepted topology. The existing 1,024-coordinate
-journal and overflow sweep rules apply. No second queue or retained input is added. After the complete notification batch,
-the feed records its previous-to-current publication edge for S1l13 exhaustive
-coverage. Missing edges require a stable accepted-topology repair sweep.
+core source/selection. Missing state, app or manager and stale or exposed attachments
+skip the feed. CPU accepted ownership requires enabled admission and a publication
+no older than that input; successors do not redirect its notifications. GPU
+current/staging ownership qualifies independently, so CPU cancellation does not
+silence the retained GPU current topology. Added coordinates belong to structural
+successors. Existing 1,024-coordinate journals and overflow sweeps preserve rejected
+work. After each complete batch, previous-to-current publication edges establish
+exhaustive coverage; missing edges require stable bounded repair.
 
 `VoxelObject.MatchesManagedGeometrySource(expected)` checks only current source
 identity and core derivative/selection guards. It invokes neither provider,
@@ -426,7 +426,7 @@ journal duplicate checks; their cost is not a frame-time bound. Structural-copy
 progress and admission charges are unchanged. Draining notifications still does
 not reconcile copied content or certify GPU readiness. Replacement peak accounting,
 [bounded CPU reconciliation](runtime.md#managed-cpu-content-reconciliation-s1l13)
-is available; coherent GPU publication remains subsequent work.
+and [coherent GPU publication](runtime.md#managed-gpu-publication-s1l14) are available.
 
 ### Ordinary managed runtime geometry
 

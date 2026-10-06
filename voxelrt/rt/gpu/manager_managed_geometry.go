@@ -78,8 +78,9 @@ func (m *GpuBufferManager) SetManagedGeometryAdmissionBudget(budget ManagedGeome
 	}
 	m.managedGeometryBudget = budget
 	if !budget.Enabled {
-		m.managedGeometryOwners = nil
-		m.managedGeometryStats = ManagedGeometryAdmissionStats{}
+		for m.managedGeometryOwners != nil {
+			m.CancelManagedGeometryInputs(m.managedGeometryOwners.object)
+		}
 	}
 }
 
@@ -160,6 +161,13 @@ func (m *GpuBufferManager) AdmitManagedGeometry(object *core.VoxelObject) Manage
 	}
 	if !ok {
 		return ManagedGeometryAdmissionUnavailable
+	}
+	return m.admitManagedGeometryInput(object, input)
+}
+
+func (m *GpuBufferManager) admitManagedGeometryInput(object *core.VoxelObject, input core.ManagedGeometryInput) ManagedGeometryAdmissionResult {
+	if !m.managedGeometryBudget.Enabled {
+		return ManagedGeometryAdmissionDisabled
 	}
 	owner := m.managedGeometryOwner(object)
 	if owner != nil {

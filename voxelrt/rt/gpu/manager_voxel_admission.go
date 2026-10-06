@@ -131,12 +131,12 @@ func (m *GpuBufferManager) cleanupVoxelAdmissionOwners(scene *core.Scene) map[*v
 			}
 		}
 	}
-	for _, target := range voxelServiceTargets(scene) {
+	for _, target := range m.voxelServiceTargets(scene) {
 		activeMaps[target.mapRef] = true
 	}
 	m.evictRetainedVoxelMaps(activeMaps)
 	for xbm, alloc := range m.Allocations {
-		if !activeMaps[xbm] {
+		if !activeMaps[xbm] && m.managedGPUMaps[xbm] == nil {
 			if _, retain := m.retainedVoxelMaps[xbm]; !retain {
 				m.releaseVoxelMapAllocation(xbm, alloc)
 			}
@@ -291,6 +291,7 @@ func (p *voxelAdmissionPlan) addMap(m *GpuBufferManager, xbm *volume.XBrickMap) 
 	p.maps[xbm] = true
 	p.mapKeys = append(p.mapKeys, xbm)
 	alloc := m.Allocations[xbm]
+	managed := m.managedGPUMaps[xbm]
 	sectors := xbm.Sectors
 	if alloc != nil && !xbm.StructureDirty {
 		sectors = alloc.Sectors
@@ -303,33 +304,57 @@ func (p *voxelAdmissionPlan) addMap(m *GpuBufferManager, xbm *volume.XBrickMap) 
 		p.lookup[xbm] = true
 		p.lookupKeys = append(p.lookupKeys, xbm)
 	}
-	p.hashSectors = addRetainedVoxelBytes(p.hashSectors, uint64(len(sectors)))
+	sectorCount := uint64(len(sectors))
+	if managed != nil {
+		// Managed desired topology is a sampling map. Only accepted coordinates
+		// and this bounded frontier can consume physical lookup/sector resources.
+		sectorCount = uint64(len(alloc.Sectors))
+		for _, key := range managed.activeFrontier() {
+			if sector := xbm.Sectors[key]; sector != nil && alloc.Sectors[key] == nil {
+				sectorCount++
+			}
+		}
+		// Managed direct demand is cached from bounded target construction;
+		// admission never scans its private sampling topology.
+	}
+	p.hashSectors = addRetainedVoxelBytes(p.hashSectors, sectorCount)
 	cells := uint64(0)
-	if alloc != nil && !xbm.StructureDirty {
+	if managed != nil {
 		cells = allocationDirectCells(alloc)
 	} else {
-		cells = directSectorLookupCells(sectors)
+		if alloc != nil && !xbm.StructureDirty {
+			cells = allocationDirectCells(alloc)
+		} else {
+			cells = directSectorLookupCells(sectors)
+		}
 	}
 	p.directCells = addRetainedVoxelBytes(p.directCells, cells)
 	var newSectors uint64
-	if alloc == nil || xbm.StructureDirty {
-		for _, sector := range sectors {
-			m.VoxelCapacityPlanningSectorVisitsLastUpdate++
-			if sector != nil && !p.sectors[sector] {
-				// Existing mappings still need a reservation: a later replacement may
-				// remove their final old snapshot while this incoming owner needs them.
-				p.sectors[sector] = true
-				p.sectorKeys = append(p.sectorKeys, sector)
-				if _, exists := m.SectorToInfo[sector]; exists && !p.removedSectors[sector] {
-					continue
-				}
-				newSectors++
+	reserveSector := func(sector *volume.Sector) {
+		m.VoxelCapacityPlanningSectorVisitsLastUpdate++
+		if sector != nil && !p.sectors[sector] {
+			// Existing mappings still need a reservation: a later replacement may
+			// remove their final old snapshot while this incoming owner needs them.
+			p.sectors[sector] = true
+			p.sectorKeys = append(p.sectorKeys, sector)
+			if _, exists := m.SectorToInfo[sector]; exists && !p.removedSectors[sector] {
+				return
 			}
+			newSectors++
+		}
+	}
+	if managed != nil {
+		for _, key := range managed.activeFrontier() {
+			reserveSector(xbm.Sectors[key])
+		}
+	} else if alloc == nil || xbm.StructureDirty {
+		for _, sector := range sectors {
+			reserveSector(sector)
 		}
 	}
 	// Structural preparation removes old snapshots before allocation. Model
 	// only slots whose final references disappear in this exact candidate.
-	if alloc != nil && xbm.StructureDirty {
+	if managed == nil && alloc != nil && xbm.StructureDirty {
 		removed := make(map[*volume.Sector]bool)
 		for key, sector := range alloc.Sectors {
 			if sectors[key] != sector {
@@ -461,8 +486,13 @@ func (m *GpuBufferManager) prepareVoxelGPUAdmissionCurrentFrame(scene *core.Scen
 	m.VoxelCapacityPlanningSectorVisitsLastUpdate = 0
 	candidates := make([]voxelAdmissionCandidate, 0)
 	requiredMaps := make(map[*volume.XBrickMap]bool)
-	for index, target := range voxelServiceTargets(scene) {
+	for index, target := range m.voxelServiceTargets(scene) {
 		required := m.Allocations[target.mapRef] != nil || (target.pendingGeneration == 0 && !target.object.VoxelGPUAdmissionOptional)
+		if managed := m.managedGPUMaps[target.mapRef]; managed != nil {
+			// A private structural header is CPU ownership, not required GPU
+			// residency. Preserve current content independently of its successor.
+			required = managed.content || target.mapRef == target.object.RenderVoxelMap()
+		}
 		if required {
 			requiredMaps[target.mapRef] = true
 		}

@@ -108,13 +108,14 @@ for candidate lifetime and fallback rules.
 
 1. builds view and projection matrices
 2. reads the previous Hi-Z snapshot
-3. runs `Scene.Commit(...)` with frustum culling and optional Hi-Z occlusion
-4. updates profiler counters
-5. calls `BufferManager.UpdateScene(...)`
-6. rebuilds dependent bind groups if GPU resources were recreated
-7. updates camera uniforms
-8. updates analytic-media temporal history inputs and current half-resolution volumetric target selection
-9. refreshes text and gizmo buffers
+3. calls `BufferManager.PrepareManagedGeometryFrame(Scene)` once, using the opt-in managed frame budget
+4. runs `Scene.Commit(...)` with frustum culling and optional Hi-Z occlusion
+5. updates profiler counters
+6. calls `BufferManager.UpdateScene(...)` once for native admission and upload
+7. rebuilds dependent bind groups if GPU resources were recreated
+8. updates camera uniforms
+9. updates analytic-media temporal history inputs and current half-resolution volumetric target selection
+10. refreshes text and gizmo buffers
 
 Important details:
 
@@ -1045,15 +1046,18 @@ within one new or dirty map remain.
 
 ### Managed generation admission (S1l7)
 
-`GpuBufferManager` owns an explicit CPU-only admission ledger. No frame loop calls
-it yet. `SetManagedGeometryAdmissionBudget` selects `Enabled`, `MaxInputBytes` and
+`GpuBufferManager` owns the explicit CPU admission ledger, extended by S1l14
+for retained managed GPU snapshots and lifecycle metadata. Automatic service is
+opt-in through the [managed frame budget](#managed-gpu-publication-s1l14). `SetManagedGeometryAdmissionBudget` selects `Enabled`, `MaxInputBytes` and
 `MaxCopiedStageBytes`; the zero budget disables admission. The opt-in
 `DefaultManagedGeometryAdmissionBudget` enables 128 MiB in each domain. These are
 policy defaults, not measured limits. `ManagedGeometryAdmissionBudget` reports
 the policy. `ManagedGeometryAdmissionStats` reports `InputBytes`,
 `OwnedMetadataBytes`, `ReservedCopiedStageBytes`, `TotalStageBytes`,
 `InputPressureBytes`, `StagePressureBytes`, `OwnerCount` and `GenerationCount`.
-Pressure is the positive excess above each enabled cap.
+Pressure is the positive excess above each enabled cap. Owner/generation counts
+retain their explicit CPU-admission meaning; byte totals also include retained
+S1l14 GPU snapshot and lifecycle ownership.
 
 `AdmitManagedGeometry(object)` lazily captures the current S1l6 producer only when
 enabled. It returns a typed result: Disabled, Unavailable, Accepted, Coalesced,
@@ -1091,10 +1095,10 @@ geometry may be charged conservatively more than once.
 
 Source tokens, producer/engine graphs, caller-retained captures, fixed manager
 storage, allocator overhead, current CPU authority/renderer derivatives and all
-GPU allocations are outside these domains. The ledger requires exclusive manager
-access and its explicit owner lookup is linear. No capture, ledger traversal or
-staged service is added to ordinary frame updates. CPU reconciliation is available through S1l13. GPU allocation service, lookup
-publication and GPU retirement remain later work.
+physical GPU allocations are outside these domains. The ledger requires exclusive
+manager access and its explicit CPU owner lookup is linear. S1l13 supplies CPU
+reconciliation; [S1l14](#managed-gpu-publication-s1l14) adds opt-in frame service,
+GPU snapshot ownership, coherent publication and bounded retirement.
 
 ### Managed sector copy service (S1l8)
 
@@ -1133,8 +1137,9 @@ The entry allowance limits sectors copied per explicit call, not total calls per
 frame or wall time. Each copy's full auxiliary capacity is already reserved, but
 allocation/zeroing can depend on that capacity. Producer capture, inspection,
 allocator overhead and Go GC reclamation remain separate costs. Calls require
-exclusive manager access. No frame-loop or GPU allocation/publication is added;
-CPU reconciliation is explicit in S1l13; GPU publication remains subsequent work.
+exclusive manager access. This explicit copy API does not allocate or publish GPU
+state. S1l13 supplies reconciliation and [S1l14](#managed-gpu-publication-s1l14)
+supplies automatic frame service and GPU publication.
 
 ### Managed content work scheduling (S1l9)
 
@@ -1198,8 +1203,9 @@ certificate. A drained journal does not establish content coherence or GPU
 readiness. [Qualified current-content reads](editing.md#qualified-current-sector-inputs-s1l10)
 and the [engine edit/halo feed](editing.md#managed-edit-notifications-s1l11) are
 available, along with [current-sector reservation preflight](#managed-current-sector-reservations-s1l12).
-S1l13 supplies replacement storage and CPU reconciliation. Frame-loop integration
-and GPU publication remain later work. The allowance bounds attempted coordinates per
+S1l13 supplies replacement storage and CPU reconciliation;
+[S1l14](#managed-gpu-publication-s1l14) supplies opt-in frame integration and GPU
+publication. The allowance bounds attempted coordinates per
 explicit call, not total calls per frame, callback cost, wall time or Go GC
 reclamation.
 
@@ -1264,13 +1270,13 @@ before preflight, like full-input admission; no sector copy or reservation descr
 is allocated on refusal. Capture, fixed manager storage, allocator overhead, caller
 captures and Go GC reclamation remain outside the ledger's domains. Journal/sweep
 state and immutable copied-prefix views remain unchanged. S1l13 provides bounded
-CPU replacement service; GPU publication and retirement remain later steps; this reservation is neither readiness nor a frame-time bound.
+CPU replacement service; GPU publication and retirement are provided by [S1l14](#managed-gpu-publication-s1l14); this reservation is neither readiness nor a frame-time bound.
 
 ### Managed CPU content reconciliation (S1l13)
 
 This explicit CPU service replaces accepted-sector content without changing its
 fixed topology or publishing GPU state. It requires exclusive engine-thread and
-manager access. Ordinary frame updates do not invoke it.
+manager access. The explicit API remains available; the opt-in [S1l14 frame service](#managed-gpu-publication-s1l14) invokes it before scene commit.
 
 Accepted stages use an immutable midpoint tree over their frozen coordinate
 ordinals. A node contains two child pointers, a sector pointer, its output-byte
@@ -1358,6 +1364,103 @@ rechecks ownership after the callback. Coherent requires complete enumeration,
 no journal/sweep/candidate, valid exhaustive coverage or completed repair, and covered version equal to the
 qualified live version. This certifies CPU content for accepted topology only;
 it says nothing about successor topology, GPU readiness or frame-time limits.
+
+### Managed GPU publication (S1l14)
+
+The automatic ordinary-managed consumer provides: hidden structural staging,
+coherent display publication, continued current content and bounded retirement.
+CPU authority and producer identity stay attached to `VoxelObject.XBrickMap`.
+A separate managed render selection uses unit-scale transforms and conservative
+finite-topology bounds. It does not reuse the LOD2 representation or implicitly
+follow authority revision changes.
+
+`ManagedGeometryFrameBudget` has `Enabled` and `MaxEntries` (default helper: true,
+16); zero value leaves automatic service off. Creation also requires the existing
+CPU admission budget. `PrepareManagedGeometryFrame(scene)` runs before scene
+commit, sharing the entry allowance across CPU enumeration/reconciliation,
+managed GPU coordinate preparation and retirement. Existing native admission,
+growth and uploads run once in the normal post-commit update. A completed upload
+can promote only on the next pre-commit service, after live source, CPU coverage,
+GPU snapshot coverage and material readiness revalidation. Global lookup rebuild
+remains atomic. Precharged coordinate/bounds backing allocation and zeroing can
+scale with finite topology; entry limits do not establish a wall-clock frame bound. Initial objects stay unready until complete publication;
+replacement refusal preserves current coverage.
+
+`ManagedGeometryView.SameTopology` compares immutable coordinate-frontier identity
+conservatively; payload/halo-only edits preserve that identity. Automatic admission
+uses it to avoid staging an entire structural successor for ordinary content edits.
+Independent nonempty frontiers conservatively differ even when coordinates match;
+empty frontiers share the nil identity. Coordinate-only index storage remains
+outside the existing `RetainedBytes` domain. Existing explicit CPU admission
+semantics remain unchanged.
+
+Manager-owned private maps use the existing `Allocations` ownership inventory;
+allocation presence does not make a map reachable by selected object records.
+Immutable CPU-stage sector payloads may be borrowed because upload execution and
+normal baking do not modify them. Private map dirty bookkeeping is independent.
+Complete topology and occupied bake bounds must exist before normal baking.
+Display bounds stay conservative and separate: a precharged balanced per-coordinate
+bounds aggregate caches occupied minima/maxima for the private sampling map.
+Each prepared/replaced sector uses the existing occupancy-AABB algorithm locally;
+updating its aggregate path takes logarithmic work without scanning other sectors.
+Tombstones remove their bounds, including former extrema. Current candidates borrow
+the current desired aggregate; structural targets own it until retirement. Existing
+normal algorithms and current local halo invalidation stay unchanged, including
+cached distant tie-breaks when a content edit changes global bounds outside their
+halo. Hidden structural staging separately qualifies its uploaded normal context:
+when stable occupied bounds change, its previously prepared prefix is revalidated
+with bounded fresh snapshot copies and uploads. CPU enumeration progress survives;
+repeated changes to these bake inputs can delay GPU publication. Replacement
+preflight and submission-fenced retirement also cover those rebake copies. Managed coordinates bypass ordinary whole-map structural
+preparation and cleanup. Admission considers their bounded pending frontier,
+without whole-generation enumeration during each coordinate operation.
+
+Current and staging ownership are independent. Current owns a finite topology,
+its own 1,024-coordinate journal and cursor-preserving overflow/repair sweep.
+The qualified engine edit feed notifies current and accepted staging topology,
+including normal halos. Added coordinates belong to the structural successor.
+Current content candidates use a hidden upload target over the complete desired
+current topology. The selected allocation retains committed coordinate snapshots
+until a complete replacement/removal transaction succeeds. Successful uploads
+transfer captured ownership to current, invalidate lookup/shadow dependencies and
+retire old edges; unsuccessful or obsolete work cannot consume notifications or
+make a private candidate visible. Materials continue through existing per-object
+ownership. Dirty emptiness alone is not a GPU coverage certificate.
+
+Reserve retained inputs, borrowed desired payloads, uploaded snapshots and typed
+GPU lifecycle metadata independently of CPU staging. Their charges participate
+in the global input/copied-stage caps, including simultaneous old-plus-incoming
+replacement peaks. Charge language-level descriptors, coordinate records,
+allocation pointer arrays, occupied-bounds nodes and conservative
+sector/brick/auxiliary-capacity domains.
+Shared pointers may be charged more than once. Go map buckets and allocator/GC
+overhead are explicitly outside these domains; no total heap ceiling is claimed.
+Each retained charge survives CPU replacement, promotion, cancellation and disable
+until its last managed owner releases it. Physical resource admission remains
+under the existing GPU budget.
+
+Retirement drops one captured coordinate's snapshot edges per entry, preserving
+other current/staging/retiring references and existing submission-fenced range
+reuse. Ordinary eviction must not release a managed map wholesale. Disable,
+exposure, removal or source replacement cancels obsolete private work; an ordinary
+compatibility handoff establishes replacement coverage before clearing managed
+display. Unsupported lattice/LOD owners retain their existing owner rules.
+Budget disable must not erase charges for still-owned snapshots. A zero enabled
+entry allowance pauses service; opt-out handoff and retirement retain the last
+nonzero/default drain allowance.
+
+`ManagedGeometryFrameStats()` reports attempted entries and pending work.
+`ManagedGeometryGPUStatus(object)` reports current/staging identity, publication
+versions, readiness and retiring work without producer capture.
+`NotifyManagedGeometryGPUContent(object, previous, current, writes)` supplies the
+qualified complete edit/halo batch independently of CPU accepted ownership.
+Core `SetManagedRenderGeometry(expected, target, minimum, maximum)` and
+`ClearManagedRenderGeometry(expected)` establish/clear only the matching managed
+selection; a nil selected target represents unready initial geometry.
+`RenderLocalBounds()` supplies explicit managed display bounds to instance records
+and shadow dependency keys, while private-map `ComputeAABB()` supplies occupied
+bake bounds. Ordinary and LOD selections retain their existing local bounds.
+CPU picking, collision, saves and producer reads continue to use authority.
 
 ### Auxiliary capacity admission
 

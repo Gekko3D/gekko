@@ -134,7 +134,7 @@ func localShadowIntersects(obj *core.VoxelObject, light core.Light) bool {
 
 func (m *GpuBufferManager) localShadowCaster(obj *core.VoxelObject) localShadowCasterKey {
 	selected := obj.RenderVoxelMap()
-	localMin, localMax := selected.ComputeAABB()
+	localMin, localMax := obj.RenderLocalBounds()
 	key := localShadowCasterKey{
 		object: obj, selected: selected, revision: selected.Revision,
 		instance: sceneInstanceKey{

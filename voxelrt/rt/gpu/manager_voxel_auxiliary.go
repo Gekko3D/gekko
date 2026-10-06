@@ -25,7 +25,7 @@ func (m *GpuBufferManager) auxiliaryDemand(scene *core.Scene) *auxiliaryDemandIn
 		return inventory
 	}
 	seen := make(map[*volume.XBrickMap]bool)
-	for _, target := range voxelServiceTargets(scene) {
+	for _, target := range m.voxelServiceTargets(scene) {
 		xbm := target.mapRef
 		if seen[xbm] {
 			continue
@@ -56,7 +56,18 @@ func (m *GpuBufferManager) auxiliaryDemand(scene *core.Scene) *auxiliaryDemandIn
 			inventory.units[xbm] = append(inventory.units[xbm], unit)
 		}
 		fullUnits := make(map[[3]int]bool)
-		if structural {
+		if managed := m.managedGPUMaps[xbm]; managed != nil {
+			for _, key := range managed.activeFrontier() {
+				appendUnit(key, 0, 64)
+				fullUnits[key] = true
+			}
+			for key, dirty := range xbm.DirtySectors {
+				if dirty && !fullUnits[key] {
+					appendUnit(key, 0, 64)
+					fullUnits[key] = true
+				}
+			}
+		} else if structural {
 			// Structural preparation may inspect all desired sector pointers, but an
 			// unchanged sector retains its actual dirty-unit granularity. Prospective
 			// membership protects release credits even outside an uploaded unit.
@@ -109,7 +120,7 @@ func (p *voxelAdmissionPlan) addAuxiliary(m *GpuBufferManager, xbm *volume.XBric
 	// All admitted structural removals happen before any additions. Credit only
 	// mapped slots whose final snapshot reference is guaranteed to disappear and
 	// whose pointer is absent from every prospective unit (including deferred ones).
-	if alloc != nil && xbm.StructureDirty {
+	if m.managedGPUMaps[xbm] == nil && alloc != nil && xbm.StructureDirty {
 		for key, sector := range alloc.Sectors {
 			if xbm.Sectors[key] == sector {
 				continue

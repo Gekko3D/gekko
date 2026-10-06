@@ -123,9 +123,10 @@ func (m *GpuBufferManager) updateVoxelData(scene *core.Scene, backend voxelNativ
 	m.serviceVoxelUploads(scene, func(work voxelUploadWork) bool {
 		return m.executeVoxelUpload(normalBakeContext, work)
 	}, normalBakeContext)
+	m.postManagedUploads()
 	// Upload completion can assign new sectors, aux records and payload slots.
 	activeMaps := make(map[*volume.XBrickMap]bool)
-	for _, target := range voxelServiceTargets(scene) {
+	for _, target := range m.voxelServiceTargets(scene) {
 		activeMaps[target.mapRef] = true
 	}
 	m.evictRetainedVoxelMaps(activeMaps)
@@ -160,7 +161,7 @@ func (m *GpuBufferManager) voxelAllocationRequirements(scene *core.Scene) (requi
 	var newSectors uint32
 	seenMaps := make(map[*volume.XBrickMap]bool)
 	seenSectors := make(map[*volume.Sector]bool)
-	for _, target := range voxelServiceTargets(scene) {
+	for _, target := range m.voxelServiceTargets(scene) {
 		xbm := target.mapRef
 		alloc, exists := m.Allocations[xbm]
 		if seenMaps[xbm] {
@@ -207,8 +208,11 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 	m.voxelPreparationBricks = make(map[*volume.Brick]bool)
 	defer func() { m.voxelPreparationSectors = nil; m.voxelPreparationBricks = nil }()
 	preparationMaps := make(map[*volume.XBrickMap]bool)
-	for _, target := range voxelServiceTargets(scene) {
+	for _, target := range m.voxelServiceTargets(scene) {
 		xbm := target.mapRef
+		if m.managedGPUMaps[xbm] != nil {
+			continue
+		}
 		if preparationMaps[xbm] {
 			continue
 		}
@@ -232,7 +236,10 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 	}
 	seenMaps := make(map[*volume.XBrickMap]bool)
 	var changedMaps []*volume.XBrickMap
-	for _, target := range voxelServiceTargets(scene) {
+	for _, target := range m.voxelServiceTargets(scene) {
+		if m.managedGPUMaps[target.mapRef] != nil {
+			continue
+		}
 		if !m.voxelMapAdmitted(target.mapRef) {
 			continue
 		}
@@ -335,6 +342,11 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 		xbm.StructureDirty = false
 		alloc.directCells = directSectorLookupCells(alloc.Sectors)
 		alloc.directCellsValid = true
+	}
+	for _, t := range m.managedGPUMaps {
+		if !t.retiring {
+			m.installManagedFrontier(t)
+		}
 	}
 	if topologyChanged {
 		m.sectorTopologyRevision++

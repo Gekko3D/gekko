@@ -40,6 +40,8 @@ const (
 )
 
 type voxelUploadWork struct {
+	managedManager          *GpuBufferManager
+	managedTarget           *managedGPUTarget
 	packedAuxiliarySnapshot *packedAuxiliaryUploadSnapshot
 	brickSnapshot           *voxelBrickUploadSnapshot
 	sectorSnapshot          *voxelSectorUploadSnapshot
@@ -73,7 +75,18 @@ func (w voxelUploadWork) targetMap() *volume.XBrickMap {
 }
 
 func (w voxelUploadWork) targetCurrent() bool {
+	if w.managedTarget != nil {
+		return w.managedManager.managedTargetCurrent(w.managedTarget, w.object)
+	}
 	target := w.targetMap()
+	if w.target != nil && target.Revision != w.targetRevision {
+		return false
+	}
+	if w.managedManager != nil {
+		if o := w.managedManager.managedGPUOwners[w.object]; o != nil && o.handoff && w.object.XBrickMap == target {
+			return true
+		}
+	}
 	if target == nil || (w.target != nil && target.Revision != w.targetRevision) {
 		return false
 	}
@@ -201,7 +214,7 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 		m.MaterialAllocations = make(map[*core.VoxelObject]*MaterialGpuAllocation)
 	}
 	var materialObjects []*core.VoxelObject
-	for _, target := range voxelServiceTargets(scene) {
+	for _, target := range m.voxelServiceTargets(scene) {
 		if target.pendingGeneration == 0 && m.voxelMapAdmitted(target.mapRef) && m.voxelObjectAdmitted(target.object) {
 			materialObjects = append(materialObjects, target.object)
 		}
@@ -214,7 +227,7 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 	best := make(map[*volume.XBrickMap]voxelServiceTarget)
 	objectOrder := make(map[*core.VoxelObject]int)
 	var maps []*volume.XBrickMap
-	for index, target := range voxelServiceTargets(scene) {
+	for index, target := range m.voxelServiceTargets(scene) {
 		obj, xbm := target.object, target.mapRef
 		liveMaps[xbm], liveObjects[obj] = true, true
 		_, seenObject := objectOrder[obj]
@@ -260,7 +273,7 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 			if m.voxelBufferMirrored(3) {
 				bytes *= 2
 			}
-			work := voxelUploadWork{kind: voxelUploadMaterial, object: obj, target: xbm, targetRevision: xbm.Revision, bytes: bytes, material: mat, materialBlock: mat.block, materialData: data, materialRows: rows, materialPtr: ptr, materialLen: length, materialGeneration: m.MaterialBufferGeneration}
+			work := voxelUploadWork{managedManager: m, managedTarget: m.managedGPUMaps[xbm], kind: voxelUploadMaterial, object: obj, target: xbm, targetRevision: xbm.Revision, bytes: bytes, material: mat, materialBlock: mat.block, materialData: data, materialRows: rows, materialPtr: ptr, materialLen: length, materialGeneration: m.MaterialBufferGeneration}
 			if mat.block != nil {
 				if index, exists := materialQueue[mat.block]; exists {
 					previous := queue[index]
@@ -271,7 +284,7 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 				}
 				materialQueue[mat.block] = len(queue)
 			}
-			queue = append(queue, work)
+			queue = append(queue, m.qualifyManagedWork(work))
 		}
 	}
 	for _, xbm := range maps {
@@ -287,7 +300,7 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 				continue
 			}
 			work := voxelUploadWork{kind: voxelUploadSector, object: obj, target: xbm, targetRevision: xbm.Revision, pendingGeneration: target.pendingGeneration, sectorKey: key, sectors: 1}
-			queue = append(queue, m.qualifySectorUpload(work))
+			queue = append(queue, m.qualifyManagedWork(m.qualifySectorUpload(work)))
 		}
 		for key, dirty := range xbm.DirtyBricks {
 			sKey := [3]int{key[0], key[1], key[2]}
@@ -304,7 +317,7 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 				work.bytes = 0
 				work.bricks = 0
 			}
-			queue = append(queue, work)
+			queue = append(queue, m.qualifyManagedWork(work))
 		}
 	}
 	ages := make(map[voxelUploadIdentity]uint64, len(queue))
@@ -428,6 +441,9 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 			if completed && samePackedPhysicalUpload(previous, w) {
 				if w.targetCurrent() && w.packedAuxiliarySnapshot.current() && (w.sectorSnapshot == nil || w.sectorSnapshot.current(w)) && (w.brickSnapshot == nil || w.brickSnapshot.current(w)) {
 					acknowledgeVoxelGeometryWork(w)
+					if w.managedTarget != nil && w.kind == voxelUploadSector {
+						w.managedTarget.uploaded[w.sectorKey] = w.targetMap().Sectors[w.sectorKey]
+					}
 					delete(ages, w.identity())
 				}
 				continue
@@ -555,6 +571,9 @@ func (m *GpuBufferManager) serviceVoxelUploads(scene *core.Scene, execute func(v
 			case voxelUploadBrick:
 				delete(xbm.DirtyBricks, w.brickKey)
 			}
+		}
+		if w.managedTarget != nil && w.kind == voxelUploadSector {
+			w.managedTarget.uploaded[w.sectorKey] = w.targetMap().Sectors[w.sectorKey]
 		}
 		delete(ages, w.identity())
 	}

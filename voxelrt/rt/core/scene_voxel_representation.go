@@ -41,6 +41,7 @@ func (obj *VoxelObject) SetRenderLOD2(coarse *volume.XBrickMap) bool {
 func (obj *VoxelObject) ClearRenderRepresentation() {
 	if obj != nil {
 		obj.renderRepresentation = nil
+		obj.managedRenderGeometry = nil
 	}
 }
 
@@ -88,6 +89,12 @@ func (obj *VoxelObject) RenderVoxelMap() *volume.XBrickMap {
 	if obj == nil {
 		return nil
 	}
+	if obj.managedRenderGeometry != nil {
+		if !obj.managedRenderGeometryValid() {
+			return nil
+		}
+		return obj.managedRenderGeometry.target
+	}
 	if obj.renderRepresentation == nil {
 		return obj.XBrickMap
 	}
@@ -129,6 +136,9 @@ func (obj *VoxelObject) RenderWorldToObject() mgl32.Mat4 {
 func (obj *VoxelObject) RenderWorldBounds() *[2]mgl32.Vec3 {
 	if obj == nil {
 		return nil
+	}
+	if obj.managedRenderGeometry != nil {
+		return obj.managedRenderWorldBounds()
 	}
 	if obj.renderRepresentation == nil {
 		return obj.WorldAABB

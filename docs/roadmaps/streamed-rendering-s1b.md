@@ -941,6 +941,16 @@ and [delivery record](streamed-rendering-content-optimization.md#s1l13-complete-
 GPU stage allocation/publication, retirement and frame-loop integration remain.
 No native visual/profile or frame-performance claim.
 
+### S1l14: Managed GPU publication
+
+Completed 2026-10-06 in this batch. Ordinary managed geometry now has hidden GPU
+staging, coherent display handoff, independent sparse current-content service,
+bounded retirement and pre-commit frame integration. Authority remains separate.
+See the [canonical contract](../renderer/runtime.md#managed-gpu-publication-s1l14)
+and [delivery record](streamed-rendering-content-optimization.md#s1l14-managed-gpu-publication).
+Native correctness verification is recorded there; representative profiles are
+excluded by user instruction. Global lookup rebuild remains atomic.
+
 ## Verification and execution record
 
 Workflow: GPT-6.1 sol tests to red; root adversarial test review; GPT-6.1 sol code to green; root adversarial production review; commit. User authorized tests/subagents. Preserve unrelated changes.

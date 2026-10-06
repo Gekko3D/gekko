@@ -361,7 +361,7 @@ func (m *GpuBufferManager) promotePackedDirtySectors(scene *core.Scene) {
 		return
 	}
 	seen := map[*volume.XBrickMap]bool{}
-	for _, target := range voxelServiceTargets(scene) {
+	for _, target := range m.voxelServiceTargets(scene) {
 		xbm := target.mapRef
 		if seen[xbm] {
 			continue
@@ -386,7 +386,11 @@ func (m *GpuBufferManager) promotePackedDirtySectors(scene *core.Scene) {
 func (p *voxelAdmissionPlan) reservePackedMap(m *GpuBufferManager, xbm *volume.XBrickMap) {
 	keys := map[[3]int]bool{}
 	alloc := m.Allocations[xbm]
-	if alloc == nil || xbm.StructureDirty {
+	if managed := m.managedGPUMaps[xbm]; managed != nil {
+		for _, key := range managed.activeFrontier() {
+			keys[key] = true
+		}
+	} else if alloc == nil || xbm.StructureDirty {
 		for key := range xbm.Sectors {
 			keys[key] = true
 		}

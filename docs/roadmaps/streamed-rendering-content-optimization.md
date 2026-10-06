@@ -5553,3 +5553,47 @@ CPU coherence covers accepted topology only. Native visuals, profiles and consum
 test suites were not rerun; the known `examples/testing` compile issue stays
 outside this batch. No frame-performance gain or total-process-memory ceiling is
 claimed.
+
+
+### S1l14: Managed GPU publication
+
+Commit: this batch. Completed ordinary managed GPU staging, qualified pre-commit
+publication, independent sparse current-content uploads and bounded retirement.
+GPU manager owns snapshot lifetimes; core owns borrowed display selection; the
+engine edit bridge supplies qualified publication edges. CPU authority, picking,
+collision and saves retain their existing geometry. Refusal preserves displayed
+coverage and retained charges. Automatic service requires both admission and frame
+budgets; the zero-value policy stays off.
+[Canonical contract](../renderer/runtime.md#managed-gpu-publication-s1l14).
+
+Verification passed from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+env GOCACHE=/tmp/gekko3d-gocache go test -race . ./voxelrt/rt/core ./voxelrt/rt/volume ./voxelrt/rt/gpu -run '^(TestS1l|TestP1d|TestP1e)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache GEKKO_NATIVE_S1L14=1 go test ./cmd/voxelbench -run '^TestNativeManagedPublicationS1l14Correctness$' -count=1 -v
+git diff --check
+```
+
+Consumer builds passed from their respective module directories:
+
+| Module | Command |
+| --- | --- |
+| `gekko-editor` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l14-build/gekko-editor/ ./...` |
+| `actiongame` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l14-build/actiongame/ ./...` |
+| `spacegame_go` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l14-build/spacegame_go/ ./...` |
+| `spacesim` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l14-build/spacesim/ ./...` |
+| `examples/testing-vox` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l14-build/examples-testing-vox/ ./...` |
+
+Native test uses the production G-buffer on Apple M4 Pro/Metal, including thin
+sheets at two depths, resize/rebinding, paused upload continuity, current seam
+edits, compatibility handoff and submission-fenced removal. Ordinary reference rebakes complete structural
+snapshots: its historical distant normal sidecars can otherwise retain old global
+bounds tie-breaks. Normals/AO, materials and hit masks compare exactly; finite hit
+depths permit at most eight float32 ULP and 0.0001 world units because conservative
+sector bounds change DDA entry rounding. Paused displayed images compare exactly.
+
+Global lookup rebuilding and backing allocation/zeroing remain atomic. Full
+interactive lighting/shadow/transparency passes and consumer test suites are not covered by this headless check. Representative
+profiles were skipped by user instruction; no FPS gain or total heap ceiling is
+claimed. Known `examples/testing` compilation failure remains outside this block.

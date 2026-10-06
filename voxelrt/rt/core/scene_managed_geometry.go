@@ -110,7 +110,7 @@ func (obj *VoxelObject) CaptureManagedGeometryInput() (ManagedGeometryInput, boo
 		return ManagedGeometryInput{}, false
 	}
 	geometry, generation, ok := producer.capture()
-	if !ok {
+	if !ok || obj.managedGeometryProducer != producer || !obj.managedGeometrySelectionQualified(producer) {
 		return ManagedGeometryInput{}, false
 	}
 	return ManagedGeometryInput{geometry: geometry, generation: generation, source: producer.source}, true

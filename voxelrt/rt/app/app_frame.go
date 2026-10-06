@@ -150,6 +150,9 @@ func (a *App) Update() {
 	a.Profiler.BeginScope("Scene Commit")
 	planes := a.Camera.ExtractFrustum(viewProj)
 	prevViewProj := a.LastViewProj
+	// Publish completed managed coverage before pass visibility and BVHs are
+	// committed. Native admission and uploads remain in the post-commit update.
+	a.BufferManager.PrepareManagedGeometryFrame(a.Scene)
 	a.Scene.Commit(planes, core.SceneCommitOptions{
 		OcclusionMode:    a.OcclusionMode,
 		HiZData:          hizData,

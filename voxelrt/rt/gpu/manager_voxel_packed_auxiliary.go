@@ -209,9 +209,26 @@ func (p *voxelAdmissionPlan) reservePackedAuxiliaryMap(m *GpuBufferManager, xbm 
 	// auxiliary policy owns exact physical packet locations for their uploads.
 	if inventory.legacy {
 		units = nil
-		for key, sector := range xbm.Sectors {
-			if sector != nil && (m.Allocations[xbm] == nil || xbm.StructureDirty || xbm.DirtySectors[key]) {
-				units = append(units, auxiliaryUploadUnit{work: voxelUploadWork{kind: voxelUploadSector, target: xbm, sectorKey: key}})
+		if managed := m.managedGPUMaps[xbm]; managed != nil {
+			keys := make(map[[3]int]bool)
+			for _, key := range managed.activeFrontier() {
+				keys[key] = true
+			}
+			for key, dirty := range xbm.DirtySectors {
+				if dirty {
+					keys[key] = true
+				}
+			}
+			for key := range keys {
+				if xbm.Sectors[key] != nil {
+					units = append(units, auxiliaryUploadUnit{work: voxelUploadWork{kind: voxelUploadSector, target: xbm, sectorKey: key}})
+				}
+			}
+		} else {
+			for key, sector := range xbm.Sectors {
+				if sector != nil && (m.Allocations[xbm] == nil || xbm.StructureDirty || xbm.DirtySectors[key]) {
+					units = append(units, auxiliaryUploadUnit{work: voxelUploadWork{kind: voxelUploadSector, target: xbm, sectorKey: key}})
+				}
 			}
 		}
 		for key, dirty := range xbm.DirtyBricks {
