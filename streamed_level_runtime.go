@@ -315,8 +315,9 @@ func firstPositiveInt(values ...int) int {
 type StreamedLevelRuntimeModule struct{}
 
 type StreamedLevelRuntimeState struct {
-	mu   sync.RWMutex
-	jobs sync.WaitGroup
+	nextPageHandoffRevision uint64
+	mu                      sync.RWMutex
+	jobs                    sync.WaitGroup
 
 	Initialized bool
 	InitErr     error

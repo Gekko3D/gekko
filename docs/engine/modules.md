@@ -120,7 +120,7 @@ For the runtime model those modules plug into, see [`runtime.md`](runtime.md).
 - Resources:
   - `*StreamedLevelRuntimeState`
   - `*VoxelWorldDirtyChunks`
-  - private [independent page control plane](../content/streaming-and-worlds.md#independent-page-control-plane) within runtime state; live v3 admission remains gated
+  - private [independent page control plane](../content/streaming-and-worlds.md#independent-page-control-plane) within runtime state, including [handoff transactions](../content/streaming-and-worlds.md#page-handoff-transactions); live v3 admission remains gated
 - Systems:
   - `updateStreamedLevelObserverSystem` in `PreUpdate`
   - `commitPreparedStreamedChunksSystem` in `Update`

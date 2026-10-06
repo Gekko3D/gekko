@@ -2,6 +2,7 @@ package gekko
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 )
 
@@ -28,6 +29,7 @@ type streamedPageBinding struct {
 }
 
 type streamedPageGate struct {
+	revision    uint64
 	bindings    map[StreamedPageKey]streamedPageBinding
 	ticketPages map[uint64]StreamedPageKey
 	entityPages map[EntityId]StreamedPageKey
@@ -57,6 +59,11 @@ func (state *StreamedLevelRuntimeState) BindPageRenderTicket(key StreamedPageKey
 		if previous.entity == entity && previous.ticket == ticket {
 			return nil
 		}
+	}
+	if gate.revision == math.MaxUint64 {
+		return fmt.Errorf("page binding revision exhausted")
+	}
+	if previous, ok := gate.bindings[key]; ok {
 		delete(gate.ticketPages, previous.ticket)
 		delete(gate.entityPages, previous.entity)
 	}
@@ -68,6 +75,7 @@ func (state *StreamedLevelRuntimeState) BindPageRenderTicket(key StreamedPageKey
 	gate.bindings[key] = streamedPageBinding{entity: entity, ticket: ticket}
 	gate.ticketPages[ticket] = key
 	gate.entityPages[entity] = key
+	gate.revision++
 	return nil
 }
 

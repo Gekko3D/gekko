@@ -56,6 +56,7 @@ type streamedPageControl struct {
 	roots      []StreamedPageKey
 	pages      map[StreamedPageKey]content.StreamPageDef
 	startup    streamedPageGate
+	handoff    streamedPageHandoffOwner
 	observers  map[EntityId]streamedPageObserverState
 	selection  StreamedPageSelection
 	selected   bool
@@ -115,6 +116,7 @@ func (state *StreamedLevelRuntimeState) ConfigurePageControlPlane(level *content
 		}
 	}
 	sortStreamedPageKeys(owner.roots)
+	owner.handoff.groups = owner.handoffGroups()
 	state.pageControl = owner
 	return nil
 }

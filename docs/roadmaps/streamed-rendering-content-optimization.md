@@ -5153,7 +5153,7 @@ I10 root startup and distance/hysteresis/velocity selection is next.
 
 ### I10: Page selection and startup control plane
 
-Commit: this batch. Runtime owns detached v3 page identities, pinned roots,
+Commit: `ec14506`. Runtime owns detached v3 page identities, pinned roots,
 distance/keep hysteresis, forward prefetch and conservative refinement coverage.
 Unchanged observers reuse raw demand independently. Startup eligibility requires
 exact current renderer identities and explicit spawn-collision readiness. See
@@ -5179,3 +5179,30 @@ and candidate visits unchanged. Missing readiness evidence blocked startup.
 Native GPU performance was not measured. This completes the approved control
 plane scope; live v3 admission remains gated pending I11 handoff, I13 height
 visuals and I14 collision integration. I11 is next.
+
+
+### I11: Qualified page handoff transactions
+
+Commit: this batch. Runtime owns complete-cohort refinement, full-frontier
+coarsening and fixed-point terminal terrain/POI coverage-group coupling. Sealed
+plans require current renderer identity and explicit generation/revision-qualified
+collision proof on activation and reversal. Immutable groups index once per
+configuration. See [the owning contract](../content/streaming-and-worlds.md#page-handoff-transactions).
+
+Verification from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run 'I10|I11' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -count=1
+git diff --check
+```
+
+Consumer builds passed with
+`env GOCACHE=/tmp/gekko3d-gocache go build -o /private/tmp/gekko-i11-editor .`
+from `../gekko-editor` and
+`env GOCACHE=/tmp/gekko3d-gocache go build -o /private/tmp/gekko-i11-actiongame .`
+from `../actiongame`. Consumer test suites were not rerun; recorded failures
+remain. Native visibility/collision publication and GPU no-hole checks remain
+gated on I13/I14. Root/nonterminal groups fail closed rather than inventing mask
+inheritance. Group rollback still scans/sorts candidate frontiers and has no
+frame-work budget. I12 byte-budgeted admission and caches are next.

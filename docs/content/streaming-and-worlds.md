@@ -542,7 +542,8 @@ gathering and future layer selection remain separate S3 work.
 `StreamedLevelRuntimeState.ConfigurePageControlPlane` installs an owned,
 metadata-only v3 selection snapshot using `BuildLevelStreamingIndex`. Supplied
 layers must have explicit v3 visual forests; referenced level layers cannot be
-omitted, including terrain declared only through a legacy `source_path`. The runtime generation must be nonzero. Invalid configuration leaves
+omitted, including terrain declared only through a legacy `source_path`. The
+runtime generation must be nonzero. Invalid configuration leaves
 the previous owner intact; successful reconfiguration clears demand history and
 renderer bindings. Legacy selection and v3 live admission guards remain.
 
@@ -585,6 +586,54 @@ startup target remains a native acceptance diagnostic, never a readiness timeout
 fallback. Reset and runtime teardown release this control plane without writing
 renderer ticket status. Live startup still awaits I11 handoff, I13 sparse height
 visuals and I14 collision integration.
+
+### Page handoff transactions
+
+The private page control plane also owns an acknowledged visual frontier.
+`PlanPageHandoff` requires a successful page selection and produces a detached,
+revision-qualified transaction: the previous and proposed frontiers, pages to
+show/hide, retained coverage, preparation requests and blocking diagnostics.
+Planning does not change the frontier. Bootstrap proposes the complete ready
+root set before any refinement. Future startup publication must acknowledge that
+complete root frontier as well as satisfy the independent spawn-collision gate.
+
+A visible parent refines into its entire immediate child cohort only after all
+children have current GPU-ready evidence. Acknowledged transactions advance one
+level per visible parent. Coarsening requires a ready ancestor and hides its
+entire visible descendant frontier. Missing or stale evidence retains the old
+coverage. Prefetch and keep demand alone never activate detail. Roots, active
+pages and their ancestors remain retained along with selection demand; the
+planner does not evict payloads.
+
+Terminal, non-root `coverage_group` members form cross-layer replacement cohorts.
+Group membership is indexed once per configuration. Demand expands every touched
+group's members and their ancestor/sibling coverage until stable. Candidate
+transitions also resolve group dependencies until
+stable: partial activation or deactivation rolls back the affected root
+proposals. Ungrouped intermediate steps can progress when paired members have
+different tree depths. Root or nonterminal group membership has unspecified mask
+inheritance and produces a fail-closed diagnostic; static I08 validation remains
+unchanged. An unsupported descendant does not prevent fallback root bootstrap.
+
+Entering and leaving a supported group both require explicit collision-owner
+readiness for that group, generation and plan revision, with no failure.
+`ValidatePageHandoff` checks that evidence, the complete proposed frontier's
+current renderer readiness and the exact pending plan without publishing it.
+`AcceptPageHandoff` repeats validation and acknowledges the logical frontier.
+Changed selection, successful binding replacement, a newer plan, reset,
+generation change or same-generation reconfiguration invalidates old plans.
+Idempotent and rejected bindings, and unchanged cached selection, preserve them.
+Returned snapshots are independently owned; modified plans are rejected.
+
+These APIs establish the permanent transaction protocol, not native publication.
+The future runtime publisher must validate immediately before publishing the
+visibility/collision changes together, then acknowledge without intervening
+owner or evidence mutations; otherwise it must roll back its external changes.
+It must also coordinate queued ECS mutations so the publication flush preserves
+all target identities. Payload producers must supply the declared replacement
+coverage and uncut parent fallback. Live v3 admission remains gated until terrain
+visuals and collision ownership are integrated in I13/I14; GPU no-hole rendering
+and native collision atomicity have not been verified here.
 
 ## Long-Term Streaming Plan
 
