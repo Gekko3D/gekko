@@ -268,8 +268,9 @@ func advanceStreamedChunkCommit(cmd *Commands, assets *AssetServer, state *Strea
 				return entityCount, placementUnit, false, nil
 			}
 			var latestSnapshots map[string]*content.VoxelObjectSnapshotDef
-			if tx.resumable {
-				latestSnapshots, err = resolveLatestStreamedVoxelObjectSnapshots(loader, state, placement, spawnResult.EntitiesByAssetID, prepared.v2Placements[placement.PlacementID])
+			refreshSnapshots := tx.resumable || state.Config.EnableManagedPreparedAssets && streamedHasRestoredManagedCandidate(&prepared, placement.PlacementID)
+			if refreshSnapshots {
+				latestSnapshots, err = resolveLatestStreamedVoxelObjectSnapshots(loader, state, placement, spawnResult.EntitiesByAssetID, prepared.v2Placements[placement.PlacementID], &prepared)
 				if err != nil {
 					return entityCount, placementUnit, false, err
 				}
@@ -277,12 +278,18 @@ func advanceStreamedChunkCommit(cmd *Commands, assets *AssetServer, state *Strea
 			for itemID, entity := range spawnResult.EntitiesByAssetID {
 				key := voxelObjectRuntimeKey(placement.PlacementID, itemID)
 				snapshot := prepared.ObjectSnapshots[key]
-				if tx.resumable {
+				if refreshSnapshots {
 					snapshot = latestSnapshots[key]
 				}
 				if snapshot != nil {
 					snapshotStart := time.Now()
-					if err = applyStreamedVoxelObjectSnapshotToEntity(cmd, state, entity, snapshot, prepared.objectSnapshotGeometry[key]); err != nil {
+					packet := prepared.objectSnapshotGeometry[key]
+					if !adoptStreamedRestoredManagedPart(cmd, assets, state, entity, snapshot, packet, prepared.objectSnapshotProofs[key]) {
+						err = applyStreamedVoxelObjectSnapshotToEntity(cmd, state, entity, snapshot, packet)
+					} else {
+						packet.registration.release()
+					}
+					if err != nil {
 						return entityCount, placementUnit, false, err
 					}
 					state.Metrics.LastCommitPlacementDuration += time.Since(snapshotStart)
@@ -314,6 +321,7 @@ func advanceStreamedChunkCommit(cmd *Commands, assets *AssetServer, state *Strea
 				}
 			}
 			reconcileStreamedManagedParts(cmd, assets, state, chunk, placement.PlacementID, spawnResult.EntitiesByAssetID, prepared.managedPreparedAssets[placement.PlacementID])
+			reconcileStreamedRestoredManagedParts(cmd, assets, state, chunk, placement.PlacementID, spawnResult.EntitiesByAssetID, &prepared)
 		}
 		break
 	}

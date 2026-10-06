@@ -15,11 +15,13 @@ type streamedObjectSnapshotGeometry struct {
 	snapshot     *content.VoxelObjectSnapshotDef
 	source       *volume.XBrickMap
 	registration *streamedGeometryRegistration
+	managed      *streamedManagedPreparedPart
 }
 
 func (p streamedPreparedChunk) releaseObjectSnapshotGeometry() {
 	for _, packet := range p.objectSnapshotGeometry {
 		packet.registration.release()
+		packet.managed.release()
 	}
 }
 

@@ -1682,6 +1682,14 @@ canonical history. Repeating Enable or correcting an initially wrong lattice
 does not requalify that owner. Proof runs once at Enable, including synchronous
 placement hooks; save and acknowledgement do not rebuild the base.
 
+With `EnableManagedPreparedAssets`, eligible compiled ordinary restored items
+also acquire managed ownership automatically from worker-prepared private data.
+Bound deltas retain their authenticated original base; full/v1 retains unbound
+tracking and full-save fallback. Per-item validated payload identity is rechecked
+at commit, including whole-chunk commits. Changed or late payloads keep the
+current compatibility path. See the owning [S1q asset contract](../assets/runtime-assets.md#worker-prepared-restored-snapshots-s1q)
+for admission, ownership and renderer derivative lifetime.
+
 ### Ordinary object override persistence
 
 Explicitly enabled, sealed authored shapes with a verified
@@ -1739,8 +1747,10 @@ launch can retain saved A as the baseline while unsaved B remains pinned for
 recapture. Changed owner/path/lattice suppresses an incompatible runtime reference
 acknowledgement. Failures preserve existing references and retry ownership.
 
-Loaded delta geometry uses independent dense registration until explicit Enable
-restores tracking under the loading contract above. Further edits and reverts
+Outside the managed worker opt-in, loaded delta geometry uses independent dense
+registration until explicit Enable restores tracking under the loading contract
+above. Eligible compiled restores can instead acquire tracking on workers through
+[S1q](../assets/runtime-assets.md#worker-prepared-restored-snapshots-s1q). Further edits and reverts
 remain relative to the original canonical base across eviction/reload. Cheaper
 full compact selection remains a follow-up; no delta chain or persistent base
 cache is introduced.

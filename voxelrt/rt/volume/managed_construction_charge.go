@@ -13,6 +13,47 @@ type ManagedConstructionCharge struct {
 	OwnerBytes, SnapshotBytes, PeakBytes uint64
 }
 
+// PreflightManagedXBrickMapWithBase bounds independent original/current copies
+// and the worst primary assignments and changed-brick counters constructed by
+// NewManagedXBrickMapWithBase. Snapshot storage follows current alone. Nil is
+// empty; both inputs require exclusively owned, supported CPU storage.
+func PreflightManagedXBrickMapWithBase(base, current *XBrickMap) (ManagedConstructionCharge, bool) {
+	b, valid := PreflightManagedXBrickMap(base)
+	if !valid {
+		return ManagedConstructionCharge{}, false
+	}
+	c, valid := PreflightManagedXBrickMap(current)
+	if !valid {
+		return ManagedConstructionCharge{}, false
+	}
+	out := ManagedConstructionCharge{SnapshotBytes: c.SnapshotBytes}
+	failed := false
+	add := func(dst *uint64, n uint64) {
+		var carry uint64
+		*dst, carry = bits.Add64(*dst, n, 0)
+		failed = failed || carry != 0
+	}
+	// Summed single-source bounds already overcount independent owners, backing,
+	// indexes and constructor scratch. The additional maps never share entries.
+	add(&out.OwnerBytes, b.PeakBytes)
+	add(&out.OwnerBytes, c.PeakBytes)
+	assignment := uint64(unsafe.Sizeof([3]int{})) + uint64(unsafe.Sizeof(uint8(0)))
+	changed := uint64(unsafe.Sizeof([6]int{})) + uint64(unsafe.Sizeof(int(0)))
+	for _, source := range []*XBrickMap{base, current} {
+		if source == nil {
+			continue
+		}
+		for _, sector := range source.Sectors {
+			for range sector.PackedBricks {
+				add(&out.OwnerBytes, uint64(BrickSize*BrickSize*BrickSize)*assignment)
+				add(&out.OwnerBytes, changed)
+			}
+		}
+	}
+	out.PeakBytes = out.OwnerBytes
+	return out, !failed
+}
+
 // PreflightManagedXBrickMap inspects exclusively owned source without allocation.
 // It bounds NewManagedXBrickMap and Snapshot storage before construction. Nil
 // means empty; malformed or unsupported sector/auxiliary storage is refused.

@@ -34,7 +34,7 @@ func TestS1pNativeWarmStreamingConfigWorkerBridgePublishesUnderFiniteNativeWork(
 	s1nNativeWorkerBridgePublishesBoundedGeometryAndLookup(t, &config, true)
 }
 
-func s1nNativeWorkerBridgePublishesBoundedGeometryAndLookup(t *testing.T, config *VoxelRtStreamingConfig, warm bool) {
+func s1nNativeWorkerBridgePublishesBoundedGeometryAndLookup(t *testing.T, config *VoxelRtStreamingConfig, warm bool, setup ...func(*testing.T) (*s1gFixture, string)) {
 	t.Helper()
 	expected := config
 	var nativeCreates uint64
@@ -108,7 +108,13 @@ func s1nNativeWorkerBridgePublishesBoundedGeometryAndLookup(t *testing.T, config
 		config.Apply(manager)
 		s1oAssertStreamingConfig(t, manager, *config)
 	}
-	f, path := s1nRuntime(t, true, 1)
+	var f *s1gFixture
+	var path string
+	if len(setup) != 0 {
+		f, path = setup[0](t)
+	} else {
+		f, path = s1nRuntime(t, true, 1)
+	}
 	if warm {
 		s1pWarm(t, f, path, "body")
 	}

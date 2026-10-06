@@ -1486,7 +1486,7 @@ CPU picking, collision, saves and producer reads continue to use authority.
 
 <a id="streamed-ordinary-worker-integration-s1n"></a>
 
-### Streamed ordinary worker integration (S1n/S1p)
+### Streamed ordinary worker integration (S1n/S1p/S1q)
 
 Qualified cold and unborrowed verified warm compiled parts can supply managed
 authority and the first renderer map from workers, using the existing managed
@@ -1494,6 +1494,9 @@ generation callbacks.
 The [asset ownership contract](../assets/runtime-assets.md#worker-prepared-ordinary-managed-assets-s1n)
 defines opt-in, permanent raw-borrow revocation, leases and hook ownership
 transitions.
+Worker-captured compiled restored snapshots also supply independent managed
+authority and renderer maps; their [S1q contract](../assets/runtime-assets.md#worker-prepared-restored-snapshots-s1q)
+preserves original delta history and rechecks current payload identity at commit.
 This integration changes no shader layouts or GPU budget defaults. Managed
 structural promotion still requires complete content, materials and exact
 committed lookup coverage; CPU authority remains independent of displayed stages.

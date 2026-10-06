@@ -279,6 +279,20 @@ GLFW module installation probe passed for both the explicit preset and nil
 configuration before normal frame service. Full actiongame visual checks and
 performance profiles remain unverified.
 
+## Restored Snapshot Native Integration
+
+The S1q smoke restores a compiled ordinary placement from a saved delta through
+the real worker, commit and renderer bridge. Finite managed, native-work and
+sector-lookup allowances cover hidden initial publication, a structural successor,
+current coverage and retirement. It uses real submissions, without drawing or
+pixel readback. Apple M4 Pro/Metal passed; the separate S1m production G-buffer
+correctness test also passed. This does not establish gameplay visuals or FPS.
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache GEKKO_NATIVE_S1N=1 go test . -run '^TestS1qNativeRestoredWorkerBridgePublishesUnderFiniteNativeWork$' -count=1 -v
+env GOCACHE=/tmp/gekko3d-gocache GEKKO_NATIVE_S1M=1 go test ./cmd/voxelbench -run '^TestNativeSectorLookupS1mCorrectness$' -count=1 -v
+```
+
 ## Verified Warm Streaming Native Integration
 
 S1p exercises the configured native worker/bridge smoke after warming a compiled

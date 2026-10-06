@@ -478,7 +478,7 @@ defaults and remaining memory bounds.
 
 <a id="worker-prepared-ordinary-managed-assets-s1n"></a>
 
-### Worker-prepared ordinary managed assets (S1n/S1p)
+### Worker-prepared ordinary managed assets (S1n/S1p/S1q)
 
 Games can install the corresponding GPU policies through
 `VoxelRtModule.StreamingConfig` and `DefaultVoxelRtStreamingConfig()`; see
@@ -510,8 +510,9 @@ content, provenance, pointer or revision. Borrowed globals keep their current
 mutable geometry and ordinary compatibility path; palette IDs and mutable palette
 storage retain their existing semantics. Deletion removes the certificate; a
 fresh verified ID may qualify without sharing storage with old aliases. Legacy
-authored inputs, declared LODs, collapsed composites and restored snapshots retain
-their existing preparation. This first
+authored inputs, declared LODs and collapsed composites retain
+their existing preparation. Compiled restored snapshots use the independent
+[snapshot path below](#worker-prepared-restored-snapshots-s1q). This
 consumer does not migrate terrain, imported-world, retained, planet or backing
 ownership.
 
@@ -546,6 +547,46 @@ and [lookup publication](../renderer/runtime.md#bounded-sector-lookup-publicatio
 Worker construction is still one finite job. Metadata publication, placement hooks
 and compatibility copies remain main-thread work. Pending charges end at transfer;
 live CPU asset storage has its existing lifetime and is not an aggregate heap cap.
+
+<a id="worker-prepared-restored-snapshots-s1q"></a>
+
+### Worker-prepared restored snapshots (S1q)
+
+The same `EnableManagedPreparedAssets` flag also prepares private managed owners
+for worker-captured snapshots on compiled ordinary placements. Each item owns a
+sealed owner, independent CPU authority and first renderer derivative. Restored
+content is independent of the ordinary shared geometry certificate: a borrowed
+or edited global source cannot invalidate its private restored data.
+
+Schema-2 `base_delta` and schema-3 `hybrid_delta` use the authenticated compiled
+shape as the original construction base and the resolved snapshot as current
+geometry. Original identity, lattice, counts and decoded bytes survive later
+edits and reverts. Full and legacy v1 snapshots receive unbound tracking and keep
+full-save fallback. Snapshot bounds remain the restored bounds. Existing typed
+payload origin restrictions, declared LOD/collapse exclusions and special engine
+geometry ownership remain unchanged.
+
+Adoption requires the exact item tuple, selected asset path, effective lattice
+and chunk membership, plus the current fully validated payload identity and
+metadata. Unchanged identities reuse worker resolution without canonical map
+reconstruction. Changed, removed or late snapshots use the existing current
+resolver and compatibility registration, including equal geometry with changed
+full/delta metadata. This freshness check also applies to whole-chunk commits
+when a worker-prepared restored candidate is present. Legacy v1 uses ordered
+record equality and never infers original-base provenance.
+
+Initial pending admission reserves every ordinary source/registration and terrain
+component before dense construction. Before each restored owner is built,
+conservative constructor preflight adds its complete owner/authority/renderer
+construction peak to that reservation. Bound deltas use dual-source preflight,
+including original/current geometry, assignment and
+changed-brick tracking. Future component reservations remain held until final
+envelope reconciliation. Pressure refusal releases the whole result for retry;
+overflow fails. Release is idempotent, and unload, partial rollback
+and Stop own the exact adopted lease. Hooks may demote automatic ownership while
+preserving current content and its lease; replacement hooks retire only the old
+automatic owner. Renderer derivative consumption and GPU policy opt-ins follow
+the ordinary managed contracts above.
 
 ### Compact private prepared sources
 

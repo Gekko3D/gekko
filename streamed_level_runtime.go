@@ -54,8 +54,9 @@ const (
 )
 
 type StreamedLevelRuntimeConfig struct {
-	// EnableManagedPreparedAssets opts cold compiled ordinary placements into
-	// worker-prepared independent managed authority. GPU policies stay separate.
+	// EnableManagedPreparedAssets opts eligible compiled ordinary placements,
+	// including certified warm sources and restored snapshots, into independent
+	// worker-prepared managed authority. GPU policies stay separate.
 	EnableManagedPreparedAssets bool
 	// EnableHybridVoxelObjectDeltas selects schema-3 brick replacements when they
 	// reduce owned records and strictly reduce logical document bytes.
@@ -526,6 +527,7 @@ type streamedPreparedChunk struct {
 	ObjectSnapshots                       map[string]*content.VoxelObjectSnapshotDef
 	v2Placements                          map[string]bool
 	objectSnapshotGeometry                map[string]*streamedObjectSnapshotGeometry
+	objectSnapshotProofs                  map[string]*streamedSnapshotProof
 	compiledAssets                        map[string]*compiledAssetPacket
 	managedPreparedAssets                 map[string]*streamedManagedPreparedAsset
 	PrepareDuration                       time.Duration
@@ -2410,7 +2412,7 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 		if streamedPreparationCancelled(job.prepareCancel) {
 			return result
 		}
-		snapshot, v2, err := resolveStreamedVoxelObjectPayload(job.Loader, job.Placements, key, override, job.LevelPath, job.WorldDeltaPath)
+		snapshot, v2, proof, err := resolveStreamedVoxelObjectPayloadPrepared(job.Loader, job.Placements, key, override, job.LevelPath, job.WorldDeltaPath, result.compiledAssets)
 		if err != nil || streamedPreparationCancelled(job.prepareCancel) {
 			result.Err = err
 			return result
@@ -2422,6 +2424,12 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 			result.v2Placements[override.PlacementID] = true
 		}
 		result.ObjectSnapshots[key] = snapshot
+		if proof != nil && job.managedPreparedAssets {
+			if result.objectSnapshotProofs == nil {
+				result.objectSnapshotProofs = make(map[string]*streamedSnapshotProof)
+			}
+			result.objectSnapshotProofs[key] = proof
+		}
 	}
 	if streamedPreparationCancelled(job.prepareCancel) {
 		return result
@@ -2486,7 +2494,16 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 		geometry := XBrickMapFromVoxelObjectSnapshot(snapshot)
 		geometry.ComputeAABB()
 		geometry.ClearDirty()
-		result.objectSnapshotGeometry[key] = &streamedObjectSnapshotGeometry{snapshot: snapshot, source: geometry, registration: prepareStreamedGeometryRegistration(geometry)}
+		packet := &streamedObjectSnapshotGeometry{snapshot: snapshot, source: geometry, registration: prepareStreamedGeometryRegistration(geometry)}
+		result.objectSnapshotGeometry[key] = packet
+		cost, err := prepareStreamedRestoredManagedPart(&result, job, key, packet)
+		if err != nil {
+			result.Err = err
+			return result
+		}
+		if cost != 0 {
+			return retry(cost)
+		}
 	}
 
 	if result.TerrainChunk != nil && result.TerrainChunk.NonEmptyVoxelCount > 0 {

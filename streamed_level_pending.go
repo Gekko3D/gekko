@@ -1,6 +1,7 @@
 package gekko
 
 import (
+	"fmt"
 	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 	"sync"
 )
@@ -91,6 +92,41 @@ func (c *streamedPendingPreparedCredit) resize(cost int64) bool {
 	}
 	return true
 }
+
+// Add a distinct construction peak without consuming any previously reserved
+// source, registration, sibling or terrain storage. Overflow is an error, never
+// an oversized retry. Only final envelope admission reconciles downward.
+func (c *streamedPendingPreparedCredit) reserveConstruction(bytes int64) (int64, bool, error) {
+	if c == nil || c.owner == nil {
+		return 0, true, nil
+	}
+	o := c.owner
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if c.released || bytes < 0 {
+		return 0, false, fmt.Errorf("invalid construction credit")
+	}
+	limit := int64(^uint64(0) >> 1)
+	if bytes > limit-c.bytes {
+		return 0, false, fmt.Errorf("streamed construction credit overflow")
+	}
+	cost := c.bytes + bytes
+	other := o.stats.Bytes - c.bytes
+	if cost > limit-other {
+		return 0, false, fmt.Errorf("streamed construction credit overflow")
+	}
+	if other != 0 && (other > o.stats.MaxBytes || cost > o.stats.MaxBytes-other) {
+		o.stats.AdmissionRetries++
+		return cost, false, nil
+	}
+	o.stats.Bytes = other + cost
+	c.bytes = cost
+	if cost > o.stats.MaxBytes && !c.oversized {
+		o.stats.OversizedAdmissions++
+		c.oversized = true
+	}
+	return cost, true, nil
+}
 func (o *streamedPendingPreparedOwner) snapshot() streamedPendingPreparedStats {
 	if o == nil {
 		return streamedPendingPreparedStats{}
@@ -133,7 +169,7 @@ func streamedPreparedChunkCharge(p streamedPreparedChunk) int64 {
 	terrainRegistrationBytes := p.terrainRegistration.charge()
 	var snapshotGeometryBytes int64
 	for _, packet := range p.objectSnapshotGeometry {
-		snapshotGeometryBytes = runtimeContentChargeSum(snapshotGeometryBytes, streamedPendingGeometryCharge(packet.source), packet.registration.charge())
+		snapshotGeometryBytes = runtimeContentChargeSum(snapshotGeometryBytes, streamedPendingGeometryCharge(packet.source), packet.registration.charge(), packet.managed.charge())
 	}
 	p.objectSnapshotGeometry = nil
 	managedBytes := streamedManagedPreparedCharge(p.managedPreparedAssets)
