@@ -72,12 +72,24 @@ func trySpawnCollapsedAuthoredAssetWithPreparedOwnership(cmd *Commands, assets *
 
 	var build collapsedAuthoredVoxelBuild
 	var err error
-	if prepared != nil && prepared.legacyCollapse != nil {
+	if prepared != nil && prepared.compiledCollapse != nil {
+		key, keyErr := prepared.compiledCollapse.keyForDocument(def, opts.DocumentPath)
+		err = keyErr
+		if err == nil && prepared.compiledCollapse.adopted != nil && key == prepared.compiledCollapse.key {
+			build = *prepared.compiledCollapse.adopted
+		} else if err == nil {
+			var parts []authoredCollapseResolvedPart
+			parts, err = resolvePreparedAuthoredCollapseParts(assets, prepared)
+			if err == nil {
+				build, err = buildResolvedCollapsedAuthoredVoxelAssetWithKey(assets, def, opts.DocumentPath, parts, key)
+			}
+		}
+	} else if prepared != nil && prepared.legacyCollapse != nil {
 		if prepared.legacyCollapse.adopted != nil {
 			build = *prepared.legacyCollapse.adopted
 		} else {
 			var parts []authoredCollapseResolvedPart
-			parts, err = resolvePreparedLegacyCollapseParts(assets, prepared)
+			parts, err = resolvePreparedAuthoredCollapseParts(assets, prepared)
 			if err == nil {
 				build, err = buildResolvedCollapsedAuthoredVoxelAsset(assets, def, opts.DocumentPath, parts)
 			}
@@ -165,6 +177,10 @@ func buildCollapsedAuthoredVoxelAsset(assets *AssetServer, def *content.AssetDef
 }
 
 func buildResolvedCollapsedAuthoredVoxelAsset(assets *AssetServer, def *content.AssetDef, documentPath string, resolvedParts []authoredCollapseResolvedPart) (collapsedAuthoredVoxelBuild, error) {
+	return buildResolvedCollapsedAuthoredVoxelAssetWithKey(assets, def, documentPath, resolvedParts, "")
+}
+
+func buildResolvedCollapsedAuthoredVoxelAssetWithKey(assets *AssetServer, def *content.AssetDef, documentPath string, resolvedParts []authoredCollapseResolvedPart, keyOverride string) (collapsedAuthoredVoxelBuild, error) {
 	result := collapsedAuthoredVoxelBuild{}
 	if len(resolvedParts) < 2 {
 		return result, fmt.Errorf("voxel collapse requires at least two voxel-backed parts")
@@ -176,9 +192,12 @@ func buildResolvedCollapsedAuthoredVoxelAsset(assets *AssetServer, def *content.
 		return result, err
 	}
 
-	collapseKey, err := collapseGeometryCacheKey(def, documentPath, voxelResolution)
-	if err != nil {
-		return result, err
+	collapseKey := keyOverride
+	if collapseKey == "" {
+		collapseKey, err = collapseGeometryCacheKey(def, documentPath, voxelResolution)
+		if err != nil {
+			return result, err
+		}
 	}
 
 	cachedID, warm := assets.SharedVoxelGeometryByCacheKey(collapseKey)

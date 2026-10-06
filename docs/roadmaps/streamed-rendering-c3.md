@@ -19,8 +19,8 @@ construction, C3g4 owned source-model preparation, C3g5 model headers, C3g6 scop
 reads, C3g7 whole model closure verification, C3g8 owned model packets/adoption and C3g9
 public consumer integration, C3g10 shipping model emission and C3g11 CLI selection
 and C3g12 source-loading measurements, C3g13 direct canonical construction complete. Opt-in single-material opaque
-inline LOD is approved; model LOD, static collapse and mixed-material/transparency
-reduction stay conditional.
+inline LOD and P5n explicit inline collapse are complete; model LOD, model collapse
+and mixed-material/transparency reduction stay conditional.
 Parent: [optimization roadmap](streamed-rendering-content-optimization.md#c3-compile-heavy-assets-once-add-asset-lod).
 
 ## Authority and ownership
@@ -44,7 +44,7 @@ and existing prepared-resource publication own registered geometry.
 Start with inline `voxel_shape` and transform-only groups. Preserve separate
 animated parts. The compiler must use actual post-scale geometry and existing
 rasterization semantics, including signed coordinates. Unsupported source kinds
-and unsupported static collapse fail explicitly until their own compiler adapters
+and unsupported model collapse fail explicitly until their own compiler adapters
 exist. VOX declared dimensions, zero-color samples and collapse eligibility cannot
 be inferred from occupied bricks alone. Asset LOD is separate work.
 
@@ -77,6 +77,21 @@ implementation agents plus independent PRE/POST reviews apply to these boundarie
 
 ## Ordinary worker preparation boundary
 
+### P5n: Explicit inline compiled collapse
+
+Use an opt-in schema 3 for inline collapse, retaining schema-1/2 bytes and default
+rejection. Keep the existing compile options type and add a separate entry point.
+Model collapse remains excluded because canonical model frames lose raw ordered
+samples. Inline collapse already consumes canonical maps. Changing legacy format
+acceptance or reconstructing lossy model samples would conflict with those owners.
+
+The [format/compiler contract](../content/compiled-voxels.md#compiled-ordinary-asset-headers)
+and [runtime collapse contract](../assets/runtime-assets.md#authored-voxel-collapse-reuse)
+own version selection, authenticated composite identity, cold publication, direct
+live validation, LOD isolation and pending lifetime. Reuse the existing packet and
+AssetServer owners rather than adding a cache or managed lifetime. This is a
+lasting format extension, not a temporary bridge.
+
 Use owned CPU packets with transient decoded scopes and P5 registration copies.
 [Packet and publication contracts](../assets/runtime-assets.md#compiled-ordinary-asset-preparation)
 retain direct warm preparation and ordinary `AssetServer` lifetime. Imported
@@ -84,7 +99,7 @@ cache leases could delete geometry still used by direct callers; a parallel
 prepared cache adds another owner without demonstrated need.
 
 Streamed integration uses existing pending admission and placement commit gates.
-Model LOD, static collapse and further renderer-copy optimization remain separate
+Model LOD, model collapse and further renderer-copy optimization remain separate
 work; the delivered source adapters and inline LOD reuse this boundary.
 
 Palette preparation uses the existing full JSON identity and ordinary palette
@@ -709,7 +724,8 @@ compilation/parity remain outside timing and filesystem/codec are warm.
 The resolved C3 delivery is complete: explicit shipping compiler/CLI, inline and
 ordinary source adapters, owned direct/level/streamed consumers, authoritative
 geometry and opt-in conservative inline LOD with qualified GPU readiness.
-Remaining model LOD, static collapse, mixed-material/transparency reduction and
+P5n adds explicit inline compiled collapse through the same owners.
+Remaining model LOD, model collapse, mixed-material/transparency reduction and
 per-ray selection keep their separate eligibility/architecture gates. The parent
 roadmap remains partial because regional packs, public compact ownership and other
 proposals are not implied approvals. No further resolved C3 implementation remains.

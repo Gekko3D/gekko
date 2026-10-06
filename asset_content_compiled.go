@@ -230,8 +230,8 @@ func prepareCompiledAuthoredAsset(path string, assets *AssetServer, loader *Runt
 		return nil, err
 	}
 	defer session.close()
-	if assets != nil && (len(session.lods) != 0 || len(session.models) != 0) {
-		packet, err := prepareCompiledAssetPacketFromVerification(path, session, loader, nil, session.def.Parts)
+	if assets != nil && (len(session.lods) != 0 || len(session.models) != 0 || session.def.Runtime != nil && session.def.Runtime.CollapseVoxelParts) {
+		packet, err := prepareCompiledAssetPacketFromVerificationMode(path, session, loader, nil, session.def.Parts, true, false)
 		if err != nil {
 			return nil, err
 		}

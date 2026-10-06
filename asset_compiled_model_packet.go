@@ -89,3 +89,11 @@ func adoptCompiledAssetPacketGeometryOutcome(assets *AssetServer, shape *compile
 	}
 	return assets.adoptCompiledAssetGeometryOutcome(shape.contentID, shape.lattice, shape.baseIdentity, source, registration)
 }
+
+// Caller holds assets.mu for the whole packet's publication.
+func adoptCompiledAssetPacketGeometryOutcomeLocked(assets *AssetServer, shape *compiledAssetPacketShape, source *volume.XBrickMap, registration *streamedGeometryRegistration) (AssetId, bool, bool) {
+	if shape.model {
+		return assets.adoptCompiledAssetModelGeometryOutcomeLocked(shape.contentID, shape.lattice, shape.baseIdentity, shape.dimensions, source, registration)
+	}
+	return assets.adoptCompiledAssetGeometryOutcomeLocked(shape.contentID, shape.lattice, shape.baseIdentity, source, registration)
+}

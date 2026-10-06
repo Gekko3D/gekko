@@ -8,13 +8,13 @@ import (
 	"github.com/go-gl/mathgl/mgl32"
 )
 
-// Only streamed legacy packets install this marker. Direct and compiled
-// preparation retain their existing collapse/source resolution contracts.
+// Only streamed legacy packets install this marker. Direct legacy preparation
+// keeps its existing source resolution.
 type legacyPreparedCollapse struct {
 	adopted *collapsedAuthoredVoxelBuild
 }
 
-type legacyCollapseCandidate struct {
+type authoredCollapseCandidate struct {
 	key             string
 	geometry        *legacyAssetGeometry
 	paletteKey      string
@@ -25,7 +25,7 @@ type legacyCollapseCandidate struct {
 
 // Compose the exact TRS used by TransformHierarchySystem, relative to an
 // identity asset root. Parent voxel pivots/resolutions do not affect this TRS.
-func legacyCollapseWorldTransforms(def *content.AssetDef) map[string]TransformComponent {
+func authoredCollapseWorldTransforms(def *content.AssetDef) map[string]TransformComponent {
 	definitions := make(map[string]content.AssetPartDef, len(def.Parts))
 	for _, part := range def.Parts {
 		definitions[part.ID] = part
@@ -56,11 +56,11 @@ func legacyCollapseWorldTransforms(def *content.AssetDef) map[string]TransformCo
 	return worlds
 }
 
-func resolveLegacyCollapseParts(def *content.AssetDef, source func(content.AssetPartDef) (VoxelGeometryAsset, VoxelPaletteAsset, error)) ([]authoredCollapseResolvedPart, error) {
+func resolveAuthoredCollapsePartsFromSources(def *content.AssetDef, source func(content.AssetPartDef) (VoxelGeometryAsset, VoxelPaletteAsset, error)) ([]authoredCollapseResolvedPart, error) {
 	if len(def.Lights) > 0 || len(def.Emitters) > 0 || len(def.Markers) > 0 {
 		return nil, fmt.Errorf("voxel collapse only supports voxel-backed parts and groups")
 	}
-	worlds := legacyCollapseWorldTransforms(def)
+	worlds := authoredCollapseWorldTransforms(def)
 	parts := make([]authoredCollapseResolvedPart, 0, len(def.Parts))
 	for _, part := range def.Parts {
 		if part.Source.Kind == content.AssetSourceKindGroup {
@@ -82,11 +82,11 @@ func resolveLegacyCollapseParts(def *content.AssetDef, source func(content.Asset
 	return parts, nil
 }
 
-func resolvePreparedLegacyCollapseParts(assets *AssetServer, prepared *PreparedAuthoredAsset) ([]authoredCollapseResolvedPart, error) {
+func resolvePreparedAuthoredCollapseParts(assets *AssetServer, prepared *PreparedAuthoredAsset) ([]authoredCollapseResolvedPart, error) {
 	if assets == nil {
 		return nil, fmt.Errorf("voxel collapse requires asset server")
 	}
-	return resolveLegacyCollapseParts(prepared.def, func(part content.AssetPartDef) (VoxelGeometryAsset, VoxelPaletteAsset, error) {
+	return resolveAuthoredCollapsePartsFromSources(prepared.def, func(part content.AssetPartDef) (VoxelGeometryAsset, VoxelPaletteAsset, error) {
 		entry := prepared.parts[part.ID]
 		geometry, ok := assets.getVoxelGeometry(entry.model)
 		if !ok {
@@ -102,14 +102,21 @@ func resolvePreparedLegacyCollapseParts(assets *AssetServer, prepared *PreparedA
 
 // Semantic collapse failures retain expanded fallback. Allocation/publication
 // preparation failures remain real worker errors and release through the packet.
-func prepareLegacyCollapseCandidate(packet *legacyAssetPacket, loader *RuntimeContentLoader, cancelled func() bool) (*legacyCollapseCandidate, error) {
+func prepareLegacyCollapseCandidate(packet *legacyAssetPacket, loader *RuntimeContentLoader, cancelled func() bool) (*authoredCollapseCandidate, error) {
 	if err := checkCompiledAssetWork(loader, cancelled); err != nil {
 		return nil, err
 	}
-	parts, err := resolveLegacyCollapseParts(packet.def, func(part content.AssetPartDef) (VoxelGeometryAsset, VoxelPaletteAsset, error) {
+	parts, err := resolveAuthoredCollapsePartsFromSources(packet.def, func(part content.AssetPartDef) (VoxelGeometryAsset, VoxelPaletteAsset, error) {
 		return packet.geometries[packet.parts[part.ID]].source, *packet.palettes[packet.partPalettes[part.ID]].source, nil
 	})
-	if err != nil || len(parts) < 2 {
+	if err != nil {
+		return nil, nil
+	}
+	return prepareResolvedAuthoredCollapseCandidate(packet.def, packet.documentPath, "", parts, loader, cancelled)
+}
+
+func prepareResolvedAuthoredCollapseCandidate(def *content.AssetDef, documentPath, keyOverride string, parts []authoredCollapseResolvedPart, loader *RuntimeContentLoader, cancelled func() bool) (*authoredCollapseCandidate, error) {
+	if len(parts) < 2 {
 		return nil, nil
 	}
 	var palette *VoxelPaletteAsset
@@ -128,9 +135,13 @@ func prepareLegacyCollapseCandidate(packet *legacyAssetPacket, loader *RuntimeCo
 		return nil, nil
 	}
 	resolution := parts[0].voxelResolution
-	key, err := collapseGeometryCacheKey(packet.def, packet.documentPath, resolution)
-	if err != nil {
-		return nil, nil
+	key := keyOverride
+	if key == "" {
+		var err error
+		key, err = collapseGeometryCacheKey(def, documentPath, resolution)
+		if err != nil {
+			return nil, nil
+		}
 	}
 	combined := volume.NewXBrickMap()
 	partIDs := make(map[string]struct{}, len(parts))
@@ -164,12 +175,12 @@ func prepareLegacyCollapseCandidate(packet *legacyAssetPacket, loader *RuntimeCo
 	if err != nil {
 		return nil, err
 	}
-	return &legacyCollapseCandidate{key: key, geometry: &legacyAssetGeometry{source: geometry, registration: prepareLegacyGeometryRegistration(key, geometry)}, paletteKey: paletteKey, palette: &compiledAssetPacketPalette{source: ownedPalette, registration: registration}, voxelResolution: resolution, partIDs: partIDs}, nil
+	return &authoredCollapseCandidate{key: key, geometry: &legacyAssetGeometry{source: geometry, registration: prepareLegacyGeometryRegistration(key, geometry)}, paletteKey: paletteKey, palette: &compiledAssetPacketPalette{source: ownedPalette, registration: registration}, voxelResolution: resolution, partIDs: partIDs}, nil
 }
 
 // The source geometry and palettes were actually cold-transferred while this
 // same server lock remained held. No source alias has escaped in between.
-func (assets *AssetServer) adoptLegacyCollapseCandidateLocked(candidate *legacyCollapseCandidate) *collapsedAuthoredVoxelBuild {
+func (assets *AssetServer) adoptAuthoredCollapseCandidateLocked(candidate *authoredCollapseCandidate) *collapsedAuthoredVoxelBuild {
 	if _, warm := assets.voxModelKeys[candidate.key]; warm {
 		return nil
 	}

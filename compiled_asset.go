@@ -74,6 +74,17 @@ func CompileAuthoredAssetWithOptions(inputPath, outputPath string, codec *voxelc
 	return result, nil
 }
 
+// CompileAuthoredCollapsedAssetWithOptions explicitly permits inline static
+// collapse in schema 3. Ordinary inputs retain their existing schema and bytes.
+// Model inputs remain unsupported because canonical frames omit raw samples.
+func CompileAuthoredCollapsedAssetWithOptions(inputPath, outputPath string, codec *voxelcodec.Codec, options CompiledAssetCompileOptions) (CompiledAssetCompileDetailedResult, error) {
+	result, err := compileAuthoredAssetClosureWithCollapse(inputPath, outputPath, codec, options, false, true)
+	if err != nil {
+		return CompiledAssetCompileDetailedResult{}, err
+	}
+	return result.CompiledAssetCompileDetailedResult, nil
+}
+
 func compileAuthoredAsset(inputPath, outputPath string, codec *voxelcodec.Codec, options CompiledAssetCompileOptions) (CompiledAssetCompileDetailedResult, error) {
 	result, err := compileAuthoredAssetClosure(inputPath, outputPath, codec, options, false)
 	return result.CompiledAssetCompileDetailedResult, err
@@ -82,6 +93,10 @@ func compileAuthoredAsset(inputPath, outputPath string, codec *voxelcodec.Codec,
 // One pipeline owns dependency rewriting, preflight and durable publication for
 // both explicit shipping formats. Legacy wrappers retain their result and bytes.
 func compileAuthoredAssetClosure(inputPath, outputPath string, codec *voxelcodec.Codec, options CompiledAssetCompileOptions, includeModels bool) (CompiledAssetModelCompileResult, error) {
+	return compileAuthoredAssetClosureWithCollapse(inputPath, outputPath, codec, options, includeModels, false)
+}
+
+func compileAuthoredAssetClosureWithCollapse(inputPath, outputPath string, codec *voxelcodec.Codec, options CompiledAssetCompileOptions, includeModels, allowCollapse bool) (CompiledAssetModelCompileResult, error) {
 	var result CompiledAssetModelCompileResult
 	raw, err := os.ReadFile(inputPath)
 	if err != nil {
@@ -99,7 +114,7 @@ func compileAuthoredAssetClosure(inputPath, outputPath string, codec *voxelcodec
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return result, fmt.Errorf("authoring JSON has trailing data: %v", err)
 	}
-	if err := validateCompiledSourceKinds(&asset, includeModels); err != nil {
+	if err := validateCompiledSourceKindsWithCollapse(&asset, includeModels, allowCollapse); err != nil {
 		return result, err
 	}
 	content.NormalizeAssetDef(&asset)
@@ -129,6 +144,10 @@ func compileAuthoredAssetClosure(inputPath, outputPath string, codec *voxelcodec
 	if options.EnableLOD2 {
 		header.SchemaVersion = content.CompiledAssetLODHeaderSchemaVersion
 		header.CompilerVersion = content.CompiledAssetLODHeaderCompilerVersion
+	}
+	if asset.Runtime != nil && asset.Runtime.CollapseVoxelParts {
+		header.SchemaVersion = content.CompiledAssetCollapseHeaderSchemaVersion
+		header.CompilerVersion = content.CompiledAssetCollapseHeaderCompilerVersion
 	}
 	var modelHeader *content.CompiledAssetModelHeaderDef
 	var modelPalettes map[string]struct{}
@@ -313,8 +332,12 @@ func validateCompiledSource(asset *content.AssetDef) error {
 }
 
 func validateCompiledSourceKinds(asset *content.AssetDef, includeModels bool) error {
+	return validateCompiledSourceKindsWithCollapse(asset, includeModels, false)
+}
+
+func validateCompiledSourceKindsWithCollapse(asset *content.AssetDef, includeModels, allowCollapse bool) error {
 	valid := func(id string) bool { return strings.TrimSpace(id) != "" && utf8.ValidString(id) }
-	if asset.SchemaVersion != 4 || !valid(asset.ID) || asset.Runtime != nil && asset.Runtime.CollapseVoxelParts {
+	if asset.SchemaVersion != 4 || !valid(asset.ID) || asset.Runtime != nil && asset.Runtime.CollapseVoxelParts && (!allowCollapse || includeModels) {
 		return fmt.Errorf("unsupported authoring schema, missing ID or static collapse")
 	}
 	for _, m := range asset.Materials {

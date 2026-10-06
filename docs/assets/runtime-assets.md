@@ -477,11 +477,32 @@ mutable inputs. Warm inputs or an existing composite use current live prepared
 part IDs for eligibility, validation and baking/reuse, without rereading VOX
 or animation sources. This preserves edited model rows, maps, nested palettes
 and cached composites; cold rebuilding from warm inputs remains main-thread
-work. Direct public and compiled collapse behavior is unchanged. Faster warm
+work. Direct public legacy collapse behavior is unchanged. Faster warm
 preparation requires a separate certification or immutable capture contract.
 
-Candidate geometry, publication storage, keys and metadata participate in the
-existing conservative legacy packet admission charge and idempotent cleanup.
+P5n adds explicit [schema-3 inline compiled collapse](../content/compiled-voxels.md#compiled-ordinary-asset-headers).
+Full streamed packets use the same pure hierarchy and ordered bake rules, with
+independent composite source, publication geometry and output palette. Their
+private composite key binds ordered authenticated shape identities and lattice,
+asset metadata and the clean absolute document path. Relative/absolute aliases
+share this domain; changing referenced geometry at the same path changes the key.
+The public legacy collapse key remains unchanged.
+
+Compiled publication holds one AssetServer lock across source geometry, palettes,
+LOD associations and candidate acceptance. Only actual cold input transfers and
+a cold composite entry qualify worker adoption; warm inputs use their current
+published IDs for live validation/baking or validated composite reuse, without
+compiled frame or header rereads. Direct public preparation creates no worker
+candidate and counts no `WorkerAdoptions`; it retains published IDs and the key,
+so edits between preparation and spawning remain visible. Selected-first-part
+consumers verify the entire closure but never prepare a whole-asset composite.
+Declared inline LODs retain full-resolution authority and intent only on expanded
+parts; collapsed output receives no part LOD intent, edit-base identity or compiled
+certificate. Model-header collapse remains unsupported.
+
+Both legacy and compiled packets charge candidate geometry, independent publication
+storage, palette, keys and metadata through their existing conservative pending
+owner and idempotent cleanup.
 Unused candidates drain on warm fallback, pressure, cancellation, stale results,
 errors and Stop. Published composites retain ordinary global lifetime and do
 not acquire managed ownership or per-part persistence identity. Construction

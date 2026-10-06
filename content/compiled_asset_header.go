@@ -15,11 +15,13 @@ import (
 )
 
 const (
-	CurrentCompiledAssetHeaderSchemaVersion = 1
-	CurrentCompiledAssetCompilerVersion     = "gekko-compiled-asset-v1"
-	CompiledAssetLODHeaderSchemaVersion     = 2
-	CompiledAssetLODHeaderCompilerVersion   = "gekko-compiled-asset-v2"
-	MaxCompiledAssetParts                   = 4096
+	CurrentCompiledAssetHeaderSchemaVersion    = 1
+	CurrentCompiledAssetCompilerVersion        = "gekko-compiled-asset-v1"
+	CompiledAssetLODHeaderSchemaVersion        = 2
+	CompiledAssetLODHeaderCompilerVersion      = "gekko-compiled-asset-v2"
+	CompiledAssetCollapseHeaderSchemaVersion   = 3
+	CompiledAssetCollapseHeaderCompilerVersion = "gekko-compiled-asset-v3"
+	MaxCompiledAssetParts                      = 4096
 )
 
 // CompiledAssetHeaderDef retains asset metadata and explicit part geometry references.
@@ -101,6 +103,10 @@ func validateCompiledAssetHeader(header *CompiledAssetHeaderDef, limits voxelcod
 		if header.CompilerVersion != CompiledAssetLODHeaderCompilerVersion {
 			return fmt.Errorf("invalid compiled asset header schema or compiler version")
 		}
+	case CompiledAssetCollapseHeaderSchemaVersion:
+		if header.CompilerVersion != CompiledAssetCollapseHeaderCompilerVersion || header.Asset.Runtime == nil || !header.Asset.Runtime.CollapseVoxelParts {
+			return fmt.Errorf("invalid compiled collapse header schema or compiler version")
+		}
 	default:
 		return fmt.Errorf("invalid compiled asset header schema or compiler version")
 	}
@@ -108,7 +114,7 @@ func validateCompiledAssetHeader(header *CompiledAssetHeaderDef, limits voxelcod
 	if len(asset.Parts) > MaxCompiledAssetParts || len(header.Shapes) > MaxCompiledAssetParts || len(header.LODs) > MaxCompiledAssetParts {
 		return fmt.Errorf("compiled asset exceeds part/reference limits")
 	}
-	if !compiledAssetExplicitID(asset.ID) || asset.Runtime != nil && asset.Runtime.CollapseVoxelParts {
+	if !compiledAssetExplicitID(asset.ID) || asset.Runtime != nil && asset.Runtime.CollapseVoxelParts && header.SchemaVersion != CompiledAssetCollapseHeaderSchemaVersion {
 		return fmt.Errorf("compiled asset requires an explicit ID and separate parts")
 	}
 	for _, material := range asset.Materials {

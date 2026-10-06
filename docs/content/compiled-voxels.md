@@ -529,6 +529,16 @@ Explicit runtime selection and coherent dependency emission follow the
 [C3 design](../roadmaps/streamed-rendering-c3.md); existing authoring readers are
 unchanged.
 
+Explicit schema 3 pairs with `gekko-compiled-asset-v3` and requires
+`Runtime.CollapseVoxelParts=true`. It accepts only inline shapes and groups and
+retains the schema-2 optional LOD reference rules. Shapes remain separate
+authoritative frames; runtime collapse uses full-resolution geometry, with
+expanded fallback for animations or incompatible collapse inputs. Schema 1/2
+and model headers continue rejecting static collapse. Model frames lose ordered
+raw sample history, so they cannot reproduce the existing collapse contract.
+The [runtime collapse owner](../assets/runtime-assets.md#authored-voxel-collapse-reuse)
+defines candidate publication, live edit compatibility and lifetime.
+
 ## Ordinary asset compiler emission
 
 From the engine module, compile an explicit shipping artifact with:
@@ -549,6 +559,19 @@ static collapse remain unsupported. Source schema 4 and persisted nonblank IDs
 are required before existing normalization. Existing validation, animation
 resolution and `ModelScale` construction define parity. The compiler leaves
 source files unchanged. Inputs and dependencies must remain stable during a run.
+
+Opt in to inline static collapse with:
+
+```sh
+go run ./cmd/assetcompile -in path/to/source.gkasset -out path/to/shipping/asset.gkassetc -static-collapse
+```
+
+`gekko.CompileAuthoredCollapsedAssetWithOptions(inputPath, outputPath, codec,
+options)` selects schema 3 only when the authored asset requests collapse;
+otherwise it preserves ordinary schema-1/2 output. The existing options type is
+unchanged; `EnableLOD2` or CLI `-lod2` can retain declared inline derivatives.
+`-static-collapse` rejects `.gkmodelassetc` output. Default entry points retain
+their static-collapse rejection and unchanged output bytes.
 
 Shapes use `shapes/<encoded-byte-sha256>.gkshape`; references retain C1 logical
 content/base identities and exact frame sizes. Unique identical frames share a

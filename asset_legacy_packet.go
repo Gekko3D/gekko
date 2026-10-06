@@ -20,7 +20,7 @@ type legacyAssetPacket struct {
 	partPalettes map[string]string
 	geometries   map[string]*legacyAssetGeometry
 	palettes     map[string]*compiledAssetPacketPalette
-	collapse     *legacyCollapseCandidate
+	collapse     *authoredCollapseCandidate
 }
 type legacyAssetGeometry struct {
 	source       VoxelGeometryAsset
@@ -357,7 +357,7 @@ func publishLegacyAssetPacket(p *legacyAssetPacket, assets *AssetServer, loader 
 		if p.def.Runtime != nil && p.def.Runtime.CollapseVoxelParts {
 			prepared.legacyCollapse = &legacyPreparedCollapse{}
 			if allCold && p.collapse != nil {
-				prepared.legacyCollapse.adopted = assets.adoptLegacyCollapseCandidateLocked(p.collapse)
+				prepared.legacyCollapse.adopted = assets.adoptAuthoredCollapseCandidateLocked(p.collapse)
 			}
 		}
 	}

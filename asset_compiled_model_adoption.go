@@ -20,9 +20,17 @@ func (server *AssetServer) adoptCompiledAssetModelGeometryOutcome(contentID stri
 		return AssetId{}, false, false
 	}
 	server.ensureVoxelStorage()
-	key := "compiled-asset-model:" + contentID
 	server.mu.Lock()
 	defer server.mu.Unlock()
+	return server.adoptCompiledAssetModelGeometryOutcomeLocked(contentID, lattice, baseIdentity, dimensions, source, registration)
+}
+
+// Caller holds server.mu; the final result reports an actual cold transfer.
+func (server *AssetServer) adoptCompiledAssetModelGeometryOutcomeLocked(contentID string, lattice content.VoxelObjectLatticeDef, baseIdentity string, dimensions [3]uint32, source *volume.XBrickMap, registration *streamedGeometryRegistration) (AssetId, bool, bool) {
+	if source == nil || registration == nil || contentID == "" || baseIdentity == "" || !compiledModelPositiveFinite(lattice.VoxelResolution) || lattice.RasterizationVersion != compiledAssetModelRasterizationVersion {
+		return AssetId{}, false, false
+	}
+	key := "compiled-asset-model:" + contentID
 	if id, warm := server.voxModelKeys[key]; warm {
 		// A warm global asset retains its current mutable geometry. The unused
 		// registration belongs to this attempt and must drain on either outcome.

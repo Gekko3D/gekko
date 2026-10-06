@@ -30,11 +30,12 @@ type AuthoredAssetSpawnOptions struct {
 }
 
 type PreparedAuthoredAsset struct {
-	def            *content.AssetDef
-	documentPath   string
-	animations     *content.ResolvedAssetAnimations
-	parts          map[string]preparedAuthoredPart
-	legacyCollapse *legacyPreparedCollapse
+	def              *content.AssetDef
+	documentPath     string
+	animations       *content.ResolvedAssetAnimations
+	parts            map[string]preparedAuthoredPart
+	legacyCollapse   *legacyPreparedCollapse
+	compiledCollapse *compiledPreparedCollapse
 }
 
 // PreparedAuthoredAssetHasMarkerKind reports whether an authored asset

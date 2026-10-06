@@ -14,22 +14,9 @@ func streamedLegacyAssetPacketsCharge(packets map[string]*legacyAssetPacket) int
 		seen[p] = true
 		metadata := *p
 		if p.collapse != nil {
-			candidate := *p.collapse
-			geometry := *candidate.geometry
-			geometry.source = VoxelGeometryAsset{}
-			geometry.registration = nil
-			candidate.geometry = &geometry
-			candidate.palette = &compiledAssetPacketPalette{source: p.collapse.palette.source}
-			metadata.collapse = &candidate
-			r := p.collapse.geometry.registration
-			bytes = runtimeContentChargeSum(bytes, legacyGeometrySourceCharge(p.collapse.geometry.source), int64(unsafe.Sizeof(legacyGeometryRegistration{})), int64(len(r.key)))
-			r.mu.Lock()
-			if r.asset != nil {
-				bytes = runtimeContentChargeSum(bytes, legacyGeometrySourceCharge(*r.asset))
-			}
-			r.mu.Unlock()
-			palette := p.collapse.palette.registration
-			bytes = runtimeContentChargeSum(bytes, int64(unsafe.Sizeof(compiledPaletteRegistration{})), int64(len(palette.key)), palette.charge())
+			var charge int64
+			metadata.collapse, charge = authoredCollapseCandidateChargeMetadata(p.collapse)
+			bytes = runtimeContentChargeSum(bytes, charge)
 		}
 		metadata.geometries = make(map[string]*legacyAssetGeometry, len(p.geometries))
 		for key, g := range p.geometries {
@@ -52,4 +39,25 @@ func streamedLegacyAssetPacketsCharge(packets map[string]*legacyAssetPacket) int
 		bytes = runtimeContentChargeSum(bytes, runtimeContentGraphCharge(&metadata))
 	}
 	return runtimeContentChargeSum(bytes, runtimeContentGraphCharge(keys))
+}
+
+// Scalar metadata keeps the immutable palette graph, while volume storage and
+// live registration mutexes are charged separately rather than reflected.
+func authoredCollapseCandidateChargeMetadata(source *authoredCollapseCandidate) (*authoredCollapseCandidate, int64) {
+	candidate := *source
+	geometry := *candidate.geometry
+	geometry.source = VoxelGeometryAsset{}
+	geometry.registration = nil
+	candidate.geometry = &geometry
+	candidate.palette = &compiledAssetPacketPalette{source: source.palette.source}
+	r := source.geometry.registration
+	bytes := runtimeContentChargeSum(legacyGeometrySourceCharge(source.geometry.source), int64(unsafe.Sizeof(legacyGeometryRegistration{})), int64(len(r.key)))
+	r.mu.Lock()
+	if r.asset != nil {
+		bytes = runtimeContentChargeSum(bytes, legacyGeometrySourceCharge(*r.asset))
+	}
+	r.mu.Unlock()
+	palette := source.palette.registration
+	bytes = runtimeContentChargeSum(bytes, int64(unsafe.Sizeof(compiledPaletteRegistration{})), int64(len(palette.key)), palette.charge())
+	return &candidate, bytes
 }

@@ -17,6 +17,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	input := flags.String("in", "", "authoring asset JSON path")
 	output := flags.String("out", "", "compiled header path ending in .gkassetc or .gkmodelassetc")
 	lod2 := flags.Bool("lod2", false, "emit optional conservative 2x LOD for eligible opaque inline parts")
+	staticCollapse := flags.Bool("static-collapse", false, "explicitly permit inline static collapse in schema 3")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -30,6 +31,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("assetcompile requires -in and -out")
 	}
 	modelOutput := filepath.Ext(*output) == ".gkmodelassetc"
+	if modelOutput && *staticCollapse {
+		return fmt.Errorf("static collapse requires inline .gkassetc output")
+	}
 	if !modelOutput && filepath.Ext(*output) != ".gkassetc" {
 		return fmt.Errorf("compiled output must end in lowercase .gkassetc or .gkmodelassetc")
 	}
@@ -42,6 +46,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		compiled, err = gekko.CompileAuthoredModelAssetWithOptions(*input, *output, nil, options)
 		result = compiled.CompiledAssetCompileDetailedResult
 		modelsWritten, modelsReused = compiled.ModelsWritten, compiled.ModelsReused
+	} else if *staticCollapse {
+		result, err = gekko.CompileAuthoredCollapsedAssetWithOptions(*input, *output, nil, options)
 	} else {
 		result, err = gekko.CompileAuthoredAssetWithOptions(*input, *output, nil, options)
 	}

@@ -44,6 +44,11 @@ func streamedCompiledAssetPacketsCharge(packets map[string]*compiledAssetPacket)
 		}
 		seenPackets[packet] = struct{}{}
 		metadata := *packet
+		if packet.collapse != nil {
+			var charge int64
+			metadata.collapse, charge = authoredCollapseCandidateChargeMetadata(packet.collapse)
+			bytes = runtimeContentChargeSum(bytes, charge)
+		}
 		if packet.shapes != nil {
 			metadata.shapes = make(map[string]*compiledAssetPacketShape, len(packet.shapes))
 		}

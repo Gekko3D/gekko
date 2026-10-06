@@ -13,15 +13,19 @@ import (
 // contains no cached shape definitions or global asset IDs. Each registration owns a second,
 // independent copy suitable for a later single-use main-thread transfer.
 type compiledAssetPacket struct {
-	def          *content.AssetDef
-	documentPath string
-	animations   *content.ResolvedAssetAnimations
-	parts        map[string]string
-	shapes       map[string]*compiledAssetPacketShape
-	partPalettes map[string]string
-	palettes     map[string]*compiledAssetPacketPalette
-	partLODs     map[string]string
-	lods         map[string]*compiledAssetPacketLOD
+	def              *content.AssetDef
+	documentPath     string
+	animations       *content.ResolvedAssetAnimations
+	parts            map[string]string
+	shapes           map[string]*compiledAssetPacketShape
+	partPalettes     map[string]string
+	palettes         map[string]*compiledAssetPacketPalette
+	partLODs         map[string]string
+	lods             map[string]*compiledAssetPacketLOD
+	wholeAsset       bool
+	collapseKey      string
+	collapseBindings []compiledCollapseBinding
+	collapse         *authoredCollapseCandidate
 }
 
 type compiledAssetPacketPalette struct {
@@ -57,6 +61,10 @@ func (packet *compiledAssetPacket) release() {
 			lod.registration.release()
 		}
 	}
+	if packet.collapse != nil {
+		packet.collapse.geometry.registration.release()
+		packet.collapse.palette.registration.release()
+	}
 }
 
 func prepareCompiledAssetPacket(path string, loader *RuntimeContentLoader, cancelled func() bool) (*compiledAssetPacket, error) {
@@ -65,18 +73,23 @@ func prepareCompiledAssetPacket(path string, loader *RuntimeContentLoader, cance
 		return nil, err
 	}
 	defer session.close()
-	return prepareCompiledAssetPacketFromVerification(path, session, loader, cancelled, session.def.Parts)
+	return prepareCompiledAssetPacketFromVerificationMode(path, session, loader, cancelled, session.def.Parts, true, true)
 }
 
 // The caller owns the live verification session and closes it after construction.
 // Whole-closure verification precedes even a selected first-part packet build.
 func prepareCompiledAssetPacketFromVerification(path string, session *compiledAssetVerification, loader *RuntimeContentLoader, cancelled func() bool, parts []content.AssetPartDef) (*compiledAssetPacket, error) {
+	return prepareCompiledAssetPacketFromVerificationMode(path, session, loader, cancelled, parts, false, false)
+}
+
+func prepareCompiledAssetPacketFromVerificationMode(path string, session *compiledAssetVerification, loader *RuntimeContentLoader, cancelled func() bool, parts []content.AssetPartDef, wholeAsset, buildCandidate bool) (*compiledAssetPacket, error) {
 	packet := &compiledAssetPacket{
 		def: session.def, documentPath: path, animations: session.animations,
 		parts:        make(map[string]string, len(session.shapes)+len(session.models)),
 		shapes:       make(map[string]*compiledAssetPacketShape, len(session.shapes)+len(session.models)),
 		partPalettes: make(map[string]string, len(session.shapes)+len(session.models)),
 		palettes:     make(map[string]*compiledAssetPacketPalette),
+		wholeAsset:   wholeAsset,
 	}
 	// Baselines are created only for authenticated derivatives, before the
 	// verification scope closes or any mutable packet storage is published.
@@ -162,6 +175,12 @@ func prepareCompiledAssetPacketFromVerification(path string, session *compiledAs
 	if err := checkCompiledAssetWork(loader, cancelled); err != nil {
 		return nil, err
 	}
+	if err := prepareCompiledCollapse(packet, loader, cancelled, buildCandidate); err != nil {
+		return nil, err
+	}
+	if err := checkCompiledAssetWork(loader, cancelled); err != nil {
+		return nil, err
+	}
 	success = true
 	return packet, nil
 }
@@ -177,6 +196,12 @@ func publishCompiledAssetPacket(packet *compiledAssetPacket, assets *AssetServer
 	}
 	prepared := &PreparedAuthoredAsset{def: packet.def, documentPath: packet.documentPath, animations: packet.animations, parts: make(map[string]preparedAuthoredPart, len(packet.def.Parts))}
 	models := make(map[string]AssetId, len(packet.shapes))
+	allCold := true
+	if assets != nil {
+		assets.ensureVoxelStorage()
+		assets.mu.Lock()
+		defer assets.mu.Unlock()
+	}
 	if assets != nil {
 		for _, part := range packet.def.Parts {
 			contentID, exists := packet.parts[part.ID]
@@ -190,11 +215,11 @@ func publishCompiledAssetPacket(packet *compiledAssetPacket, assets *AssetServer
 			if shape == nil {
 				return nil, fmt.Errorf("compiled packet shape is missing")
 			}
-			id, adopted := adoptCompiledAssetPacketGeometry(assets, shape, shape.source, shape.registration)
+			id, adopted, cold := adoptCompiledAssetPacketGeometryOutcomeLocked(assets, shape, shape.source, shape.registration)
 			if !adopted {
 				// A warm conflict must never be bypassed by defensive registration.
 				// Rebuild only a consumed cold handle after public key deletion.
-				if _, warm := assets.SharedVoxelGeometryByCacheKey(compiledAssetPacketGeometryKey(shape)); warm || shape.registration.charge() != 0 {
+				if _, warm := assets.voxModelKeys[compiledAssetPacketGeometryKey(shape)]; warm || shape.registration.charge() != 0 {
 					return nil, fmt.Errorf("compiled packet geometry adoption rejected")
 				}
 				source := shape.source
@@ -202,19 +227,20 @@ func publishCompiledAssetPacket(packet *compiledAssetPacket, assets *AssetServer
 					source = proof.full.Copy()
 				}
 				fresh := prepareStreamedGeometryRegistration(source)
-				id, adopted = adoptCompiledAssetPacketGeometry(assets, shape, source, fresh)
+				id, adopted, cold = adoptCompiledAssetPacketGeometryOutcomeLocked(assets, shape, source, fresh)
 				fresh.release()
 				if !adopted {
 					return nil, fmt.Errorf("compiled packet geometry rebuild rejected")
 				}
 			}
 			models[contentID] = id
+			allCold = allCold && cold
 		}
 	}
 	if assets != nil {
 		for _, part := range packet.def.Parts {
 			if lodID, exists := packet.partLODs[part.ID]; exists {
-				if !assets.adoptCompiledAssetPacketLOD(models[packet.parts[part.ID]], packet.lods[lodID]) {
+				if !assets.adoptCompiledAssetPacketLODLocked(models[packet.parts[part.ID]], packet.lods[lodID]) {
 					return nil, fmt.Errorf("compiled packet LOD adoption rejected")
 				}
 			}
@@ -234,13 +260,11 @@ func publishCompiledAssetPacket(packet *compiledAssetPacket, assets *AssetServer
 			if palette == nil || palette.registration == nil {
 				return nil, fmt.Errorf("compiled packet palette is missing")
 			}
-			id, adopted := assets.adoptCompiledAssetPalette(key, palette.source, palette.registration)
+			id, adopted, cold := assets.adoptCompiledAssetPaletteLocked(key, palette.source, palette.registration)
 			if !adopted {
 				// A stale key is an existing ownership conflict. Only a consumed
 				// cold handle with no key can be rebuilt from the packet source.
-				assets.mu.RLock()
 				_, keyed := assets.voxPaletteKeys[key]
-				assets.mu.RUnlock()
 				if keyed || palette.registration.charge() != 0 {
 					return nil, fmt.Errorf("compiled packet palette adoption rejected")
 				}
@@ -248,13 +272,14 @@ func publishCompiledAssetPacket(packet *compiledAssetPacket, assets *AssetServer
 				if err != nil {
 					return nil, err
 				}
-				id, adopted = assets.adoptCompiledAssetPalette(key, palette.source, fresh)
+				id, adopted, cold = assets.adoptCompiledAssetPaletteLocked(key, palette.source, fresh)
 				fresh.release()
 				if !adopted {
 					return nil, fmt.Errorf("compiled packet palette rebuild rejected")
 				}
 			}
 			palettes[key] = id
+			allCold = allCold && cold
 		}
 	}
 	for _, part := range packet.def.Parts {
@@ -263,13 +288,23 @@ func publishCompiledAssetPacket(packet *compiledAssetPacket, assets *AssetServer
 			if contentID, exists := packet.parts[part.ID]; exists {
 				preparedPart = preparedAuthoredPart{model: models[contentID], palette: palettes[packet.partPalettes[part.ID]]}
 				if _, declared := packet.partLODs[part.ID]; declared {
-					if binding, exists := assets.compiledAssetLODForGeometry(preparedPart.model); exists {
+					if binding := assets.compiledAssetLODs[preparedPart.model]; assets.compiledAssetLODBindingValidLocked(preparedPart.model, binding) {
 						preparedPart.compiledLOD = binding.coarseID
 					}
 				}
 			}
 		}
 		prepared.parts[part.ID] = preparedPart
+	}
+	if assets != nil && packet.wholeAsset && packet.collapseKey != "" {
+		absolute, err := filepath.Abs(packet.documentPath)
+		if err != nil {
+			return nil, err
+		}
+		prepared.compiledCollapse = &compiledPreparedCollapse{documentPath: filepath.Clean(absolute), key: packet.collapseKey, bindings: append([]compiledCollapseBinding(nil), packet.collapseBindings...)}
+		if allCold && packet.collapse != nil {
+			prepared.compiledCollapse.adopted = assets.adoptAuthoredCollapseCandidateLocked(packet.collapse)
+		}
 	}
 	if err := checkCompiledAssetWork(loader, nil); err != nil {
 		return nil, err

@@ -75,6 +75,14 @@ func (server *AssetServer) adoptCompiledAssetPacketLOD(fullID AssetId, lod *comp
 	server.ensureVoxelStorage()
 	server.mu.Lock()
 	defer server.mu.Unlock()
+	return server.adoptCompiledAssetPacketLODLocked(fullID, lod)
+}
+
+// Caller holds server.mu through full packet publication and qualification.
+func (server *AssetServer) adoptCompiledAssetPacketLODLocked(fullID AssetId, lod *compiledAssetPacketLOD) bool {
+	if lod == nil || fullID == (AssetId{}) || !validCompiledAssetLODProof(lod.proof) || lod.contentID != lod.proof.contentID || lod.sourceContentID != lod.proof.sourceContentID || lod.value != lod.proof.value {
+		return false
+	}
 	// LOD ownership directly borrows full/coarse maps. Their ordinary compiled
 	// certificates must not survive that borrow, including failed binding attempts.
 	server.revokeCompiledAssetWarmCertificateLocked(fullID)
