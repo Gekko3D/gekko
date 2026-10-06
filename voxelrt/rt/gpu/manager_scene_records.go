@@ -152,6 +152,12 @@ func (m *GpuBufferManager) sceneObjectParamsKey(obj *core.VoxelObject) scenePara
 	if alloc.Sectors != nil {
 		key.sectors = uint32(len(alloc.Sectors))
 	}
+	if alloc.lookupPublicationKnown {
+		if !alloc.lookupCommitted {
+			return sceneParamsKey{admissionRejected: true}
+		}
+		key.mapID, key.sectors = alloc.lookupMapID, alloc.lookupSectorCount
+	}
 	if material := m.MaterialAllocations[obj]; material != nil {
 		key.material = true
 		key.materialOffset = material.MaterialOffset

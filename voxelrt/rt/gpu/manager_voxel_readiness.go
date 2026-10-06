@@ -41,7 +41,8 @@ func (m *GpuBufferManager) voxelTargetAllocationReady(obj *core.VoxelObject, xbm
 	if alloc == nil || xbm.StructureDirty ||
 		len(alloc.Sectors) != len(xbm.Sectors) || len(alloc.Bricks) != len(xbm.Sectors) ||
 		pendingSectors != 0 || pendingBricks != 0 ||
-		m.lastSectorGridTopologyRevision != m.sectorTopologyRevision {
+		(!m.sectorLookupOwnershipActive() && m.lastSectorGridTopologyRevision != m.sectorTopologyRevision) ||
+		(m.sectorLookupOwnershipActive() && !m.sectorLookupCoverageCurrent(xbm)) {
 		return false, pendingSectors, pendingBricks
 	}
 	ready = materialBindingReady(obj, m.MaterialAllocations[obj], m.MaterialBufferGeneration)

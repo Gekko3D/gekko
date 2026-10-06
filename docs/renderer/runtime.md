@@ -1381,9 +1381,10 @@ commit, sharing the entry allowance across CPU enumeration/reconciliation,
 managed GPU coordinate preparation and retirement. Existing native admission,
 growth and uploads run once in the normal post-commit update. A completed upload
 can promote only on the next pre-commit service, after live source, CPU coverage,
-GPU snapshot coverage and material readiness revalidation. Global lookup rebuild
-remains atomic. Precharged coordinate/bounds backing allocation and zeroing can
-scale with finite topology; entry limits do not establish a wall-clock frame bound. Initial objects stay unready until complete publication;
+GPU snapshot coverage and material readiness revalidation. Lookup publication
+remains atomic; [S1m](#bounded-sector-lookup-publication-s1m) optionally spreads
+its preparation across frames. Precharged coordinate/bounds backing allocation
+and zeroing can scale with finite topology; entry limits do not establish a wall-clock frame bound. Initial objects stay unready until complete publication;
 replacement refusal preserves current coverage.
 
 `ManagedGeometryView.SameTopology` compares immutable coordinate-frontier identity
@@ -1461,6 +1462,70 @@ selection; a nil selected target represents unready initial geometry.
 and shadow dependency keys, while private-map `ComputeAABB()` supplies occupied
 bake bounds. Ordinary and LOD selections retain their existing local bounds.
 CPU picking, collision, saves and producer reads continue to use authority.
+
+### Bounded sector lookup publication (S1m)
+
+`GpuBufferManager` owns optional lookup preparation through
+`SetSectorLookupFrameBudget`, `SectorLookupFrameBudget` and
+`SectorLookupFrameStats`. The zero policy preserves the initial legacy path.
+`DefaultSectorLookupFrameBudget()` enables 1,024 entries, 64 KiB uploads and
+128 MiB retained staging cap; these are unmeasured opt-in defaults. Service runs
+once in the existing post-commit scene update, independently of managed geometry
+service. `Compatibility`, `AttemptedEntries`, `UploadedBytes`, `Pending`,
+`StageBytes`, `CurrentGeneration` and `RetiringEntries` expose its progress.
+
+Current, preparing and retiring generations occupy fixed slots. An admitted
+finite snapshot finishes despite newer edits; the successor coalesces those
+edits and waits for cleanup. Private mutation hooks maintain persistent coordinate
+and inverse-reference inventories. Capturing their roots takes constant work per
+map, without cloning whole sector dictionaries. Captured roots immediately pin
+unvisited sectors and bricks; selected references remain pinned through current
+publication and retirement. Enumeration, captured-reference cleanup, hash-cell
+initialization and each collision probe, direct-table initialization/fill, upload
+chunks and retirement share the global entry allowance across maps. A sector
+entry touches at most 64 brick references plus logarithmic inventory work.
+Uploads share the byte allowance across all three tables in aligned chunks;
+allowances below four bytes pause writes. Enabled zero entries pause bounded
+capture, native creation, upload and retirement; zero upload bytes still allow
+CPU preparation.
+
+The three lookup buffers publish together with committed map identity, counts,
+direct metadata, exact inventory root and managed generation. Object records and
+readiness use that committed descriptor. Initial coverage stays hidden; refusal
+or deferred work preserves the previous displayed coverage. Uploaded geometry
+alone cannot certify structural readiness. Changed maps invalidate their scoped
+shadow dependency keys at publication. Shader layouts and opaque, shadow,
+transparent and particle-collision binding consumers remain unchanged.
+
+`MaxStageBytes` preflights captured inventory nodes, retained sector/brick input
+payloads and auxiliary capacities, selected-reference storage, descriptors and
+CPU tables. Shared inputs can be conservatively charged more than once. Charges
+survive budget reductions and remain until bounded cleanup releases their owners.
+Permanent live inventories and published current CPU generations and inputs are
+separate domains outside this cap; it is not an aggregate retained-memory or
+process-heap ceiling. Native old, candidate and retiring buffers participate in
+existing physical GPU admission. Native creation also shares existing creation
+limits. Lookup creation waits for voxel growth; owned lookup destinations defer
+new growth while fitting content work can continue.
+
+Submitted lookup references wait for their exact last-use completion before
+bounded release. Buffers retain their allocating backend's completion/release
+callbacks and existing bind-group lifetime guards. Removal, disable or invalid
+inputs abandon obsolete stages safely, releasing unused buffers and fencing used
+ones. Disable retains safe ownership until compatibility handoff and retirement
+finish. A hash requiring 128 probes refuses publication, reports pending work
+and preserves current coverage; changed inputs allow a later successor.
+
+Changed raw topology/identity or edge transitions and untracked public allocation
+headers use an explicit `Compatibility` exception to lookup CPU, upload and stage
+limits. Unchanged trusted raw objects can coexist with bounded managed service.
+Native creation limits, physical admission, fences and fixed-slot backpressure
+still apply, so compatibility does not promise immediate GPU publication.
+
+Scene target enumeration still scales with object count. Backing-array allocation
+and zeroing and native creates remain indivisible. Entry and byte limits establish
+neither elapsed frame-time nor FPS guarantees. See the
+[verification scope](verification.md#bounded-sector-lookup-native-regression).
 
 ### Auxiliary capacity admission
 

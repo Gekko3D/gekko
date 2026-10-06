@@ -761,6 +761,9 @@ func (m *GpuBufferManager) refreshVoxelGPUAdmissionStats(resources voxelGPUResou
 
 // Final reference scan is limited to structural removals, not idle preparation.
 func (m *GpuBufferManager) voxelSectorSurvivesStructure(owner *volume.XBrickMap, replacement map[[3]int]*volume.Sector, sector *volume.Sector) bool {
+	if m.sectorLookupPinnedSector(sector) {
+		return true
+	}
 	for xbm, alloc := range m.Allocations {
 		sectors := alloc.Sectors
 		if xbm == owner {

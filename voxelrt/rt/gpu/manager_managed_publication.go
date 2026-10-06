@@ -131,11 +131,19 @@ func (m *GpuBufferManager) ManagedGeometryGPUStatus(obj *core.VoxelObject) (Mana
 	if o.current != nil {
 		s.CurrentInput = o.current.input
 		s.CurrentGeneration = o.current.generation
+		if m.sectorLookupOwnershipActive() {
+			a := m.Allocations[o.current.mapRef]
+			s.CurrentGeneration = 0
+			if a != nil && a.lookupCommitted {
+				s.CurrentGeneration = a.lookupGeneration
+			}
+			s.Pending = s.Pending || s.CurrentGeneration != o.current.generation || !m.sectorLookupCoverageCurrent(o.current.mapRef)
+		}
 	}
 	if o.stage != nil {
 		s.StageInput = o.stage.input
 		s.StageGeneration = o.stage.generation
-		s.StageReady = o.stage.ready
+		s.StageReady = o.stage.ready && m.managedLookupReady(o.stage)
 	}
 	s.RetiringEntries = o.retiringEntries
 	return s, true
@@ -349,6 +357,7 @@ func (m *GpuBufferManager) releaseManagedCoordinate(t *managedGPUTarget, c [3]in
 	}
 	sector := a.Sectors[c]
 	p := a.Bricks[c]
+	m.dropSectorLookupInventory(t.mapRef, c)
 	delete(a.Sectors, c)
 	delete(a.Bricks, c)
 	delete(t.mapRef.Sectors, c)
@@ -515,6 +524,7 @@ func (m *GpuBufferManager) installManagedFrontier(t *managedGPUTarget) {
 		if !m.voxelOwnership.legacy {
 			m.voxelOwnership.sectors[sector]++
 		}
+		m.refreshSectorLookupInventory(t.mapRef, c)
 		t.mapRef.DirtySectors[c] = true
 		m.sectorTopologyRevision++
 	}
@@ -615,6 +625,8 @@ func (m *GpuBufferManager) commitManagedContent(o *managedGPUOwner, left *uint32
 			retA.Bricks[c] = oldP
 			r.mapRef.Sectors[c] = old
 		}
+		m.refreshSectorLookupInventory(r.mapRef, c)
+		m.dropSectorLookupInventory(t.mapRef, c)
 		delete(newA.Sectors, c)
 		delete(newA.Bricks, c)
 		delete(t.uploaded, c)
@@ -629,6 +641,7 @@ func (m *GpuBufferManager) commitManagedContent(o *managedGPUOwner, left *uint32
 			delete(o.current.mapRef.Sectors, c)
 			delete(o.current.uploaded, c)
 		}
+		m.refreshSectorLookupInventory(o.current.mapRef, c)
 		oldCharge := o.current.charges[c]
 		newCharge := t.charges[c]
 		retiredMetadata := uint64(unsafe.Sizeof(managedCoordinateRecord{})) + uint64(unsafe.Sizeof([64]*volume.Brick{}))
@@ -960,7 +973,7 @@ func (m *GpuBufferManager) PrepareManagedGeometryFrame(scene *core.Scene) {
 			}
 			continue
 		}
-		if o.stage != nil && o.stage.ready && m.managedReady(o, o.stage) {
+		if o.stage != nil && o.stage.ready && m.managedReady(o, o.stage) && m.managedLookupReady(o.stage) {
 			t := o.stage
 			if obj.SetManagedRenderGeometry(t.input, t.mapRef, t.minimum, t.maximum) {
 				m.retireManaged(o, o.current)
@@ -1233,6 +1246,8 @@ func (m *GpuBufferManager) replaceManagedStageCoordinate(o *managedGPUOwner, t *
 		a.Sectors[c] = old
 		a.Bricks[c] = oldA.Bricks[c]
 		r.mapRef.Sectors[c] = old
+		m.refreshSectorLookupInventory(r.mapRef, c)
+		m.dropSectorLookupInventory(t.mapRef, c)
 		delete(oldA.Sectors, c)
 		delete(oldA.Bricks, c)
 		if info := m.SectorToInfo[old]; info.packed != nil {
@@ -1257,4 +1272,12 @@ func (m *GpuBufferManager) replaceManagedStageCoordinate(o *managedGPUOwner, t *
 	}
 	m.sectorTopologyRevision++
 	return true
+}
+
+func (m *GpuBufferManager) managedLookupReady(t *managedGPUTarget) bool {
+	if !m.sectorLookupOwnershipActive() {
+		return true
+	}
+	a := m.Allocations[t.mapRef]
+	return a != nil && a.lookupCommitted && a.lookupGeneration == t.generation && m.sectorLookupCoverageCurrent(t.mapRef)
 }

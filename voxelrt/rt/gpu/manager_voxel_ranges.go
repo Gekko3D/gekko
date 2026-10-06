@@ -346,6 +346,7 @@ func (m *GpuBufferManager) publishPackedUpload(w voxelUploadWork, actor *ObjectG
 			alloc.shadowUploadEpoch++
 			touched[alloc] = true
 		}
+		m.refreshSectorLookupInventory(owner.xbm, owner.key)
 		m.markRetainedVoxelMapAccountingDirty(owner.xbm)
 	}
 	for _, brick := range old {

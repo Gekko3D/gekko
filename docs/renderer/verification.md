@@ -219,3 +219,28 @@ Use `-dump-wgsl /tmp/w3c-probes` to inspect or validate the seven source-derived
 modules with Naga before GPU execution. Native execution requires GPU access.
 Tree64 and its fallback, complete floating-point accuracy and FPS are outside
 this check.
+
+
+## Bounded Sector Lookup Native Regression
+
+S1m exercises bounded lookup publication through the production G-buffer with
+real GPU buffers and submission fences:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache GEKKO_NATIVE_S1M=1 go test ./cmd/voxelbench -run '^TestNativeSectorLookupS1mCorrectness$' -count=1 -v
+```
+
+The check requires native GPU access. It covers multi-frame preparation, an
+independent lookup pause after geometry upload, exact previous-frame continuity,
+current seam edits, thin sheets at two depths, resize/rebinding, compatibility
+handoff and fenced removal. Hit masks, normals/AO and materials compare exactly
+with ordinary reference snapshots. Hit depths must satisfy both eight float32
+ULP and 0.0001 world-unit tolerances for DDA entry rounding. The 2026-10-06 Apple
+M4 Pro/Metal run passed with maximum four ULP and 0.0000152587891 world units.
+
+GPU-manager tests cover budgets, admission refusal/retry, alias lifetimes,
+collision-probe accounting, cancellation, compatibility, exact committed-root
+readiness and scoped shadow invalidation. Native readback covers the G-buffer;
+full interactive shadow, transparency, lighting and particle simulation remain
+outside this check. Representative profiles were skipped by user instruction;
+no frame-performance gain is established.

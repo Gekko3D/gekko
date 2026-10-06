@@ -56,7 +56,7 @@ type voxelGPUStage struct {
 }
 
 func (m *GpuBufferManager) stagingVoxelGPUBytes() uint64 {
-	var total uint64
+	total := m.sectorLookupNativeStageBytes()
 	if stage := m.voxelGrowth; stage != nil {
 		for i, buffer := range stage.buffers {
 			if buffer != nil {
@@ -68,6 +68,9 @@ func (m *GpuBufferManager) stagingVoxelGPUBytes() uint64 {
 }
 
 func (m *GpuBufferManager) startVoxelGPUStage(next voxelGPUResources) error {
+	if m.sectorLookupOwnsNativeStage() {
+		return errVoxelGPUWorkPending
+	}
 	if m.voxelGrowth == nil {
 		stage := &voxelGPUStage{backend: m.voxelNative, sizes: voxelResourceSizes(next)}
 		for i, destination := range m.voxelBufferDestinations() {
@@ -180,7 +183,13 @@ func (m *GpuBufferManager) advanceVoxelGPUStage() (bool, error) {
 
 func (m *GpuBufferManager) retireVoxelBuffer(buffer *wgpu.Buffer, size uint64, backend voxelNativeBackend) {
 	if buffer != nil {
-		m.retiredBuffers = append(m.retiredBuffers, retiredBuffer{Buffer: buffer, VoxelBytes: size, bufferRelease: backend.ReleaseBuffer, FramesLeft: RetiredBufferFrameDelay})
+		retired := retiredBuffer{Buffer: buffer, VoxelBytes: size, bufferRelease: backend.ReleaseBuffer, FramesLeft: RetiredBufferFrameDelay}
+		if completion, ok := backend.(interface {
+			SubmissionComplete(*wgpu.Queue, uint64) bool
+		}); ok {
+			retired.bufferComplete = completion.SubmissionComplete
+		}
+		m.retiredBuffers = append(m.retiredBuffers, retired)
 	}
 }
 

@@ -132,6 +132,7 @@ func (m *GpuBufferManager) commitVoxelUploadSnapshot(s voxelUploadSnapshot) {
 	if s.pointers == nil {
 		return
 	}
+	defer m.refreshSectorLookupInventory(s.xbm, s.key)
 	// One captured sector is bounded at 64 entries, independent of total scene
 	// size. Compare the whole array so injected successful executors are covered.
 	for i, old := range s.before {

@@ -144,7 +144,9 @@ func (m *GpuBufferManager) advanceRetiredBuffers() {
 		retired.FramesLeft--
 		if retired.Queue != nil {
 			done := false
-			if m.Device != nil {
+			if retired.bufferComplete != nil {
+				done = retired.bufferComplete(retired.Queue, uint64(retired.SubmissionIndex))
+			} else if m.Device != nil {
 				done = m.Device.Poll(false, &wgpu.WrappedSubmissionIndex{
 					Queue:           retired.Queue,
 					SubmissionIndex: retired.SubmissionIndex,
@@ -314,6 +316,7 @@ func (m *GpuBufferManager) MarkRetiredBuffersSubmitted(queue *wgpu.Queue, submis
 	if m == nil || queue == nil {
 		return
 	}
+	m.markSectorLookupSubmitted(queue, submissionIndex)
 	for i := range m.retiredAuxiliaryRanges {
 		if m.retiredAuxiliaryRanges[i].queue == nil {
 			m.retiredAuxiliaryRanges[i].queue = queue

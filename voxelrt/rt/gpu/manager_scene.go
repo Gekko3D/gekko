@@ -209,7 +209,15 @@ func writeObjectParamsData(dst []byte, obj *core.VoxelObject, alloc *ObjectGpuAl
 		writeRejectedObjectParams(dst)
 		return
 	}
-	binary.LittleEndian.PutUint32(dst[0:4], obj.RenderVoxelMap().ID)
+	if alloc.lookupPublicationKnown && !alloc.lookupCommitted {
+		writeRejectedObjectParams(dst)
+		return
+	}
+	mapID := obj.RenderVoxelMap().ID
+	if alloc.lookupPublicationKnown {
+		mapID = alloc.lookupMapID
+	}
+	binary.LittleEndian.PutUint32(dst[0:4], mapID)
 	binary.LittleEndian.PutUint32(dst[4:8], 0)
 	binary.LittleEndian.PutUint32(dst[8:12], 0)
 	if matAlloc != nil {
@@ -220,6 +228,9 @@ func writeObjectParamsData(dst []byte, obj *core.VoxelObject, alloc *ObjectGpuAl
 	sectorCount := len(obj.RenderVoxelMap().Sectors)
 	if alloc.Sectors != nil {
 		sectorCount = len(alloc.Sectors)
+	}
+	if alloc.lookupPublicationKnown {
+		sectorCount = int(alloc.lookupSectorCount)
 	}
 	binary.LittleEndian.PutUint32(dst[24:28], uint32(sectorCount))
 	binary.LittleEndian.PutUint32(dst[28:32], uint32(obj.AmbientOcclusionMode))
@@ -841,6 +852,13 @@ func (m *GpuBufferManager) sectorGridSelectionChanged(scene *core.Scene) bool {
 }
 
 func (m *GpuBufferManager) updateSectorGrid(scene *core.Scene) bool {
+	if m.sectorLookupBudget.Enabled || m.sectorLookupCurrent != nil || m.sectorLookupStage != nil || m.sectorLookupRetired != nil {
+		return m.updateBoundedSectorLookup(scene)
+	}
+	return m.updateSectorGridLegacy(scene)
+}
+
+func (m *GpuBufferManager) updateSectorGridLegacy(scene *core.Scene) bool {
 	selectionChanged := m.sectorGridSelectionChanged(scene)
 	totalSectors := 0
 	for _, target := range m.voxelServiceTargets(scene) {

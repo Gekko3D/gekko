@@ -278,6 +278,7 @@ func (m *GpuBufferManager) CancelManagedGeometryInputs(object *core.VoxelObject)
 		if owner.object != object {
 			continue
 		}
+		m.cancelSectorLookupObject(object)
 		*link = owner.next
 		m.releaseManagedGeometryGeneration(owner.accepted)
 		if owner.successor != nil {

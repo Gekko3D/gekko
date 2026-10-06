@@ -24,6 +24,11 @@ func TestNativeManagedPublicationS1l14Correctness(t *testing.T) {
 	if os.Getenv("GEKKO_NATIVE_S1L14") != "1" {
 		t.Skip("set GEKKO_NATIVE_S1L14=1 to run real-device managed publication correctness")
 	}
+	nativeManagedPublicationCorrectness(t, false)
+}
+
+func nativeManagedPublicationCorrectness(t *testing.T, boundedLookup bool) {
+	t.Helper()
 	// z=4 independently tests a thin sheet whose occupied-bounds normal
 	// tie-break differs from conservative [0,32] display bounds. Keep the z=24
 	// case for the existing structural replacement/current seam coverage.
@@ -99,10 +104,14 @@ func TestNativeManagedPublicationS1l14Correctness(t *testing.T) {
 				func() (uint64, bool) { return generation, true })
 			managed.manager.SetManagedGeometryAdmissionBudget(gpu.DefaultManagedGeometryAdmissionBudget())
 			managed.manager.SetManagedGeometryFrameBudget(gpu.ManagedGeometryFrameBudget{Enabled: true, MaxEntries: 1})
+			if boundedLookup {
+				managed.manager.SetSectorLookupFrameBudget(gpu.SectorLookupFrameBudget{Enabled: true, MaxEntries: 64, MaxUploadBytes: 256, MaxStageBytes: 128 << 20})
+			}
 
 			// One service/commit/native update and one completed submission per frame.
 			// Recreating the real scene bind groups is required after buffer generations
 			// change; textures are handled explicitly by the resize exercise below.
+			lookupPendingFrames := 0
 			frame := func(n *nativeBench) {
 				t.Helper()
 				aspect := float32(n.cfg.Width) / float32(n.cfg.Height)
@@ -112,6 +121,16 @@ func TestNativeManagedPublicationS1l14Correctness(t *testing.T) {
 				n.manager.PrepareManagedGeometryFrame(n.scene)
 				n.scene.Commit(n.camera.ExtractFrustum(vp), core.SceneCommitOptions{OcclusionMode: core.OcclusionOff, CameraPosition: n.camera.Position})
 				recreated := n.manager.UpdateScene(n.scene, n.camera, aspect, mgl32.Vec3{})
+				if boundedLookup && n == managed {
+					stats := n.manager.SectorLookupFrameStats()
+					if stats.Pending {
+						lookupPendingFrames++
+					}
+					budget := n.manager.SectorLookupFrameBudget()
+					if stats.AttemptedEntries > budget.MaxEntries || stats.UploadedBytes > budget.MaxUploadBytes {
+						t.Fatalf("native lookup exceeded budget: %+v / %+v", stats, budget)
+					}
+				}
 				if recreated || n.manager.GBufferBindGroup0 == nil || !n.manager.GBufferSceneBindGroupCurrent() {
 					n.manager.CreateGBufferBindGroups(n.pipeline, n.lighting)
 				}
@@ -193,6 +212,9 @@ func TestNativeManagedPublicationS1l14Correctness(t *testing.T) {
 			drain(managed, managedReady)
 			// Stall continuity compares managed current with its own published image;
 			// ordinary-vs-managed depth rounding does not enter that exact oracle.
+			if boundedLookup && (managed.manager.SectorLookupFrameStats().CurrentGeneration == 0 || lookupPendingFrames < 2) {
+				t.Fatal("native smoke never committed a bounded lookup generation")
+			}
 			baseline := compare("initial complete publication")
 			current := managed.object.RenderVoxelMap()
 
@@ -213,6 +235,11 @@ func TestNativeManagedPublicationS1l14Correctness(t *testing.T) {
 				}
 			}
 			apply(additions)
+			if boundedLookup {
+				paused := managed.manager.SectorLookupFrameBudget()
+				paused.MaxUploadBytes = 0
+				managed.manager.SetSectorLookupFrameBudget(paused)
+			}
 			managed.manager.SetVoxelUploadBudget(gpu.VoxelUploadBudget{})
 			for i := 0; i < 12; i++ {
 				frame(managed)
@@ -224,6 +251,17 @@ func TestNativeManagedPublicationS1l14Correctness(t *testing.T) {
 				t.Fatalf("stalled structural stage changed native attachments: got %+v want %+v", got, baseline)
 			}
 			managed.manager.SetVoxelUploadBudget(gpu.DefaultVoxelUploadBudget())
+			if boundedLookup {
+				for i := 0; i < 48; i++ {
+					frame(managed)
+				}
+				if managed.object.RenderVoxelMap() != current || captureFrame(managed, false) != baseline {
+					t.Fatal("lookup-only pause exposed uploaded structural successor")
+				}
+				resumed := managed.manager.SectorLookupFrameBudget()
+				resumed.MaxUploadBytes = 256
+				managed.manager.SetSectorLookupFrameBudget(resumed)
+			}
 			// A structural managed generation bakes against its complete final bounds.
 			// Ordinary incremental edits only invalidate local halos: the new z=40
 			// plate lies outside the old z=24 plate's halo, yet changes the bounds-based

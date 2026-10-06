@@ -130,7 +130,7 @@ func (p *voxelAdmissionPlan) addAuxiliary(m *GpuBufferManager, xbm *volume.XBric
 				continue
 			}
 			for _, brick := range pointers {
-				if brick == nil || inventory.future[brick] {
+				if brick == nil || inventory.future[brick] || m.sectorLookupPinnedBrick(brick) {
 					continue
 				}
 				if _, mapped := m.BrickToAuxSlot[brick]; !mapped {

@@ -561,6 +561,13 @@ type GpuBufferManager struct {
 	sectorTopologyRevision         uint64
 	lastSectorGridTopologyRevision uint64
 	lastSectorGridSelection        []sectorGridMapIdentity
+
+	sectorLookupBudget                                          SectorLookupFrameBudget
+	sectorLookupStats                                           SectorLookupFrameStats
+	sectorLookupDrain                                           uint32
+	sectorLookupCurrent, sectorLookupStage, sectorLookupRetired *sectorLookupGeneration
+	sectorLookupSerial                                          uint64
+
 	gridDataPool                   []byte
 	TileLightTilesX                uint32
 	TileLightTilesY                uint32
@@ -617,6 +624,7 @@ type retiredBuffer struct {
 	Buffer          *wgpu.Buffer
 	VoxelBytes      uint64 // Only this manager's physical voxel resources.
 	bufferRelease   func(*wgpu.Buffer)
+	bufferComplete  func(*wgpu.Queue, uint64) bool
 	FramesLeft      int
 	Queue           *wgpu.Queue
 	SubmissionIndex wgpu.SubmissionIndex
@@ -632,17 +640,24 @@ type retiredBindGroup struct {
 
 // ObjectGpuAllocation tracks the GPU memory regions assigned to a specific object.
 type ObjectGpuAllocation struct {
-	materialOwner        *GpuBufferManager
-	shadowUploadEpoch    uint64
-	ownerToken           *voxelAllocationOwnerToken
-	ownerMap             *volume.XBrickMap
-	Sectors              map[[3]int]*volume.Sector     // Track which sector is at which coordinate
-	Bricks               map[[3]int]*[64]*volume.Brick // Track pointers per sector to detect brick removal
-	DirectLookup         directSectorLookupMetadata
-	directCells          uint64
-	directCellsValid     bool
-	lookupAdmissionKnown bool
-	lookupAdmitted       bool
+	lookupSectorPins, lookupBrickPins *sectorLookupPinNode
+	lookupRoot                        *sectorLookupInventoryNode
+	materialOwner                     *GpuBufferManager
+	shadowUploadEpoch                 uint64
+	ownerToken                        *voxelAllocationOwnerToken
+	ownerMap                          *volume.XBrickMap
+	Sectors                           map[[3]int]*volume.Sector     // Track which sector is at which coordinate
+	Bricks                            map[[3]int]*[64]*volume.Brick // Track pointers per sector to detect brick removal
+	DirectLookup                      directSectorLookupMetadata
+	lookupCommittedRoot               *sectorLookupInventoryNode
+	lookupPublicationKnown            bool
+	lookupCommitted                   bool
+	lookupMapID, lookupSectorCount    uint32
+	lookupGeneration                  uint64
+	directCells                       uint64
+	directCellsValid                  bool
+	lookupAdmissionKnown              bool
+	lookupAdmitted                    bool
 }
 
 type MaterialGpuAllocation struct {

@@ -277,6 +277,7 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 			}
 			topologyChanged = true
 			pointers := alloc.Bricks[k]
+			m.dropSectorLookupInventory(xbm, k)
 			delete(alloc.Sectors, k)
 			delete(alloc.Bricks, k)
 			if info := m.SectorToInfo[oldSector]; info.packed != nil {
@@ -330,6 +331,7 @@ func (m *GpuBufferManager) prepareVoxelStructureDirtyState(scene *core.Scene) {
 			if !m.voxelOwnership.legacy {
 				m.voxelOwnership.sectors[sector]++
 			}
+			m.refreshSectorLookupInventory(xbm, sKey)
 			xbm.DirtySectors[sKey] = true
 			for bz := 0; bz < volume.SectorBricks; bz++ {
 				for by := 0; by < volume.SectorBricks; by++ {
@@ -508,7 +510,7 @@ func (m *GpuBufferManager) releaseVoxelMapAllocation(xbm *volume.XBrickMap, allo
 }
 
 func (m *GpuBufferManager) releaseUnreferencedSector(sector *volume.Sector) {
-	if m.voxelPreparationSectors[sector] {
+	if m.voxelPreparationSectors[sector] || m.sectorLookupPinnedSector(sector) {
 		return
 	}
 	m.beginVoxelOwnership()
@@ -539,6 +541,9 @@ func (m *GpuBufferManager) releaseUnreferencedSector(sector *volume.Sector) {
 }
 
 func (m *GpuBufferManager) voxelBrickReferenced(brick *volume.Brick) bool {
+	if m.sectorLookupPinnedBrick(brick) {
+		return true
+	}
 	m.beginVoxelOwnership()
 	defer m.endVoxelOwnership()
 	if !m.voxelOwnership.legacy && brick != nil {

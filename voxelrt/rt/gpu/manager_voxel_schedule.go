@@ -666,6 +666,9 @@ func (m *GpuBufferManager) voxelUploadReleases(w voxelUploadWork) (payload, auxi
 }
 
 func (m *GpuBufferManager) voxelBrickReferencedOutsideUpload(brick *volume.Brick, w voxelUploadWork) bool {
+	if m.sectorLookupPinnedBrick(brick) {
+		return true
+	}
 	m.beginVoxelOwnership()
 	defer m.endVoxelOwnership()
 	key := w.sectorCoordinate()
