@@ -537,6 +537,55 @@ retain peak capacity. This is not a selection byte budget or measured frame-time
 gain. [S3a is complete](../roadmaps/streamed-rendering-s3a.md); renderer scene
 gathering and future layer selection remain separate S3 work.
 
+### Independent page control plane
+
+`StreamedLevelRuntimeState.ConfigurePageControlPlane` installs an owned,
+metadata-only v3 selection snapshot using `BuildLevelStreamingIndex`. Supplied
+layers must have explicit v3 visual forests; referenced level layers cannot be
+omitted, including terrain declared only through a legacy `source_path`. The runtime generation must be nonzero. Invalid configuration leaves
+the previous owner intact; successful reconfiguration clears demand history and
+renderer bindings. Legacy selection and v3 live admission guards remain.
+
+`StreamedPageKey` qualifies a manifest page index with layer, owner ID and source
+hash. `UpdatePageSelection` accepts the complete observer list and returns owned,
+sorted demand snapshots and priority-ordered preparation requests. Roots remain
+pinned at fallback priority without observers. Only visual observers request
+detail. Desired pages remain desired through their keep distance; prefetch and
+coverage-only siblings do not acquire that hysteresis history. Keep-only pages
+are cache eligibility and produce no preparation request.
+
+The reference profile uses the [island distances](island-streaming.md#reference-island-profile)
+and 32 m selection cells. An entirely zero profile selects these defaults;
+partial profiles must specify valid finite distances and cell size. Distance is
+closed Euclidean AABB distance from the observer's conservative XYZ cell bounds,
+using floor division for negative positions. Unchanged cells, normalized velocity
+directions reuse each observer's raw demand independently; a roster change does
+not repeat spatial queries for unchanged visual observers. Removal withdraws
+only that observer's history. Cell, query and swept bounds round outward;
+prefetch subtraction uses float64 arithmetic. Unsafe cell arithmetic and invalid
+observer input fail without publishing partial demand.
+
+Forward prefetch measures distance from the current cell swept along normalized
+velocity by `Prefetch - Desired`, using a conservative swept AABB. Speed magnitude
+does not alter the fixed profile reach. Zero velocity adds no forward prefetch;
+teleports never sweep from the prior position. Ancestors and immediate siblings
+are added for each desired/prefetch branch, without recursively refining distant
+siblings. This supplies future whole-parent handoff coverage; selection changes
+neither visibility nor collision ownership. Local terrain surfaces and indexed
+PVS integration follow the later runtime integration work.
+
+`BindPageRenderTicket` binds an exact page to a unique nonzero entity/ticket pair.
+`PageStartupStatus` polls the existing renderer resource and live ECS markers.
+Eligibility requires every pinned root's current entity, marker, ticket and
+renderer generation to match, every ticket to be `Ready`, and an explicit ready
+spawn-collision result for the same generation with no failure. Missing, stale,
+failed or cancelled evidence blocks eligibility; eligibility is not latched.
+Polling publishes no entities, player or visibility changes. The 15-second
+startup target remains a native acceptance diagnostic, never a readiness timeout
+fallback. Reset and runtime teardown release this control plane without writing
+renderer ticket status. Live startup still awaits I11 handoff, I13 sparse height
+visuals and I14 collision integration.
+
 ## Long-Term Streaming Plan
 
 The finite open-world implementation sequence and terrain/`.gkworld` v3 page

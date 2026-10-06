@@ -5128,7 +5128,7 @@ builder, is next.
 
 ### I09: Deterministic island streaming fixture
 
-Commit: this batch. Content owns the offline 15 km harness producer and qualified
+Commit: `0224202`. Content owns the offline 15 km harness producer and qualified
 single-entry loader. Terrain emits complete root/macro/regional partitions and
 route-scoped source/navigation tiles; POI proxies aggregate original opaque
 cells while borrowing original FULL/aux files. Immutable generations publish
@@ -5149,3 +5149,33 @@ terrain pages, 668 source tiles, 43 POI pages and 31 borrowed FULL entries. Root
 height bodies total 2 MiB; GPU residency and native frame-time gains were not
 measured. Live v3 admission and the marker-driven gameplay runner remain pending.
 I10 root startup and distance/hysteresis/velocity selection is next.
+
+
+### I10: Page selection and startup control plane
+
+Commit: this batch. Runtime owns detached v3 page identities, pinned roots,
+distance/keep hysteresis, forward prefetch and conservative refinement coverage.
+Unchanged observers reuse raw demand independently. Startup eligibility requires
+exact current renderer identities and explicit spawn-collision readiness. See
+[the owning contract](../content/streaming-and-worlds.md#independent-page-control-plane).
+
+Verification from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run I10 -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -count=1
+env GOCACHE=/tmp/gekko3d-gocache go run /private/tmp/gekko-i10-harness-check.go
+git diff --check
+```
+
+Consumer builds passed with
+`env GOCACHE=/tmp/gekko3d-gocache go build -o /private/tmp/gekko-i10-editor .`
+from `../gekko-editor` and
+`env GOCACHE=/tmp/gekko3d-gocache go build -o /private/tmp/gekko-i10-actiongame .`
+from `../actiongame`. Consumer test suites were not rerun; recorded failures
+remain. A temporary public-API smoke check on the I09 Gasworks fixture retained
+68 pinned roots and 548 desired pages; 100 stationary updates kept build count
+and candidate visits unchanged. Missing readiness evidence blocked startup.
+Native GPU performance was not measured. This completes the approved control
+plane scope; live v3 admission remains gated pending I11 handoff, I13 height
+visuals and I14 collision integration. I11 is next.

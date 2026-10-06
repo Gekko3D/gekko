@@ -322,6 +322,7 @@ type StreamedLevelRuntimeState struct {
 	InitErr     error
 	Generation  uint64
 
+	pageControl               *streamedPageControl
 	observerSelection         *streamedObserverSelectionOwner
 	observerSelectionRevision uint64
 	prepareScheduler          streamedPrepareScheduler
@@ -764,6 +765,7 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.WorldDataDir = content.DefaultWorldDeltaDataDir(worldDeltaPath)
 	state.WorldDelta = worldDelta
 	state.sessionDeltaDir = sessionDeltaDir
+	state.ResetPageControlPlane()
 	state.releaseObserverSelection()
 	state.Metrics = StreamedLevelRuntimeMetrics{}
 	state.persistenceTransaction = nil
@@ -1098,6 +1100,7 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 		return fmt.Errorf("streamed level runtime resource is missing")
 	}
 	if !state.Initialized {
+		state.ResetPageControlPlane()
 		return nil
 	}
 
@@ -1134,6 +1137,7 @@ func StopStreamedLevelRuntime(cmd *Commands) error {
 	}
 	state.Generation++
 	state.Initialized = false
+	state.ResetPageControlPlane()
 	state.releaseObserverSelection()
 	// Include targets flushed by a commit that later failed before LoadedChunks
 	// publication. The level-root descendant cleanup below removes their CPU
