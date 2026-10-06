@@ -27,6 +27,27 @@ Related docs:
 - `volume.XBrickMap`: `voxelrt/rt/volume/`
   - owns sparse voxel storage, edit semantics, dirty tracking, traversal, and compression
 
+## Streaming policy installation
+
+`VoxelRtModule.StreamingConfig` optionally installs a `VoxelRtStreamingConfig`
+once after successful renderer initialization, before its engine state is
+published. A nil configuration preserves existing manager defaults. `Apply`
+copies managed admission, managed frame and sector lookup policies exactly;
+enabled zero values retain their independent pause semantics. Optional `Upload`,
+`NativeWork` and `NativeAdmission` pointers leave existing policies unchanged
+when nil. Later manager policy changes are not reset each frame.
+
+`DefaultVoxelRtStreamingConfig()` returns fresh storage composing the existing
+managed admission/frame, bounded lookup and upload defaults. It enables native
+work with two creates, 16 MiB of create bytes and 4 MiB of copy bytes per voxel update.
+These are configuration defaults, not measured performance targets; existing
+sole indivisible oversized-create progress and accounting still apply. The
+preset does not choose a physical native admission cap. Games separately opt
+ordinary compiled workers into `EnableManagedPreparedAssets`; configuring GPU
+service does not change worker preparation eligibility. Bootstrap resources and
+raw lookup compatibility work retain their documented exceptions; this preset
+does not establish a whole-frame time or aggregate memory bound.
+
 ## Voxel point reads
 
 `(*volume.Brick).VoxelValue(x, y, z)` reads the authoritative dense payload cell.

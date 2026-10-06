@@ -15,6 +15,21 @@ import (
 // This smoke checks real submission and bounded publication through the engine
 // worker/commit/bridge. Production G-buffer pixel parity is owned by voxelbench.
 func TestS1nNativeWorkerBridgePublishesBoundedGeometryAndLookup(t *testing.T) {
+	s1nNativeWorkerBridgePublishesBoundedGeometryAndLookup(t, nil)
+}
+
+func TestS1oNativeStreamingConfigWorkerBridgePublishesUnderFiniteNativeWork(t *testing.T) {
+	config := DefaultVoxelRtStreamingConfig()
+	config.ManagedFrame = gpu.ManagedGeometryFrameBudget{Enabled: true, MaxEntries: 1}
+	config.SectorLookup = gpu.SectorLookupFrameBudget{Enabled: true, MaxEntries: 64, MaxUploadBytes: 256, MaxStageBytes: 128 << 20}
+	config.NativeWork = &gpu.VoxelGPUWorkBudget{Enabled: true, MaxCreateBytes: 1 << 20, MaxCreates: 1, MaxCopyBytes: 64 << 10}
+	s1nNativeWorkerBridgePublishesBoundedGeometryAndLookup(t, &config)
+}
+
+func s1nNativeWorkerBridgePublishesBoundedGeometryAndLookup(t *testing.T, config *VoxelRtStreamingConfig) {
+	t.Helper()
+	expected := config
+	var nativeCreates uint64
 	if os.Getenv("GEKKO_NATIVE_S1N") != "1" {
 		t.Skip("set GEKKO_NATIVE_S1N=1 for real-device streamed managed publication")
 	}
@@ -76,10 +91,15 @@ func TestS1nNativeWorkerBridgePublishesBoundedGeometryAndLookup(t *testing.T) {
 			release(value.Field(i))
 		}
 	}()
-	manager.SetVoxelUploadBudget(gpu.DefaultVoxelUploadBudget())
-	manager.SetManagedGeometryAdmissionBudget(gpu.DefaultManagedGeometryAdmissionBudget())
-	manager.SetManagedGeometryFrameBudget(gpu.ManagedGeometryFrameBudget{Enabled: true, MaxEntries: 1})
-	manager.SetSectorLookupFrameBudget(gpu.SectorLookupFrameBudget{Enabled: true, MaxEntries: 64, MaxUploadBytes: 256, MaxStageBytes: 128 << 20})
+	if config == nil {
+		manager.SetVoxelUploadBudget(gpu.DefaultVoxelUploadBudget())
+		manager.SetManagedGeometryAdmissionBudget(gpu.DefaultManagedGeometryAdmissionBudget())
+		manager.SetManagedGeometryFrameBudget(gpu.ManagedGeometryFrameBudget{Enabled: true, MaxEntries: 1})
+		manager.SetSectorLookupFrameBudget(gpu.SectorLookupFrameBudget{Enabled: true, MaxEntries: 64, MaxUploadBytes: 256, MaxStageBytes: 128 << 20})
+	} else {
+		config.Apply(manager)
+		s1oAssertStreamingConfig(t, manager, *config)
+	}
 	f, _ := s1nRuntime(t, true, 1)
 	s1fPrepared(t, f.streamedRenderHarness, ChunkCoord{}, false)
 	f.commitStage()
@@ -108,6 +128,18 @@ func TestS1nNativeWorkerBridgePublishesBoundedGeometryAndLookup(t *testing.T) {
 		viewProjection := camera.ProjectionMatrix(1).Mul4(camera.GetViewMatrix())
 		scene.Commit(camera.ExtractFrustum(viewProjection), core.SceneCommitOptions{OcclusionMode: core.OcclusionOff, CameraPosition: camera.Position})
 		manager.UpdateScene(scene, camera, 1, mgl32.Vec3{})
+		if expected != nil {
+			s1oAssertStreamingConfig(t, manager, *expected)
+			stats := manager.VoxelGPUWorkStats()
+			nativeCreates += uint64(stats.Creates)
+			if stats.Creates > expected.NativeWork.MaxCreates || stats.CopiedBytes > expected.NativeWork.MaxCopyBytes {
+				t.Fatalf("native creation/copy cap exceeded: %+v", stats)
+			}
+			// Sole indivisible oversized creates remain legal and separately reported.
+			if stats.CreatedBytes > expected.NativeWork.MaxCreateBytes && stats.OversizedCreates == 0 {
+				t.Fatalf("unreported oversized native creation: %+v", stats)
+			}
+		}
 		if stats := manager.SectorLookupFrameStats(); stats.AttemptedEntries > 64 || stats.UploadedBytes > 256 {
 			t.Fatalf("lookup cap exceeded: %+v", stats)
 		}
@@ -145,6 +177,19 @@ func TestS1nNativeWorkerBridgePublishesBoundedGeometryAndLookup(t *testing.T) {
 	}
 	if frames := drain(input.Generation()); frames < 2 {
 		t.Fatal("native bounded publication never exercised multiple pending frames")
+	}
+	if config != nil {
+		if nativeCreates == 0 {
+			t.Fatal("configured native smoke never exercised finite creation service")
+		}
+		// Runtime setters remain authoritative after installation, including edits
+		// and successor publication through ordinary bridge/frame updates.
+		live := *config
+		work := *config.NativeWork
+		work.MaxCreates, work.MaxCopyBytes = 2, 128<<10
+		live.NativeWork = &work
+		expected = &live
+		manager.SetVoxelGPUWorkBudget(work)
 	}
 	if err := ApplyManagedVoxelWrites(f.cmd, f.assets, eid, p1dWrites(volume.VoxelWrite{Value: 7}, volume.VoxelWrite{X: 40, Value: 3})); err != nil {
 		t.Fatal(err)

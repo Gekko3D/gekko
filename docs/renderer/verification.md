@@ -261,3 +261,20 @@ structural edit, qualified edit generations, unload and bounded retirement. It
 passed on Apple M4 Pro/Metal. It submits uploads without drawing or pixel readback;
 the separate S1m production G-buffer regression supplies rendered parity coverage.
 Full interactive passes and representative frame profiles remain unverified.
+
+## Configured Streaming Native Integration
+
+S1o exercises the same worker, bridge, structural replacement and retirement
+with `VoxelRtStreamingConfig.Apply`, finite native creation/copy service and
+later runtime budget changes:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache GEKKO_NATIVE_S1N=1 go test . -run '^TestS1oNativeStreamingConfigWorkerBridgePublishesUnderFiniteNativeWork$' -count=1 -v
+```
+
+It checks installed scalar policies and native work counters, including reported
+sole oversized creates, through successor publication. It passed on Apple M4
+Pro/Metal. The test has no GLFW surface or rendered readback. Separately, a real
+GLFW module installation probe passed for both the explicit preset and nil
+configuration before normal frame service. Full actiongame visual checks and
+performance profiles remain unverified.

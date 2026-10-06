@@ -120,6 +120,7 @@ type VoxelRtModule struct {
 	BridgeFeatures   []VoxelRtBridgeFeatureRegistration
 	RenderFeatures   []VoxelRtRenderFeature
 	RenderGraphNodes []VoxelRtRenderNodeSpec
+	StreamingConfig  *VoxelRtStreamingConfig
 }
 
 type VoxelRtState struct {

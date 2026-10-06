@@ -31,6 +31,13 @@ func (m *GpuBufferManager) SetVoxelGPUAdmissionBudget(budget VoxelGPUAdmissionBu
 		m.voxelGPUAdmissionBudget = budget
 	}
 }
+
+func (m *GpuBufferManager) VoxelGPUAdmissionBudget() VoxelGPUAdmissionBudget {
+	if m == nil {
+		return VoxelGPUAdmissionBudget{}
+	}
+	return m.voxelGPUAdmissionBudget
+}
 func (m *GpuBufferManager) VoxelGPUAdmissionStats() VoxelGPUAdmissionStats {
 	if m == nil {
 		return VoxelGPUAdmissionStats{}

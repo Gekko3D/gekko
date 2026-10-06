@@ -34,6 +34,7 @@ func (mod VoxelRtModule) Install(app *App, cmd *Commands) {
 	if err := RtApp.Init(); err != nil {
 		panic(err)
 	}
+	mod.StreamingConfig.Apply(RtApp.BufferManager)
 
 	state := &VoxelRtState{
 		RtApp:                        RtApp,

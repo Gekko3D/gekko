@@ -31,7 +31,7 @@ func s1nRenderer(f *s1gFixture) *VoxelRtState {
 	if state := voxelRtStateFromApp(f.app); state != nil {
 		return state
 	}
-	state := s1nRenderer(f)
+	state := newVoxelRtStateTest()
 	f.cmd.AddResources(state)
 	return state
 }

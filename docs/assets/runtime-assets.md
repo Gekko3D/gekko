@@ -478,6 +478,12 @@ defaults and remaining memory bounds.
 
 ### Worker-prepared ordinary managed assets (S1n)
 
+Games can install the corresponding GPU policies through
+`VoxelRtModule.StreamingConfig` and `DefaultVoxelRtStreamingConfig()`; see
+[streaming policy installation](../renderer/runtime.md#streaming-policy-installation).
+The renderer configuration and `EnableManagedPreparedAssets` remain separate
+opt-ins. A nil renderer configuration preserves the manager's existing defaults.
+
 `StreamedLevelRuntimeConfig.EnableManagedPreparedAssets` opts compiled ordinary
 placements into worker-prepared managed ownership. The zero value keeps existing
 publication. Each eligible placement/part owns a single-use sealed owner,
