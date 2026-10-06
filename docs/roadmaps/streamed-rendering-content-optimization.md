@@ -5100,7 +5100,7 @@ next.
 
 ### I08: Independent world-space layer indexes
 
-Commit: this batch. Content owns detached terrain/POI source, page and sector
+Commit: `ec3dcf7`. Content owns detached terrain/POI source, page and sector
 indexes in world meters. Assemblies containing v3 accept independent layer
 grids, qualify height payloads, validate optional authored padded bounds and
 cross-layer coverage groups, and bind voxel navigation to its imported owner.
@@ -5124,3 +5124,28 @@ from `../actiongame`. Consumer suites were not rerun; their recorded failures
 remain. Native GPU visuals and frame-time gains were not measured because live
 v3 selection/residency is still gated. I09, the deterministic 15 km harness
 builder, is next.
+
+
+### I09: Deterministic island streaming fixture
+
+Commit: this batch. Content owns the offline 15 km harness producer and qualified
+single-entry loader. Terrain emits complete root/macro/regional partitions and
+route-scoped source/navigation tiles; POI proxies aggregate original opaque
+cells while borrowing original FULL/aux files. Immutable generations publish
+before the fixed level. See [the fixture contract](../content/island-streaming.md#fixture-assets).
+
+Verification from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./content/... ./cmd/islandstreamharness -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -count=1
+env GOCACHE=/tmp/gekko3d-gocache go run ./cmd/islandstreamharness -gasworks ../actiongame/assets/levels/gasworks/worlds/gasworks.gkworld -out /private/tmp/gekko-i09-gasworks-review
+git diff --check
+```
+
+Two sibling Gasworks outputs matched across 4,727 files (78,208,551 bytes); all
+252 source files retained their hashes. The fixture contains 64 roots, 4,032
+terrain pages, 668 source tiles, 43 POI pages and 31 borrowed FULL entries. Root
+height bodies total 2 MiB; GPU residency and native frame-time gains were not
+measured. Live v3 admission and the marker-driven gameplay runner remain pending.
+I10 root startup and distance/hysteresis/velocity selection is next.

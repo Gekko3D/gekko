@@ -694,8 +694,10 @@ and open the gameplay gate in one ECS command flush.
 ## Named Harness, Commands, And Pass Gates
 
 The names and values in this section are implementation defaults, not examples.
-The generated harness and benchmark runner do not exist yet; Steps 0 and 3C add
-them. The existing Gasworks baseline command below works now.
+The offline harness builder exists. Live v3 admission and the marker-driven
+Actiongame benchmark runner remain pending; the benchmark commands below are
+acceptance recipes until those runtime pieces exist. The existing Gasworks
+baseline command works now.
 
 ### Fixture Assets
 
@@ -706,11 +708,11 @@ fixture on demand. Check in the builder and fixture recipe, not the generated
 ```text
 actiongame/assets/levels/island_streaming_harness/
   island_streaming_harness.gklevel
-  terrain/island_streaming_harness.gkterrainmanifest
-  terrain/tiles/       # 2 m heights plus 1 m exclusions along benchmark routes
-  terrain/pages/       # root, macro, and regional height payloads
-  worlds/poi/island_streaming_harness.gkworld
-  worlds/poi/pages/    # Gasworks regional/root silhouette payloads
+  terrain/<generation>/island_streaming_harness.gkterrainmanifest
+  terrain/tiles/<generation>/ # 2 m heights plus 1 m exclusions along benchmark routes
+  terrain/pages/<generation>/ # root, macro, and regional height payloads
+  worlds/poi/<generation>/island_streaming_harness.gkworld
+  worlds/poi/pages/<generation>/ # regional/macro/root opaque proxies
 ```
 
 The fixture has 15,000 x 15,000 m playable bounds in a 16,384 m hierarchy. It
@@ -726,7 +728,7 @@ The `.gklevel` owns benchmark markers. Marker kind is
 where needed, `speed:<meters-per-second>`. This keeps route coordinates in the
 fixture rather than in Actiongame code.
 
-Add a small deterministic fixture builder in Step 3C and run it from `gekko/`:
+Run the deterministic fixture builder from `gekko/`:
 
 ```sh
 go run ./cmd/islandstreamharness \
@@ -744,6 +746,42 @@ go run ./cmd/islandstreamharness \
 The builder may write only the named harness directory. Identical input must
 produce byte-identical manifests, payloads, IDs, and route markers. It is a
 temporary fixture builder, not the future island generator.
+
+`content/derived.BuildIslandStreamHarness` owns this recipe. It emits flat
+height zero inside the playable square and height -16 outside it, with height
+calibration offset -64 and scale 128. Source tiles cover 640 m corridors around
+continuous routes, teleport destinations, and the POI footprint. Every refined
+root has all 16 macro children; every refined macro has all 16 regional children.
+Unvisited regions therefore retain a complete fallback partition. Each source
+tile carries 1 m navigation exclusions for the padded exterior and full POI
+entry footprints. Gasworks uses overlay ownership; the fixture does not infer
+a replacement surface mask or cross-layer coverage group.
+
+Original voxel centers are aggregated independently at each POI tier, retaining
+opaque value/material pairs with deterministic dominance and tie breaking.
+Water and transparent materials are excluded from proxies. The builder streams
+one original chunk at a time, requires source cells and chunk spans to align
+with the page grids, and caps source tiles and input entries at 4,096 each,
+combined terrain/POI pages at 32,768, and declared nonempty input cells at
+64 million. Terrain planning checks the page budget before allocating the full
+partition list. Original FULL payloads, auxiliary files and optional solid
+backing remain borrowed references. Publication qualifies the backing metadata
+and rebases its path to the original file.
+
+`content.LoadImportedWorldChunkEntry` qualifies a single binary entry and its
+auxiliary data against owner, coordinate, bounded grid, hash, size and count
+before expansion. `SaveIslandStreamHarness` repeats source qualification,
+rejects output overlap with borrowed files, symlinks inside the output, draft
+mutation and immutable-file collisions. Generated files publish under their
+generation; the fixed root level publishes last. A failed rebuild may leave
+unreferenced new files but cannot rewrite the previous generation.
+
+Markers also encode `hold:10`, `yaw:360`, `teleport:true`, and
+`destination_wait:true` where required. The level carries
+`fixture_recipe:island_stream_harness_v1`; marker transforms use an identity
+rotation. Native walkability at the POI destination and route execution still
+need the gameplay runner. Root height body size is an offline storage count;
+it does not establish the pinned-root GPU memory budget.
 
 ### Reference Island Profile
 
@@ -1106,7 +1144,7 @@ but do not split a row so that it leaves its external contract half-active.
 | I06 | I05 | Complete: explicit `.gkworld` v3 tooling and deterministic POI page bake; live runtime remains gated. See [bake contract](streaming-and-worlds.md#imported-world-v3-page-baking). |
 | I07 | I05 | Complete: terrain v3 page tooling, independent source backing and deterministic height-page publication; live runtime remains gated. See [bake contract](streaming-and-worlds.md#terrain-v3-page-baking). |
 | I08 | I06, I07 | Complete: independent terrain/POI world-space indexes and authored optional streaming bounds; content accepts independent grids, live runtime remains gated. See [assembly contract](streaming-and-worlds.md#independent-level-layer-indexes). |
-| I09 | I06, I07 | Deterministic 15 km harness builder and generated fixture recipe. |
+| I09 | I06, I07 | Complete: deterministic offline 15 km harness builder, qualified borrowed FULL references and immutable publication. See [fixture contract](#fixture-assets). Runtime route execution remains pending. |
 | I10 | I02, I04, I08, I09 | Root startup gate and distance/hysteresis/velocity page selection. |
 | I11 | I10 | Atomic refine/coarsen and cross-layer coverage-group handoff. |
 | I12 | I04, I10 | Byte-budgeted decode/prepared/GPU caches and admission backpressure. |
