@@ -410,7 +410,34 @@ func TestS1dPrepareKnownByteBlockedFallbackAdmitsSmallerFull(t *testing.T) {
 		t.Fatalf("invalid byte-pressure world: %s", validation.Error())
 	}
 	config := state.Config
-	config.MaxPendingPreparedBytes = 3 * smallBytes
+	// Completed envelopes can fit while a worker's conservative final-geometry
+	// reservation needs more space. Measure both future full jobs separately.
+	var fullBound int64
+	for _, coord := range []ChunkCoord{second, fitting} {
+		job := buildStreamedChunkLoadJob(state, coord)
+		job.pendingOwner = nil
+		job.PreparedGeometryCache = nil
+		prepared := prepareStreamedChunkLoad(job)
+		if prepared.Err != nil {
+			t.Fatal(prepared.Err)
+		}
+		resolved := streamedPreparedChunk{
+			prepareCancel: prepared.prepareCancel, Generation: prepared.Generation, Coord: prepared.Coord,
+			TerrainChunk: prepared.TerrainChunk, ImportedWorldChunk: prepared.ImportedWorldChunk,
+			ImportedWorldAux: prepared.ImportedWorldAux, ImportedWorldAuxHit: prepared.ImportedWorldAuxHit,
+			ImportedWorldAuxMiss:                  prepared.ImportedWorldAuxMiss,
+			PreparedImportedWorldGeometryCacheKey: prepared.PreparedImportedWorldGeometryCacheKey,
+			PlacementItems:                        prepared.PlacementItems, ObjectSnapshots: prepared.ObjectSnapshots,
+			v2Placements: prepared.v2Placements, compiledAssets: prepared.compiledAssets,
+		}
+		bound, err := streamedChunkPrebuildCharge(resolved, job)
+		prepared.release()
+		if err != nil {
+			t.Fatal(err)
+		}
+		fullBound = max(fullBound, bound)
+	}
+	config.MaxPendingPreparedBytes = max(3*smallBytes, smallBytes+fullBound)
 	if err := RestartStreamedLevelRuntime(cmd, assets, config); err != nil {
 		t.Fatal(err)
 	}

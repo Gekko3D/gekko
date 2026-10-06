@@ -529,6 +529,7 @@ type streamedPreparedChunk struct {
 }
 
 type streamedChunkLoadJob struct {
+	pendingOwner              *streamedPendingPreparedOwner
 	compactPreparedGeometry   bool
 	renderManaged             bool
 	prepareCancel             <-chan struct{}
@@ -1522,6 +1523,7 @@ func startStreamedChunkPrepareJob(state *StreamedLevelRuntimeState, job streamed
 	acquireStreamedWorkAttempt(state, job.Generation, cancel)
 	recordStreamedPreparationDispatch(state, job.Coord, "full")
 	owner, results, jobs := state.pendingPrepared, state.PreparedLoads, &state.jobs
+	job.pendingOwner = owner
 	activeMu, active := &state.activePrepareMu, &state.activeChunkPrepares
 	activeMu.Lock()
 	*active++
@@ -2239,6 +2241,7 @@ func prepareStreamedSectorProxyLoad(job streamedSectorProxyLoadJob) (result stre
 	}
 	result.AuxMiss = !result.AuxHit
 	result.PreparedGeometryCacheKey = streamedImportedWorldGeometryCacheKey("sector_proxy", chunkPath, streamedImportedWorldPayloadAndAuxHash(firstNonEmptyString(job.LOD.PayloadHash, chunk.PayloadHash), result.Aux), firstPositiveInt(job.LOD.PayloadSizeBytes, chunk.PayloadSizeBytes))
+	var prebuildCost int64
 	if source != nil && err == nil && job.pendingOwner != nil {
 		cost, estimateErr := streamedRLEProxyPrebuildCharge(source, result.Aux, job.LOD, result.PreparedGeometryCacheKey)
 		if estimateErr != nil {
@@ -2252,6 +2255,10 @@ func prepareStreamedSectorProxyLoad(job streamedSectorProxyLoadJob) (result stre
 			return streamedPreparedSectorProxy{prepareCancel: job.prepareCancel, Generation: job.Generation, SectorCoord: job.SectorCoord, retryCost: cost}
 		}
 		result.pendingCredit = credit
+		prebuildCost = cost
+	}
+	if streamedPreparationCancelled(job.prepareCancel) {
+		return result
 	}
 	build := func() *volume.XBrickMap {
 		if source != nil {
@@ -2259,11 +2266,32 @@ func prepareStreamedSectorProxyLoad(job streamedSectorProxyLoadJob) (result stre
 		}
 		return prepareImportedWorldChunkGeometry(chunk, result.Aux)
 	}
-	if job.compactPreparedGeometry {
-		result.geometrySource, _ = job.PreparedGeometryCache.getOrBuildSource(result.PreparedGeometryCacheKey, true, build)
-	} else {
-		result.PreparedGeometry, _ = job.PreparedGeometryCache.getOrBuild(result.PreparedGeometryCacheKey, build)
+	captured, promotion, _ := job.PreparedGeometryCache.getOrBuildSourceRequest(result.PreparedGeometryCacheKey, job.compactPreparedGeometry, build)
+	if streamedPreparationCancelled(job.prepareCancel) {
+		return result
 	}
+	if result.pendingCredit != nil {
+		cost, err := streamedProxyCapturedPrebuildCharge(result, prebuildCost, captured, job.compactPreparedGeometry)
+		if err != nil {
+			result.Err = err
+			return result
+		}
+		if cost > prebuildCost && !result.pendingCredit.resize(cost) {
+			result.loadScope = scope
+			result.release()
+			scope = nil
+			return streamedPreparedSectorProxy{prepareCancel: job.prepareCancel, Generation: job.Generation, SectorCoord: job.SectorCoord, retryCost: cost}
+		}
+	}
+	if streamedPreparationCancelled(job.prepareCancel) {
+		return result
+	}
+	if job.compactPreparedGeometry {
+		result.geometrySource = captured
+	} else {
+		result.PreparedGeometry = job.PreparedGeometryCache.promoteSource(result.PreparedGeometryCacheKey, captured, promotion)
+	}
+
 	if !streamedPreparationCancelled(job.prepareCancel) {
 		if result.geometrySource != nil {
 			result.registration = prepareStreamedSourceRegistration(result.geometrySource)
@@ -2353,15 +2381,6 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 			result.ImportedWorldAux, result.ImportedWorldAuxHit = chunk.EmbeddedAux, true
 		}
 		result.PreparedImportedWorldGeometryCacheKey = streamedImportedWorldGeometryCacheKey("imported_override", chunkPath, chunk.PayloadHash, chunk.PayloadSizeBytes)
-		if job.compactPreparedGeometry && !job.HasImportedWorldBacking {
-			result.geometrySource, _ = job.PreparedGeometryCache.getOrBuildSource(result.PreparedImportedWorldGeometryCacheKey, true, func() *volume.XBrickMap {
-				return prepareImportedWorldChunkGeometry(chunk, nil)
-			})
-		} else {
-			result.PreparedImportedWorldGeometry, _ = job.PreparedGeometryCache.getOrBuild(result.PreparedImportedWorldGeometryCacheKey, func() *volume.XBrickMap {
-				return prepareImportedWorldChunkGeometry(chunk, nil)
-			})
-		}
 	} else if job.ImportedWorldEntry != nil && (job.ImportedWorldEntry.NonEmptyVoxelCount > 0 || job.HasImportedWorldBacking) {
 		chunkPath := content.ResolveImportedWorldChunkPath(*job.ImportedWorldEntry, job.ImportedWorldManifestPath)
 		chunk, err := job.Loader.LoadImportedWorldChunk(chunkPath)
@@ -2376,15 +2395,6 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 		}
 		result.ImportedWorldAuxMiss = !result.ImportedWorldAuxHit
 		result.PreparedImportedWorldGeometryCacheKey = streamedImportedWorldGeometryCacheKey("imported_full", chunkPath, streamedImportedWorldPayloadAndAuxHash(firstNonEmptyString(job.ImportedWorldEntry.PayloadHash, chunk.PayloadHash), result.ImportedWorldAux), firstPositiveInt(job.ImportedWorldEntry.PayloadSizeBytes, chunk.PayloadSizeBytes))
-		if job.compactPreparedGeometry && !job.HasImportedWorldBacking {
-			result.geometrySource, _ = job.PreparedGeometryCache.getOrBuildSource(result.PreparedImportedWorldGeometryCacheKey, true, func() *volume.XBrickMap {
-				return prepareImportedWorldChunkGeometry(chunk, result.ImportedWorldAux)
-			})
-		} else {
-			result.PreparedImportedWorldGeometry, _ = job.PreparedGeometryCache.getOrBuild(result.PreparedImportedWorldGeometryCacheKey, func() *volume.XBrickMap {
-				return prepareImportedWorldChunkGeometry(chunk, result.ImportedWorldAux)
-			})
-		}
 	}
 	if streamedPreparationCancelled(job.prepareCancel) {
 		return result
@@ -2405,16 +2415,69 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 			result.v2Placements[override.PlacementID] = true
 		}
 		result.ObjectSnapshots[key] = snapshot
-		geometry := XBrickMapFromVoxelObjectSnapshot(snapshot)
-		geometry.ComputeAABB()
-		geometry.ClearDirty()
-		result.objectSnapshotGeometry[key] = &streamedObjectSnapshotGeometry{
-			snapshot: snapshot, source: geometry, registration: prepareStreamedGeometryRegistration(geometry),
-		}
 	}
 	if streamedPreparationCancelled(job.prepareCancel) {
 		return result
 	}
+	var prebuildCost int64
+	retry := func(cost int64) streamedPreparedChunk {
+		result.loadScope = scope
+		result.release()
+		scope = nil
+		return streamedPreparedChunk{prepareCancel: job.prepareCancel, Generation: job.Generation, Coord: job.Coord, retryCost: cost}
+	}
+	if job.pendingOwner != nil {
+		cost, err := streamedChunkPrebuildCharge(result, job)
+		if err != nil {
+			result.Err = err
+			return result
+		}
+		credit, ok := job.pendingOwner.reserve(cost)
+		if !ok {
+			return retry(cost)
+		}
+		result.pendingCredit, prebuildCost = credit, cost
+	}
+	if streamedPreparationCancelled(job.prepareCancel) {
+		return result
+	}
+	if result.PreparedImportedWorldGeometryCacheKey != "" {
+		compact := job.compactPreparedGeometry && !job.HasImportedWorldBacking
+		captured, promotion, _ := job.PreparedGeometryCache.getOrBuildSourceRequest(result.PreparedImportedWorldGeometryCacheKey, compact, func() *volume.XBrickMap {
+			return prepareImportedWorldChunkGeometry(result.ImportedWorldChunk, result.ImportedWorldAux)
+		})
+		if streamedPreparationCancelled(job.prepareCancel) {
+			return result
+		}
+		if result.pendingCredit != nil {
+			cost, err := streamedChunkCapturedPrebuildCharge(result, job, captured)
+			if err != nil {
+				result.Err = err
+				return result
+			}
+			if cost > prebuildCost && !result.pendingCredit.resize(cost) {
+				return retry(cost)
+			}
+		}
+		if streamedPreparationCancelled(job.prepareCancel) {
+			return result
+		}
+		if compact {
+			result.geometrySource = captured
+		} else {
+			result.PreparedImportedWorldGeometry = job.PreparedGeometryCache.promoteSource(result.PreparedImportedWorldGeometryCacheKey, captured, promotion)
+		}
+	}
+	for key, snapshot := range result.ObjectSnapshots {
+		if streamedPreparationCancelled(job.prepareCancel) {
+			return result
+		}
+		geometry := XBrickMapFromVoxelObjectSnapshot(snapshot)
+		geometry.ComputeAABB()
+		geometry.ClearDirty()
+		result.objectSnapshotGeometry[key] = &streamedObjectSnapshotGeometry{snapshot: snapshot, source: geometry, registration: prepareStreamedGeometryRegistration(geometry)}
+	}
+
 	if result.TerrainChunk != nil && result.TerrainChunk.NonEmptyVoxelCount > 0 {
 		result.preparedTerrainGeometry = terrainChunkToXBrickMap(result.TerrainChunk)
 		result.preparedTerrainGeometry.ComputeAABB()

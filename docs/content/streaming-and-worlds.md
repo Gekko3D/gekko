@@ -1068,10 +1068,9 @@ Before building geometry or copying a warm cache result for registration, an
 async RLE proxy reserves a conservative charge from the existing shared
 `MaxPendingPreparedBytes` owner. The bound covers encoded source, metadata, aux,
 the exact qualified cache key, source and independent registration geometry,
-packed pointers, normal halo
-entries and registration storage descriptors. Checked arithmetic rejects an
-unrepresentable estimate before construction. Compact preparation keeps its
-existing dense-size fallback and cache identity.
+packed pointers, normal halo entries and registration storage descriptors.
+Checked arithmetic rejects an unrepresentable estimate before construction.
+Compact preparation keeps its existing dense-size fallback and cache identity.
 
 One credit transfers to the result and resizes atomically to actual retained
 charge, including the encoded source. A denied worker closes its scope and
@@ -1083,11 +1082,51 @@ atomically, with cancellation checked at phase boundaries.
 
 These are logical retained-storage bounds, excluding allocator/map bucket slack,
 cache bookkeeping and temporary conversion allocations. Encoded file IO and aux
-loading happen before reservation. Other full/placement/override jobs and C1
-construction still lack prebuild byte admission. Cache/result estimates can
+loading happen before reservation. Full workers use the final-geometry admission
+phase below. Earlier compiled packet/canonical resolution, decode and direct C1
+construction still need preflight work. Cache/result estimates can
 charge shared storage independently and must not be summed as physical memory.
 Page-specific pin/eviction policy and native route memory targets remain I12
 work; live v3 activation still awaits height and collision integration.
+
+#### Full-worker final-geometry admission
+
+Full workers resolve terrain, imported payloads, aux, object snapshots and
+compiled placement packets before constructing their final geometry. Dense
+imported records remain available for collision, terrain metadata, backing and
+edits. A resolved asynchronous worker reserves one composite credit from the
+same pending owner, then builds its imported, terrain and snapshot maps and independent
+registrations. Managed terrain includes its separate renderer copy. Completed
+compiled packets count in that reservation. Denial releases resolved payloads,
+scopes and packet handles and returns the existing small retry hint. Synchronous
+preparation without a pending owner retains its immediate behavior.
+
+Bounds derive from actual nonzero records and positive terrain column heights;
+metadata count hints never substitute for emitted writes. Coordinate extents
+cap brick/sector counts without expanding terrain into voxel records or making
+an occupancy index. Negative coordinates, duplicate records and legacy JSON
+records outside their declared lattice retain existing semantics. Checked
+arithmetic rejects an unrepresentable charge before final construction. The
+bound includes exact keys, decoded storage, aux capacities, normal halos and
+registration descriptors, with backing and compact eligibility unchanged.
+
+Asynchronous full workers and admitted RLE proxy workers capture a cache source
+with its promotion coordinator. Before copying or promoting it, they check its
+actual retained storage against the reserved imported component. This matters when a stale
+legacy manifest identity selects a larger warm source than current decoded
+records suggest. Necessary growth preserves all other result components and
+uses the same credit. Denial leaves the captured source unpromoted and releases
+only the requesting worker's ownership. Cache eviction or closure does not
+invalidate a locally captured source. Cache identity semantics remain unchanged.
+
+Payload resolution itself is outside this final-geometry ceiling. It includes
+IO/decode, compiled packet construction and canonical base geometry used to
+resolve v2 object deltas; active worker count still bounds their concurrency.
+Commit-time backing/removal copies also remain outside the worker guarantee.
+These earlier phases, direct C1 construction, page pin/eviction policy and native
+route memory targets remain I12 work. The logical accounting and credit cleanup
+rules above apply to both admitted worker paths; this is not a process-memory
+limit.
 
 Preparation dispatch priority, S1d:
 

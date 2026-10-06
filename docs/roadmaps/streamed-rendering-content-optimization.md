@@ -5209,7 +5209,7 @@ frame-work budget. I12 byte-budgeted admission and caches are next.
 
 ### I12a: Immutable RLE proxy construction and prebuild admission
 
-Commit: this batch. Legacy streamed proxies consume validated immutable RLE
+Commit: `b7a3179`. Legacy streamed proxies consume validated immutable RLE
 sources directly through the brick builder. They reuse the existing content
 cache/scope owner and reserve the existing pending-byte credit before geometry
 construction, then reconcile that credit through commit/discard. JSON/C1 and
@@ -5237,3 +5237,30 @@ rerun. I12 remains partial: arbitrary full-job/placement/override preflight,
 direct C1 construction, page-specific pin/eviction integration and native route
 memory targets remain. Encoded IO/aux loading and allocator overhead are outside
 the prebuild ceiling; live v3 remains gated on I13/I14.
+
+### I12b: Full-worker final-geometry byte admission
+
+Commit: this batch. Full workers resolve payloads before reserving one composite
+pending-byte credit for final imported, terrain and snapshot geometry and their
+registrations. Dense data and backing/collision ownership remain intact. Full
+and RLE proxy paths also size the captured warm cache source before promotion or
+copying, then reconcile the same credit. See [the owning contract](../content/streaming-and-worlds.md#full-worker-final-geometry-admission).
+
+Verification from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run 'I12b|I12|S2b|S2e|S1d' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run 'I12b|I12ConcurrentCredit' -count=1
+git diff --check
+```
+
+Direct editor/actiongame builds use
+`env GOCACHE=/tmp/gekko3d-gocache go build -o /private/tmp/gekko-i12b-editor .`
+from `../gekko-editor` and
+`env GOCACHE=/tmp/gekko3d-gocache go build -o /private/tmp/gekko-i12b-actiongame .`
+from `../actiongame`. Manual GPU/visual checks and consumer test suites were not
+rerun. I12 remains partial: earlier IO/decode, compiled packet construction and
+canonical v2 resolution still need preflight; direct C1 construction, page
+pin/eviction integration and native route memory targets remain. Commit-time
+backing/removal copies and allocator overhead are outside the worker guarantee.

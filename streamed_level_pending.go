@@ -171,9 +171,19 @@ func admitStreamedPreparedChunk(owner *streamedPendingPreparedOwner, p streamedP
 		p.release()
 		return streamedPreparedChunk{prepareCancel: p.prepareCancel, Generation: p.Generation, Coord: p.Coord, Err: p.Err, PrepareDuration: p.PrepareDuration}
 	}
+	if p.retryCost > 0 {
+		return p
+	}
 	cost := streamedPreparedChunkCharge(p)
 	if streamedPreparationCancelled(p.prepareCancel) {
 		return cancelledStreamedPreparedChunk(p)
+	}
+	if p.pendingCredit != nil {
+		if p.pendingCredit.resize(cost) {
+			return p
+		}
+		p.release()
+		return streamedPreparedChunk{prepareCancel: p.prepareCancel, Generation: p.Generation, Coord: p.Coord, retryCost: cost, PrepareDuration: p.PrepareDuration}
 	}
 	credit, ok := owner.reserve(cost)
 	if !ok {

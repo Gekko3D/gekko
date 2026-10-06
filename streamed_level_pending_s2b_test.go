@@ -278,10 +278,32 @@ func TestS2bPendingCommitBudgetPreservesCreditAndRetryHintPreventsRebuilds(t *te
 	}
 	probe.jobs.Wait()
 	refreshStreamedRuntimeMetricsCounts(probe)
-	budget := probe.Metrics.PendingPreparedBytes
+	actualSum := probe.Metrics.PendingPreparedBytes
+	budget := actualSum
 	if budget <= 0 || len(probe.PreparedLoads) != 2 {
 		t.Fatal("measurement fixture did not queue two full payloads")
 	}
+	// Capacity must cover the second worker's prebuild reservation while the
+	// first completed envelope remains queued. Final queued costs stay separate.
+	first := <-probe.PreparedLoads
+	secondPrepared := <-probe.PreparedLoads
+	secondJob := buildStreamedChunkLoadJob(probe, secondPrepared.Coord)
+	resolved := streamedPreparedChunk{
+		prepareCancel: secondPrepared.prepareCancel, Generation: secondPrepared.Generation, Coord: secondPrepared.Coord,
+		TerrainChunk: secondPrepared.TerrainChunk, ImportedWorldChunk: secondPrepared.ImportedWorldChunk,
+		ImportedWorldAux: secondPrepared.ImportedWorldAux, ImportedWorldAuxHit: secondPrepared.ImportedWorldAuxHit,
+		ImportedWorldAuxMiss:                  secondPrepared.ImportedWorldAuxMiss,
+		PreparedImportedWorldGeometryCacheKey: secondPrepared.PreparedImportedWorldGeometryCacheKey,
+		PlacementItems:                        secondPrepared.PlacementItems, ObjectSnapshots: secondPrepared.ObjectSnapshots,
+		v2Placements: secondPrepared.v2Placements, compiledAssets: secondPrepared.compiledAssets,
+	}
+	secondBound, err := streamedChunkPrebuildCharge(resolved, secondJob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget = streamedPreparedChunkCharge(first) + secondBound
+	probe.PreparedLoads <- first
+	probe.PreparedLoads <- secondPrepared
 	if err := StopStreamedLevelRuntime(probeCmd); err != nil {
 		t.Fatal(err)
 	}
@@ -303,12 +325,12 @@ func TestS2bPendingCommitBudgetPreservesCreditAndRetryHintPreventsRebuilds(t *te
 	s2bUntil(t, func() bool { return len(state.PreparedProxyLoads) == 1 })
 	state.jobs.Wait()
 	refreshStreamedRuntimeMetricsCounts(state)
-	if state.Metrics.PendingPreparedBytes != budget || state.Metrics.PendingPreparedAdmissionRetries != 1 {
+	if state.Metrics.PendingPreparedBytes != actualSum || state.Metrics.PendingPreparedAdmissionRetries != 1 {
 		t.Fatalf("pressure fixture did not defer proxy: %+v", state.Metrics)
 	}
 	commitPreparedStreamedChunksSystem(cmd, assets, state)
 	cmd.app.FlushCommands()
-	if state.Metrics.PreparedChunkQueueDepth != 1 || state.Metrics.PendingPreparedBytes <= 0 || state.Metrics.PendingPreparedBytes >= budget || state.Loader.Stats().PinnedBytes <= metadata {
+	if state.Metrics.PreparedChunkQueueDepth != 1 || state.Metrics.PendingPreparedBytes <= 0 || state.Metrics.PendingPreparedBytes >= actualSum || state.Loader.Stats().PinnedBytes <= metadata {
 		t.Fatalf("count commit budget dropped remaining queued ownership: %+v", state.Metrics)
 	}
 	observer := cmd.AddEntity(&TransformComponent{}, &StreamedLevelObserverComponent{})
