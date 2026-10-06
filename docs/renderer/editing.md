@@ -286,6 +286,46 @@ atomic. Geometry views freeze no map metadata or GPU assignments. Construction,
 retained historical records, slice capacities and renderer integration establish
 no total-memory or elapsed-time ceiling.
 
+#### Ordinary managed renderer inputs (S1l6)
+
+Ordinary managed renderer bindings provide a lazy, engine-thread capture through
+`core.VoxelObject.CaptureManagedGeometryInput`. A successful capture returns a
+`core.ManagedGeometryInput` with `Geometry()` (the frozen volume view),
+`Generation()` (the managed publication token), and `SameSource(other)` (the
+attachment identity). Zero inputs have no source identity. Unchanged bindings
+keep their identity; a replacement attachment has a different identity even if
+its generation number or sector count matches. Capturing does not copy sector
+geometry, bounds or revision maps. No capture occurs merely because a frame syncs.
+
+The bridge installs a private capture provider through
+`SetManagedGeometryProducer(derivative, capture)`; nil clears the provider.
+Providers are trusted ownership adapters, not certification for arbitrary raw
+maps. Core rejects nil or changed derivative pointers, GPU-editing derivatives,
+special render lattices and any selected LOD representation. The engine provider
+additionally validates current entity/model/transform, asset, binding, sealed
+owner and publication generation before capturing.
+Exposure, runtime promotion, pending removal/rebind, lost ownership and capture
+during an ordered producer fail closed. Raw and unsupported geometry retain the
+existing synchronous path. Qualified empty geometry remains distinguishable from
+unavailable geometry.
+
+Existing managed edit authority still applies: direct in-place renderer-map edits
+require explicit runtime promotion. Pointer guards do not detect unpromoted raw
+payload writes, and a frozen producer input does not certify those writes.
+
+Captured inputs contain only an immutable view, a publication token and an opaque
+attachment token; they do not retain the producer, engine state or managed owner.
+They remain readable after edits, exposure, rebind, removal and provider clearing.
+Sector copies stay independently mutable. Dropping an input releases its retained
+view through Go lifetime management; this prerequisite does not create GPU pins.
+Existing `RetainedBytes` and `CopyBytes` domains pass through unchanged, excluding
+the input/token/provider storage, bounds, revision maps, allocator overhead and
+GPU resources. Scheduler metadata requires separate accounting in the next step.
+
+This is the producer-input prerequisite for staged structural admission. CPU
+authority publication, renderer derivative copying, GPU admission and readiness
+remain synchronous. It establishes no per-frame work or memory ceiling.
+
 ### Ordinary managed runtime geometry
 
 `AssetServer.RegisterManagedVoxelGeometry(source, sourcePath)` defensively seals

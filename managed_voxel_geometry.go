@@ -20,14 +20,16 @@ type managedVoxelGeometry struct {
 	generation         uint64
 	entity             EntityId
 	app                *App
+	producerActive     bool
 }
 
 type managedVoxelBinding struct {
-	derivative *volume.XBrickMap
-	id         AssetId
-	entry      *managedVoxelGeometry
-	generation uint64
-	exposed    bool
+	derivative       *volume.XBrickMap
+	id               AssetId
+	entry            *managedVoxelGeometry
+	generation       uint64
+	exposed          bool
+	producerAttached bool
 }
 
 // RegisterManagedVoxelGeometry seals a defensive CPU copy. GPU-first sources
@@ -235,6 +237,8 @@ func ApplyManagedVoxelWrites(cmd *Commands, assets *AssetServer, eid EntityId, w
 	}
 	id := vmc.GeometryAsset()
 	var accepted []volume.VoxelWrite
+	entry.producerActive = true
+	defer func() { entry.producerActive = false }()
 	defer func() {
 		if len(accepted) == 0 {
 			return

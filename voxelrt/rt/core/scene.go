@@ -97,6 +97,7 @@ type VoxelObject struct {
 	worldAABBMapRevision      uint64
 	renderRepresentation      *voxelRenderRepresentation
 	immutableMaterialTable    *ImmutableMaterialTable
+	managedGeometryProducer   *managedGeometryProducer
 
 	// Monotonic request identity survives representation replacement.
 	pendingFullUploadGeneration uint64

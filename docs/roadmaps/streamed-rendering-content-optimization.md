@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-06. Status: staged implementation; S1a–S1k and S1l1–S1l5, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals, P3b native workload evaluation and P3c packed mixed materials are complete, with P3 remaining partial; W3a scene BVH, W3b sector and W3c inner grid traversal are complete, with W3 remaining partial; W4a terrain brick-run construction, W4b ordered mixed-material construction, W4c1 tiled height source content and W4c2 resident height queries are complete, with W4 remaining partial; I05 shared page validation and legacy imported-world normalization and I06 explicit imported-world v3 page tooling and I07 terrain v3 page tooling are complete; live page residency remains pending; other sections are proposals.
+Date: 2026-10-06. Status: staged implementation; S1a–S1k and S1l1–S1l6, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals, P3b native workload evaluation and P3c packed mixed materials are complete, with P3 remaining partial; W3a scene BVH, W3b sector and W3c inner grid traversal are complete, with W3 remaining partial; W4a terrain brick-run construction, W4b ordered mixed-material construction, W4c1 tiled height source content and W4c2 resident height queries are complete, with W4 remaining partial; I05 shared page validation and legacy imported-world normalization and I06 explicit imported-world v3 page tooling and I07 terrain v3 page tooling are complete; live page residency remains pending; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -5264,3 +5264,41 @@ rerun. I12 remains partial: earlier IO/decode, compiled packet construction and
 canonical v2 resolution still need preflight; direct C1 construction, page
 pin/eviction integration and native route memory targets remain. Commit-time
 backing/removal copies and allocator overhead are outside the worker guarantee.
+
+
+### S1l6: Ordinary managed producer inputs
+
+Commit: this batch. Engine managed bindings provide lazy frozen inputs to core
+with independent attachment identity and live ownership qualification. Historical
+inputs retain only geometry and a token; edits, panic prefixes, exposure, rebind,
+removal and independent sector copies preserve their isolation. Unchanged syncs
+reuse the attachment without capturing or repeating input qualification. See
+[the canonical contract](../renderer/editing.md#ordinary-managed-renderer-inputs-s1l6).
+
+Verification passed from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/volume -run '^TestS1l' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . ./voxelrt/rt/core -run '^TestS1l6' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(P1d|P1e|E2b3|S1l6)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/core ./voxelrt/rt/volume -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . ./voxelrt/rt/core ./voxelrt/rt/volume -run '^(TestS1l6|TestP1d|TestP1e|TestS1l)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./...
+git diff --check
+```
+
+Consumer builds passed from their respective workspace modules:
+
+| Module | Command |
+| --- | --- |
+| `gekko-editor` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l6-build/gekko-editor/ ./...` |
+| `actiongame` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l6-build/actiongame/ ./...` |
+| `spacegame_go` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l6-build/spacegame_go/ ./...` |
+| `spacesim` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l6-build/spacesim/ ./...` |
+| `examples/testing-vox` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l6-build/examples/testing-vox/ ./...` |
+
+This completes the producer-input prerequisite, not staged GPU service. Scheduler
+metadata charges, generation admission/coalescing, reconciliation journals and
+coherent publication/retirement remain. Authority and renderer copies stay
+synchronous. No GPU behavior changed; native visuals, frame performance and
+consumer test suites were not rerun. No total-memory or per-frame bound is claimed.

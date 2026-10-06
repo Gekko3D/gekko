@@ -499,11 +499,16 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 				obj.XBrickMap = source.Copy()
 				state.RtApp.Scene.StructureRevision++
 			}
-			state.managedVoxelBindings[entityId] = managedVoxelBinding{derivative: obj.XBrickMap, id: displayGeometryID, entry: entry, generation: entry.generation, exposed: entry.exposed}
+			attached := binding.producerAttached && !changed && binding.derivative == obj.XBrickMap
+			binding = managedVoxelBinding{derivative: obj.XBrickMap, id: displayGeometryID, entry: entry, generation: entry.generation, exposed: entry.exposed, producerAttached: attached}
+			state.managedVoxelBindings[entityId] = state.attachManagedVoxelInput(entityId, obj, binding)
 			state.instanceGeometrySources[entityId] = source
 			state.instanceObjectScopedGeometry[entityId] = !entry.exposed
 		} else {
 			if _, managed := state.managedVoxelBindings[entityId]; managed {
+				if previous := state.instanceMap[entityId]; previous != nil {
+					previous.SetManagedGeometryProducer(nil, nil)
+				}
 				delete(state.managedVoxelBindings, entityId)
 				state.clearRuntimeEditedVoxelEntity(entityId)
 				delete(state.instanceGeometrySources, entityId)
@@ -648,6 +653,7 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 	for eid, obj := range state.instanceMap {
 		if !currentObjectEntities[eid] {
 			state.clearCompiledAssetLOD(eid)
+			obj.SetManagedGeometryProducer(nil, nil)
 			state.RtApp.Scene.RemoveObject(obj)
 			delete(state.instanceMap, eid)
 			delete(state.managedVoxelBindings, eid)

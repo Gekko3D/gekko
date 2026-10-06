@@ -851,6 +851,18 @@ coverage, final publication, resize and retirement. The policy is approved;
 producer leases, staged metadata accounting and allocation publication remain
 separate implementation steps.
 
+### S1l6: Ordinary managed producer inputs
+
+Completed 2026-10-06 in this batch. Ordinary managed bindings provide lazy frozen
+core inputs with stable attachment identity, generation qualification and
+historical isolation. Unchanged syncs reuse the provider without capture or extra
+input qualification. The lasting contract is in
+[ordinary managed renderer inputs](../renderer/editing.md#ordinary-managed-renderer-inputs-s1l6);
+commands and limits are in the
+[delivery record](streamed-rendering-content-optimization.md#s1l6-ordinary-managed-producer-inputs).
+Staged metadata accounting, GPU admission/service and coherent publication remain
+next. Synchronous copies and rendering are unchanged; no frame-time claim.
+
 ## Verification and execution record
 
 Workflow: GPT-6.1 sol tests to red; root adversarial test review; GPT-6.1 sol code to green; root adversarial production review; commit. User authorized tests/subagents. Preserve unrelated changes.
