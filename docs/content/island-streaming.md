@@ -263,6 +263,8 @@ type StreamPagePayloadDef struct {
     ChunkSize           int        `json:"chunk_size"`
     VoxelResolution     float32    `json:"voxel_resolution"`
     SampleSpacing       float32    `json:"sample_spacing,omitempty"`
+    HeightOffset        float32    `json:"height_offset,omitempty"`
+    HeightScale         float32    `json:"height_scale,omitempty"`
     PayloadHash         string     `json:"payload_hash"`
     PayloadSizeBytes    int        `json:"payload_size_bytes"`
     OccupiedSectorCount int        `json:"occupied_sector_count,omitempty"`
@@ -280,7 +282,7 @@ type ImportedWorldDef struct {
 }
 
 type TerrainChunkManifestDef struct {
-    // Existing terrain identity fields remain; grid fields describe leaf tiles.
+    // Existing terrain identity fields remain; grid fields describe shared source tiles.
     Entries         []TerrainChunkEntryDef `json:"entries,omitempty"`
     Pages           []StreamPageDef        `json:"pages,omitempty"`
     RootPageIndices []uint32               `json:"root_page_indices,omitempty"`
@@ -313,6 +315,8 @@ W4c1 implements the source tile codec, legacy heightfield-to-tile bake and v3
 manifest tooling. The current runtime still rejects v3 until height collision
 and edit-patch ownership are ready. See the
 [implemented source contract](streaming-and-worlds.md#tiled-terrain-source-content-v3).
+I07 adds the [terrain page bake](streaming-and-worlds.md#terrain-v3-page-baking),
+with 256 m source tiles separate from the terminal 128 m regional visual pages.
 W4c2 adds the [resident query foundation](streaming-and-worlds.md#resident-height-query-foundation);
 it does not activate or complete I13/I14.
 
@@ -329,14 +333,14 @@ The payload starts with `sample_width * sample_height` row-major, little-endian
 cell-centered; a surface builder reads the adjacent payload's edge sample when
 filtering a boundary. This is followed by either zero bytes or exactly
 `ceil(sample_width * sample_height / 8)` row-major validity-mask bytes; one means
-terrain surface is present. Source leaves are 128 x 128 at 2 m. A source leaf is
+terrain surface is present. Source tiles are 128 x 128 at 2 m. A source tile is
 then followed by exactly 8,192 row-major outdoor-navigation exclusion bytes when
 `outdoor_nav_exclusion_mask_bytes` is non-zero: one bit for each 1 m cell in its
 256 x 256 m span, where one means infantry navigation is excluded by water,
 void, static non-height geometry, an authored no-nav volume, or POI surface
 ownership. Root/macro/regional render payloads set both outdoor-navigation fields
 to zero. The `island_reference` profile requires a 1 m exclusion mask for every
-playable source leaf; non-island terrain may omit it. The file remains a
+playable source tile; non-island terrain may omit it. The file remains a
 `.gkchunk`; payload kind selects its decoder.
 
 Terrain root, macro, and regional page payloads use that same height format at
@@ -359,13 +363,16 @@ legacy/inline content; each v3 streamed manifest is authoritative for its layer.
 ### Page And Sector Rules
 
 - A page ID is its index in `pages`; a leaf ID is its index in that manifest's
-  `entries`.
+  `entries` for POI visual chunks. Terrain entries are shared source backing,
+  separate from the visual forest.
 - Every page has a payload, including roots. This is the coarser fallback used by
   the no-hole handoff.
-- A page has either `child_page_indices` or `leaf_entry_indices`, never both.
+- A POI page has either `child_page_indices` or `leaf_entry_indices`, never both.
+  Terrain pages have no source-entry leaf references: root → macro → regional
+  terminates at regional render payloads. Local surfaces are generated later.
 - Parent levels are strictly coarser than child levels.
 - Every page is reachable from exactly one listed root. Cycles, shared children,
-  duplicate roots, and unowned non-empty leaves are invalid.
+  duplicate roots, and unowned non-empty POI visual leaves are invalid.
 - Page bounds contain their payload coverage and every referenced child/leaf.
 - Required root payloads together cover their layer's visible island content and
   are pinned after the startup gate.
@@ -1097,7 +1104,7 @@ but do not split a row so that it leaves its external contract half-active.
 | I04 | I03 | Global byte/sector upload queue and exact readiness predicate. |
 | I05 | - | Complete: shared page types/validator and imported-world v1/v2 normalization; see [runtime contract](streaming-and-worlds.md#streaming-page-contracts-and-legacy-normalization). |
 | I06 | I05 | Complete: explicit `.gkworld` v3 tooling and deterministic POI page bake; live runtime remains gated. See [bake contract](streaming-and-worlds.md#imported-world-v3-page-baking). |
-| I07 | I05 | Terrain v3 manifest plus `height_u16_binary_v1` read/write validation. |
+| I07 | I05 | Complete: terrain v3 page tooling, independent source backing and deterministic height-page publication; live runtime remains gated. See [bake contract](streaming-and-worlds.md#terrain-v3-page-baking). |
 | I08 | I06, I07 | Independent terrain/POI world-space indexes; remove resolution equality. |
 | I09 | I06, I07 | Deterministic 15 km harness builder and generated fixture recipe. |
 | I10 | I02, I04, I08, I09 | Root startup gate and distance/hysteresis/velocity page selection. |

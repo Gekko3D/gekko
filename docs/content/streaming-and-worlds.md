@@ -101,8 +101,8 @@ with source content. Explicit schema-3 `.gkterrainmanifest` entries reference
 `height_u16_binary_v1` `.gkchunk` tiles. Legacy defaults and column manifests
 remain schema 2. The current voxel-terrain runtime rejects schema 3 until resident
 height collision and edit-patch ownership are implemented; content tooling can
-save and load it. Render-page hierarchy, collision and excavation handoffs follow
-this source-content step.
+save and load source-only and paged manifests. Collision and excavation handoffs
+remain pending.
 
 `TerrainHeightTileDef` stores up to 128 by 128 row-major `uint16` samples. A
 sample center is `WorldOrigin + (local + 0.5) * SampleSpacing` in X/Z; its world
@@ -131,6 +131,57 @@ an invalid bit. Every geometrically intersecting tile is emitted, including tile
 whose centers all fall outside a small source extent. Source hashes retain the
 legacy source identity; entry dimensions, spacing and payload hashes identify
 the tiled representation.
+
+### Terrain v3 page baking
+
+Terrain source `Entries` and the visual `Pages` forest have separate ownership.
+The default 256 m source tiles retain height queries, collision inputs and outdoor
+navigation data. The root → macro → 128 m regional forest ends at regional
+render payloads; it has no `LeafEntryIndices` into source entries. Local terrain
+surfaces are generated later. `ValidateTerrainPageManifest` returns an owned,
+metadata-only `TerrainPageIndex`; paged and legacy loading attaches it without
+reading payloads. Flat source-only v3 loads retain their established decoded value
+without an attached index; explicit normalization returns `SourceOnly`. Legacy v2 (and
+missing-version) manifests normalize nonempty entries into ordered compatibility
+pages with `LegacyDistance`; empty entries have no owner. Their Y bounds use the
+filled-column count rather than assuming a cubic chunk. Terrain v1 stays
+unsupported. Explicit page wire fields on legacy versions fail even when empty; ambiguous
+version keys are rejected.
+
+Paged v3 manifests require a canonical SHA-256 generation identity. Height
+references declare `HeightOffset` and positive `HeightScale`; page coverage is
+its nominal X/Z sample span and that encoding range in Y. Sample spacing is
+independent of target visual resolution and must be an integer multiple of it.
+`LoadTerrainHeightPagePayload` qualifies body hash/size, owner, coordinate,
+origin, dimensions, spacing and calibration. Strict grids preserve distinct
+float32 sample centers; one clean path cannot declare conflicting payload headers.
+Render pages exclude navigation
+masks and voxel aux data. Optional calibration on source entries is qualified
+when present; old source-only entries without it retain their existing meaning.
+
+`content/derived.BuildTerrainPageBake` consumes source-only v3 manifests and
+owned source tiles. Defaults are 128/512/2048 m spans, 2/4/16 m data spacing,
+and 1/4/16 m target visual resolution. Spans align to source sample cells, so a
+regional page may subdivide a source tile. Parent span ratios are powers of two;
+data spacing is an integer multiple of source spacing. Payload sides are at most
+128 samples. Default and hard limits are 4,096 source tiles and 16,384 pages.
+
+Each tier independently averages original valid source cells in world-height
+space; it never averages already quantized child pages. A cell is present if any
+contributing source cell is present. All pages use the declared global source
+encoding range, rounded outward when float32 conversion requires it, with
+nearest-uint16 quantization. Sparse forests omit empty
+branches; all-masked tiles remain source backing. Original source heights,
+validity and navigation bytes are preserved. Height data does not manufacture
+occupied voxel-sector/brick costs or filled volumes.
+
+The generation hash includes source metadata, all height/validity/navigation
+arrays, effective options and format version. All source/page paths use that
+identity. `SaveTerrainPageBake` checks the sealed draft before writes, stages and
+qualifies the existing bounded height codec, publishes immutable payload files,
+then replaces the manifest atomically. Draft mutation requires rebuilding.
+Late I/O failure may leave unreferenced new files while preserving the prior
+manifest and its payloads. This tooling does not activate runtime v3 admission.
 
 ### Resident height query foundation
 

@@ -19,20 +19,28 @@ type TerrainChunkColumnDef struct {
 }
 
 type TerrainChunkEntryDef struct {
-	WorldOrigin        [3]float32           `json:"world_origin,omitzero"`
-	PayloadKind        string               `json:"payload_kind,omitempty"`
-	PayloadHash        string               `json:"payload_hash,omitempty"`
-	PayloadSizeBytes   int                  `json:"payload_size_bytes,omitempty"`
-	Coord              TerrainChunkCoordDef `json:"coord"`
-	ChunkSize          int                  `json:"chunk_size"`
-	VoxelResolution    float32              `json:"voxel_resolution"`
-	TerrainID          string               `json:"terrain_id"`
-	SourceHash         string               `json:"source_hash"`
-	ChunkPath          string               `json:"chunk_path"`
-	NonEmptyVoxelCount int                  `json:"non_empty_voxel_count,omitempty"`
+	HeightOffset        float32              `json:"height_offset,omitempty"`
+	HeightScale         float32              `json:"height_scale,omitempty"`
+	OccupiedSectorCount int                  `json:"occupied_sector_count,omitempty"`
+	OccupiedBrickCount  int                  `json:"occupied_brick_count,omitempty"`
+	WorldOrigin         [3]float32           `json:"world_origin,omitzero"`
+	PayloadKind         string               `json:"payload_kind,omitempty"`
+	PayloadHash         string               `json:"payload_hash,omitempty"`
+	PayloadSizeBytes    int                  `json:"payload_size_bytes,omitempty"`
+	Coord               TerrainChunkCoordDef `json:"coord"`
+	ChunkSize           int                  `json:"chunk_size"`
+	VoxelResolution     float32              `json:"voxel_resolution"`
+	TerrainID           string               `json:"terrain_id"`
+	SourceHash          string               `json:"source_hash"`
+	ChunkPath           string               `json:"chunk_path"`
+	NonEmptyVoxelCount  int                  `json:"non_empty_voxel_count,omitempty"`
 }
 
 type TerrainChunkManifestDef struct {
+	Pages           []StreamPageDef `json:"pages,omitempty"`
+	RootPageIndices []uint32        `json:"root_page_indices,omitempty"`
+	// PageIndex owns read-only normalized metadata, derived once on load.
+	PageIndex       *TerrainPageIndex      `json:"-"`
 	SchemaVersion   int                    `json:"schema_version"`
 	TerrainID       string                 `json:"terrain_id"`
 	SourceHash      string                 `json:"source_hash"`

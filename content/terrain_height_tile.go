@@ -93,6 +93,14 @@ func ValidateTerrainHeightTile(d *TerrainHeightTileDef) error {
 }
 
 func validateTerrainHeightTileEntry(e TerrainChunkEntryDef) error {
+	if e.HeightOffset != 0 || e.HeightScale != 0 {
+		if err := validateTerrainPageHeight(e.HeightOffset, e.HeightScale); err != nil {
+			return err
+		}
+	}
+	if e.OccupiedSectorCount < 0 || e.OccupiedBrickCount < 0 || e.NonEmptyVoxelCount < 0 {
+		return fmt.Errorf("negative terrain source cost/count")
+	}
 	if strings.TrimSpace(e.TerrainID) == "" || strings.TrimSpace(e.SourceHash) == "" || strings.TrimSpace(e.ChunkPath) == "" || e.PayloadKind != TerrainHeightTilePayloadKind || !terrainPayloadHashValid(e.PayloadHash) {
 		return fmt.Errorf("invalid terrain height tile reference identity")
 	}
@@ -115,8 +123,8 @@ func validateTerrainHeightTileEntry(e TerrainChunkEntryDef) error {
 	return nil
 }
 
-// ValidateTerrainHeightTileManifest validates an explicit tiled-source manifest.
-func ValidateTerrainHeightTileManifest(d *TerrainChunkManifestDef) error {
+// validateTerrainHeightTileManifestSource checks the backing source contract.
+func validateTerrainHeightTileManifestSource(d *TerrainChunkManifestDef) error {
 	if d == nil || d.SchemaVersion != TerrainHeightTileManifestSchemaVersion {
 		return fmt.Errorf("terrain height tile manifest requires schema 3")
 	}
@@ -137,8 +145,8 @@ func ValidateTerrainHeightTileManifest(d *TerrainChunkManifestDef) error {
 }
 
 // ValidateTerrainHeightTileReference checks a tile's identity, lattice and raw
-// payload against a manifest reference. Height offset and scale belong to the
-// tile metadata, while the reference hash covers its raw payload.
+// payload against a manifest reference. Declared offset and scale qualify the
+// tile metadata separately from the reference hash, which covers the raw body.
 func ValidateTerrainHeightTileReference(entry TerrainChunkEntryDef, tile *TerrainHeightTileDef) error {
 	if err := ValidateTerrainHeightTile(tile); err != nil {
 		return err
@@ -154,8 +162,18 @@ func validateTerrainHeightTileReference(entry TerrainChunkEntryDef, tile *Terrai
 	if err := ValidateTerrainHeightTile(tile); err != nil {
 		return err
 	}
+	if (entry.HeightOffset != 0 || entry.HeightScale != 0) && (tile.HeightOffset != entry.HeightOffset || tile.HeightScale != entry.HeightScale) {
+		return fmt.Errorf("terrain height tile calibration mismatch")
+	}
 	if tile.TerrainID != entry.TerrainID || tile.SourceHash != entry.SourceHash || tile.Coord != entry.Coord || tile.WorldOrigin != entry.WorldOrigin || tile.SampleWidth != entry.ChunkSize || tile.SampleHeight != entry.ChunkSize || tile.SampleSpacing != entry.VoxelResolution || result.PayloadHash != entry.PayloadHash || result.PayloadSizeBytes != entry.PayloadSizeBytes {
 		return fmt.Errorf("terrain height tile reference mismatch")
 	}
 	return nil
+}
+
+// ValidateTerrainHeightTileManifest preserves source-only schema-3 manifests and
+// also checks the independently owned visual forest when one is present.
+func ValidateTerrainHeightTileManifest(d *TerrainChunkManifestDef) error {
+	_, err := ValidateTerrainPageManifest(d)
+	return err
 }

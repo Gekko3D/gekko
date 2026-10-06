@@ -119,7 +119,13 @@ func TestTerrainChunkManifestAndChunkRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadTerrainChunkManifest failed: %v", err)
 	}
-	if !reflect.DeepEqual(manifest, loadedManifest) {
+	if loadedManifest.PageIndex == nil || !loadedManifest.PageIndex.LegacyDistance {
+		t.Fatal("legacy manifest load did not attach its compatibility index")
+	}
+	// The derived index is not part of the serialized authoring value.
+	wireManifest := *loadedManifest
+	wireManifest.PageIndex = nil
+	if !reflect.DeepEqual(manifest, &wireManifest) {
 		t.Fatalf("expected manifest round-trip, got want=%+v got=%+v", manifest, loadedManifest)
 	}
 	loadedChunk, err := LoadTerrainChunk(ResolveTerrainChunkPath(loadedManifest.Entries[0], manifestPath))

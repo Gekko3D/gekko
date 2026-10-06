@@ -11,6 +11,9 @@ func SaveTerrainChunkManifest(path string, def *TerrainChunkManifestDef) error {
 	if def == nil {
 		return fmt.Errorf("terrain chunk manifest is nil")
 	}
+	if def.SchemaVersion != 3 && (def.Pages != nil || def.RootPageIndices != nil) {
+		return fmt.Errorf("legacy terrain cannot carry page fields")
+	}
 	if def.SchemaVersion == 0 {
 		def.SchemaVersion = CurrentTerrainChunkManifestSchemaVersion
 	}
@@ -28,6 +31,9 @@ func SaveTerrainChunkManifest(path string, def *TerrainChunkManifestDef) error {
 	data, err := json.MarshalIndent(def, "", "  ")
 	if err != nil {
 		return err
+	}
+	if def.SchemaVersion == 3 {
+		return writeImportedWorldManifestAtomic(path, data)
 	}
 	return os.WriteFile(path, data, 0644)
 }
@@ -52,6 +58,13 @@ func LoadTerrainChunkManifest(path string) (*TerrainChunkManifestDef, error) {
 		if err := ValidateTerrainHeightTileManifest(&def); err != nil {
 			return nil, err
 		}
+	}
+	index, err := NormalizeTerrainPages(&def)
+	if err != nil {
+		return nil, err
+	}
+	if !index.SourceOnly {
+		def.PageIndex = index
 	}
 	return &def, nil
 }

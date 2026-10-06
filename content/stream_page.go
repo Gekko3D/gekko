@@ -29,6 +29,8 @@ type StreamPageDef struct {
 // StreamPagePayloadDef describes a referenced fallback payload. Its qualified
 // world coverage is supplied separately by the owning decoder or compiler.
 type StreamPagePayloadDef struct {
+	HeightOffset        float32                      `json:"height_offset,omitempty"`
+	HeightScale         float32                      `json:"height_scale,omitempty"`
 	Aux                 *ImportedWorldChunkAuxRefDef `json:"aux,omitempty"`
 	Kind                string                       `json:"kind"`
 	Path                string                       `json:"path"`

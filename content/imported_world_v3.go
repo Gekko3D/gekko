@@ -130,6 +130,9 @@ func ValidateImportedWorldV3(d *ImportedWorldDef) (*ImportedWorldPageIndex, erro
 	}
 	payloadBounds := make([]StreamPageBounds, len(d.Pages))
 	for i, p := range d.Pages {
+		if p.Payload.HeightOffset != 0 || p.Payload.HeightScale != 0 {
+			return nil, fmt.Errorf("voxel page cannot carry height calibration")
+		}
 		if !importedVoxelPayloadKind(p.Payload.Kind) {
 			return nil, fmt.Errorf("imported world pages require voxel payload kinds")
 		}
