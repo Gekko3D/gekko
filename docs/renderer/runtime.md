@@ -1137,6 +1137,68 @@ allocator overhead and Go GC reclamation remain separate costs. Calls require
 exclusive manager access. No frame-loop or GPU allocation/publication is added;
 live-content reconciliation and coherent publication remain subsequent steps.
 
+### Managed content work scheduling (S1l9)
+
+The GPU manager owns an explicit accepted-generation coordinate journal and
+overflow sweep scheduler. `QueueManagedGeometryContent(object, expected, coord)`
+requires `expected` to match the accepted attachment and generation. It returns
+`ManagedGeometryContentResult`: Unavailable for absent ownership, Mismatch for
+stale identity, Ignored for coordinates outside accepted topology, Queued for a
+new coordinate, Coalesced for an already queued coordinate, or SweepScheduled on
+overflow. Signed coordinates are filtered by binary search over frozen accepted
+coordinates without enumerating the input. Added topology belongs to successors.
+Callers supply sector notifications, including fitted-normal halo sectors; this
+step neither derives halos nor connects an engine edit feed.
+
+Each generation retains at most 1,024 distinct pending coordinates, in a lazily
+allocated fixed array. Duplicate checks scan at most that fixed capacity; no map,
+sort, full-input scan or per-coordinate revision storage is created. Admission's
+existing journal reservation covers the array. Its pointer, count and sweep state
+are descriptor metadata, charged before acceptance. Queueing and servicing do
+not change admission charges.
+
+`RequestManagedGeometryContentSweep(object, expected)` returns false for missing
+ownership or mismatched identity; otherwise it schedules conservative accepted-
+coordinate work. Empty accepted inputs remain without pending work. A first
+request starts a sweep at ordinal zero and subsumes the journal. Requests before
+any sweep progress coalesce into that sweep. Requests after progress preserve its
+cursor and schedule at most one follow-up full sweep. Journal overflow uses this
+same path: queued coordinates are subsumed by the upcoming whole pass, or by the
+guaranteed follow-up when the active pass has already advanced. New notifications
+after the request remain journaled until consumed or subsumed by another request.
+Completing a sweep does not discard those late coordinates.
+
+`ManagedGeometryContentStatus(object)` returns a scalar
+`ManagedGeometryContentStatus` and availability flag. Fields are `Input`,
+`PendingCoordinates`, `SweepPending`, `SweepCursor`, `SweepAgain` and `Pending`.
+The input is accepted identity; the cursor is the next accepted ordinal in the
+active sweep. Completing a pass starts its requested follow-up at zero, or clears
+the sweep and resets its cursor to zero. `Pending` means a journal coordinate or
+sweep remains. The absent status is zero. Status reads do not capture producers.
+
+`ServiceManagedGeometryContent(object, expected, maxEntries, visit)` attempts at
+most `maxEntries` visits and returns the number attempted, including a failed
+visit. Nil callbacks, nonpositive allowances and missing/mismatched ownership do
+no work. Sweeps visit signed lexicographic accepted order before journal work;
+journal order is unspecified. A true callback result consumes that coordinate.
+False stops the call and preserves its coordinate/cursor for retry; a panic also
+leaves that visit unconsumed. Callbacks may inspect immutable inputs/status but
+must not mutate the manager or producer, admit/cancel/promote generations, or
+reenter service. Manager operations require exclusive access.
+
+Successor admission/coalescing leaves accepted work and structural-copy progress
+unchanged. Promotion starts the successor with an empty journal/sweep; cancellation
+and disable drop old journal ownership without traversing coordinates. Lowered
+enabled caps still allow already reserved work. Content scheduling does not copy
+or modify S1l8 entries, and retained copied-prefix views stay immutable.
+
+This is notification scheduling, not live-content reconciliation or a readiness
+certificate. A drained journal does not establish content coherence or GPU
+readiness. Qualified current-content reads, an edit/halo feed, replacement-copy
+peak accounting, frame-loop integration and coherent publication remain later
+work. The allowance bounds attempted coordinates per explicit call, not total
+calls per frame, callback cost, wall time or Go GC reclamation.
+
 ### Auxiliary capacity admission
 
 Auxiliary occupancy/normal storage is independent of sector brick-range capacity.

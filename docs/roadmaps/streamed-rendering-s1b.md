@@ -885,6 +885,16 @@ roots without traversal. See the
 Live-content reconciliation and coherent GPU publication remain next. No frame
 integration or frame-time claim.
 
+### S1l9: Managed content work scheduling
+
+Completed 2026-10-06 in this batch. Accepted-generation CPU journals coalesce up
+to 1,024 coordinates; bounded service preserves failed visits, late notifications
+and overflow sweep progress. The existing journal reservation covers storage.
+See the [canonical contract](../renderer/runtime.md#managed-content-work-scheduling-s1l9)
+and [delivery record](streamed-rendering-content-optimization.md#s1l9-managed-content-work-scheduling).
+This is notification scheduling only. Qualified live-content reads, edit/halo
+feed integration and coherent GPU publication remain; no frame-time claim.
+
 ## Verification and execution record
 
 Workflow: GPT-6.1 sol tests to red; root adversarial test review; GPT-6.1 sol code to green; root adversarial production review; commit. User authorized tests/subagents. Preserve unrelated changes.

@@ -54,12 +54,17 @@ type managedGeometryOwner struct {
 }
 
 type managedGeometryGeneration struct {
-	input       core.ManagedGeometryInput
-	inputBytes  uint64
-	reserved    uint64
-	head        *managedGeometrySectorEntry
-	copied      int
-	copiedBytes uint64
+	input          core.ManagedGeometryInput
+	inputBytes     uint64
+	reserved       uint64
+	head           *managedGeometrySectorEntry
+	copied         int
+	copiedBytes    uint64
+	contentJournal *[1024][3]int
+	contentCount   int
+	sweepCursor    int
+	sweepPending   bool
+	sweepAgain     bool
 }
 
 // Admission reserves each full entry before service allocates it. Entries are
