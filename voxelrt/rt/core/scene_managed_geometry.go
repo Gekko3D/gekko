@@ -19,9 +19,24 @@ func (input ManagedGeometryInput) SameSource(other ManagedGeometryInput) bool {
 	return input.source != nil && input.source == other.source
 }
 
+// ManagedGeometrySectorInput retains one frozen current-sector view and its
+// attachment identity, independently of the producer and mutable owner.
+type ManagedGeometrySectorInput struct {
+	sector     volume.ManagedSectorView
+	generation uint64
+	source     *managedGeometrySource
+}
+
+func (input ManagedGeometrySectorInput) Sector() volume.ManagedSectorView { return input.sector }
+func (input ManagedGeometrySectorInput) Generation() uint64               { return input.generation }
+func (input ManagedGeometrySectorInput) SameSource(other ManagedGeometryInput) bool {
+	return input.source != nil && input.source == other.source
+}
+
 type managedGeometryProducer struct {
 	derivative *volume.XBrickMap
 	capture    func() (volume.ManagedGeometryView, uint64, bool)
+	read       func([3]int) (volume.ManagedSectorView, uint64, bool)
 	source     *managedGeometrySource
 }
 
@@ -29,13 +44,42 @@ type managedGeometryProducer struct {
 // thread. It does not certify raw renderer edits or invoke capture. Nil clears it.
 // Each installation establishes a fresh attachment identity.
 func (obj *VoxelObject) SetManagedGeometryProducer(derivative *volume.XBrickMap, capture func() (volume.ManagedGeometryView, uint64, bool)) {
+	obj.SetManagedGeometryProducerWithSectorReader(derivative, capture, nil)
+}
+
+// SetManagedGeometryProducerWithSectorReader atomically installs lazy full and
+// coordinate callbacks under a fresh identity. A nil full callback clears both.
+func (obj *VoxelObject) SetManagedGeometryProducerWithSectorReader(derivative *volume.XBrickMap, capture func() (volume.ManagedGeometryView, uint64, bool), read func([3]int) (volume.ManagedSectorView, uint64, bool)) {
 	if obj == nil {
 		return
 	}
 	obj.managedGeometryProducer = nil
 	if capture != nil {
-		obj.managedGeometryProducer = &managedGeometryProducer{derivative: derivative, capture: capture, source: &managedGeometrySource{}}
+		obj.managedGeometryProducer = &managedGeometryProducer{derivative: derivative, capture: capture, read: read, source: &managedGeometrySource{}}
 	}
+}
+
+// CaptureManagedGeometrySector reads current qualified content from the expected
+// live attachment, never falling back to a full capture. Qualified absence is
+// available; rollback and callback-induced attachment or selection changes refuse.
+// Calls require exclusive engine-thread access.
+func (obj *VoxelObject) CaptureManagedGeometrySector(expected ManagedGeometryInput, coord [3]int) (ManagedGeometrySectorInput, bool) {
+	if obj == nil {
+		return ManagedGeometrySectorInput{}, false
+	}
+	producer := obj.managedGeometryProducer
+	if producer == nil || producer.read == nil || expected.source == nil || expected.source != producer.source || !obj.managedGeometrySelectionQualified(producer) {
+		return ManagedGeometrySectorInput{}, false
+	}
+	sector, generation, ok := producer.read(coord)
+	if !ok || generation < expected.generation || sector.Coord() != coord || obj.managedGeometryProducer != producer || !obj.managedGeometrySelectionQualified(producer) {
+		return ManagedGeometrySectorInput{}, false
+	}
+	return ManagedGeometrySectorInput{sector: sector, generation: generation, source: producer.source}, true
+}
+
+func (obj *VoxelObject) managedGeometrySelectionQualified(producer *managedGeometryProducer) bool {
+	return obj.XBrickMap != nil && obj.XBrickMap == producer.derivative && !obj.XBrickMap.GPUEditMode && !obj.hasSpecialRenderLattice() && obj.renderRepresentation == nil
 }
 
 // CaptureManagedGeometryInput lazily captures ordinary sealed geometry. Capture

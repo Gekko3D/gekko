@@ -328,6 +328,63 @@ remain synchronous. It establishes no per-frame work or memory ceiling.
 
 The GPU manager owns [generation admission and stage reservations](runtime.md#managed-generation-admission-s1l7) for these inputs.
 
+#### Qualified current-sector inputs (S1l10)
+
+`ManagedXBrickMap.CaptureSector(coord)` returns a frozen `ManagedSectorView` and
+qualification flag without capturing the complete geometry tree. It looks up one
+signed coordinate in logarithmic time, clears exclusive backing ownership as a
+capture barrier and allocates no geometry or index storage. Nil, exposed and
+unqualified owners return a zero view and false. Qualified absence returns true
+with the requested coordinate, `Present() == false` and zero byte charges; an
+allocated empty sector is present and has nonzero header charges.
+
+The view exposes `Coord()`, `Present()`, `RetainedBytes()`, `CopyBytes()` and
+`CopySector()`. A zero view has zero coordinate/charges and no sector.
+`CopySector()` returns an independent sector and true, or nil and false when
+absent. Copies preserve sector scalars, packed order, brick metadata, auxiliary
+nil/empty semantics and backing capacity. Captured records and their charges stay
+frozen after writes, normal-halo invalidation, removal, forks and exposure.
+The view retains one private sector record and its brick backing; no AVL node,
+tree root, mutable header, owner or callback is retained. Its conservative input
+charge includes that record, one full Brick per packed reference and auxiliary
+capacity. The output charge matches the existing independent sector-copy domain.
+View/token storage, map metadata, allocator overhead and GPU storage are excluded.
+
+Core's `SetManagedGeometryProducerWithSectorReader(derivative, capture, read)`
+atomically installs full-input and coordinate callbacks under one new attachment
+identity. The existing `SetManagedGeometryProducer` delegates with no sector
+reader. A nil full-input callback clears the producer even when a reader is
+provided. Installation invokes neither callback; unchanged engine bindings reuse
+both callbacks and their source identity.
+
+`VoxelObject.CaptureManagedGeometrySector(expected, coord)` returns a
+`ManagedGeometrySectorInput` and availability flag. Expected source must match
+the current nonzero attachment before the reader runs. The result exposes
+`Sector()` (the volume view), `Generation()` and `SameSource(fullInput)`. Its
+generation can equal or exceed expected, but rollback, including maximum-token
+wrap to zero, is rejected. The requested coordinate must match the returned view.
+Missing readers, refused callbacks and invalid source/selection return zero and
+false; there is no full-input capture fallback. Qualified absent sectors remain
+available inputs so later reconciliation can distinguish removal from refusal.
+
+Core checks derivative identity, GPU-edit mode, special lattices and selected LOD
+before the callback, and rechecks those guards plus exact attachment identity
+after it returns. The engine coordinate callback shares the full-input provider's
+live entity/asset/binding/generation, pending-command, sealed-owner and inactive-
+producer qualification. An older accepted input may therefore read newer content
+from the same live attachment. Core does not filter accepted topology; the
+[content work scheduler](runtime.md#managed-content-work-scheduling-s1l9) owns that
+filter. Captured sector inputs retain only the one-sector view, generation and
+source token, remaining readable after attachment invalidation or clearing.
+
+Calls require exclusive engine-thread access; captured views are independently
+readable. Normal-halo records and panic prefixes are read only after ordered
+material finalization. Existing direct-edit promotion rules still apply.
+This step adds no edit notifications, renderer copy replacement, GPU publication
+or frame-loop service. Future consumers must account for these retained inputs
+and replacement peaks before holding/copying them; no staged-memory, elapsed-time
+or total-process-memory ceiling is established here.
+
 ### Ordinary managed runtime geometry
 
 `AssetServer.RegisterManagedVoxelGeometry(source, sourcePath)` defensively seals

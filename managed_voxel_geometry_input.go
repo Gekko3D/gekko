@@ -46,14 +46,26 @@ func (state *VoxelRtState) attachManagedVoxelInput(eid EntityId, obj *core.Voxel
 		return binding
 	}
 	id, entry, derivative := binding.id, binding.entry, binding.derivative
-	obj.SetManagedGeometryProducer(derivative, func() (volume.ManagedGeometryView, uint64, bool) {
+	qualified := func() bool {
 		current, ok := state.managedVoxelBindings[eid]
-		if !ok || state.GetVoxelObject(eid) != obj || current.id != id || current.entry != entry || current.derivative != derivative || obj.XBrickMap != derivative || current.exposed || current.generation != entry.generation || !managedVoxelInputQualified(state.managedVoxelCommands, state.managedVoxelAssets, eid, id, entry) {
+		return ok && state.GetVoxelObject(eid) == obj && current.id == id && current.entry == entry && current.derivative == derivative && obj.XBrickMap == derivative && !current.exposed && current.generation == entry.generation && managedVoxelInputQualified(state.managedVoxelCommands, state.managedVoxelAssets, eid, id, entry)
+	}
+	obj.SetManagedGeometryProducerWithSectorReader(derivative, func() (volume.ManagedGeometryView, uint64, bool) {
+		if !qualified() {
 			return volume.ManagedGeometryView{}, 0, false
 		}
 		view, ok := entry.owner.CaptureGeometry()
 		if !ok {
 			return volume.ManagedGeometryView{}, 0, false
+		}
+		return view, entry.generation, true
+	}, func(coord [3]int) (volume.ManagedSectorView, uint64, bool) {
+		if !qualified() {
+			return volume.ManagedSectorView{}, 0, false
+		}
+		view, ok := entry.owner.CaptureSector(coord)
+		if !ok {
+			return volume.ManagedSectorView{}, 0, false
 		}
 		return view, entry.generation, true
 	})

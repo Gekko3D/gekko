@@ -15,6 +15,58 @@ type ManagedGeometryView struct {
 	copyBytes     uint64
 }
 
+// ManagedSectorView retains one frozen sector record without its index or owner.
+// Qualified absence retains the requested coordinate only; the zero view is absent.
+type ManagedSectorView struct {
+	coord  [3]int
+	record *managedSectorRecord
+}
+
+// CaptureSector looks up one qualified current sector without allocation. Like
+// CaptureGeometry, it requires exclusive owner access outside a write producer
+// and clears exclusive backing so subsequent target and halo writes detach.
+// Missing coordinates are qualified absence, distinct from a refused capture.
+func (m *ManagedXBrickMap) CaptureSector(coord [3]int) (ManagedSectorView, bool) {
+	if m == nil || m.base == nil || !m.geometryQualified {
+		return ManagedSectorView{}, false
+	}
+	m.exclusive = nil
+	view := ManagedSectorView{coord: coord}
+	if node := findManagedIndex(m.geometry, coord); node != nil {
+		view.record = node.value
+	}
+	return view, true
+}
+
+func (v ManagedSectorView) Coord() [3]int { return v.coord }
+func (v ManagedSectorView) Present() bool { return v.record != nil }
+
+// RetainedBytes charges the single record, dense bricks and auxiliary capacity,
+// excluding the geometry index node that this view does not retain.
+func (v ManagedSectorView) RetainedBytes() uint64 {
+	if v.record == nil {
+		return 0
+	}
+	return v.record.retainedBytes - uint64(unsafe.Sizeof(managedIndexNode[*managedSectorRecord]{}))
+}
+
+// CopyBytes preflights the independent sector output without allocation.
+func (v ManagedSectorView) CopyBytes() uint64 {
+	if v.record == nil {
+		return 0
+	}
+	return v.record.copyBytes
+}
+
+// CopySector preserves captured scalars, packed order, metadata and auxiliary
+// backing capacity in an independent copy. Absent views return nil and false.
+func (v ManagedSectorView) CopySector() (*Sector, bool) {
+	if v.record == nil {
+		return nil, false
+	}
+	return v.record.copySector(), true
+}
+
 // CaptureGeometry captures qualified sealed geometry in constant time without
 // allocation. Clearing the exclusive set makes later writes detach captured
 // bricks, including normal halos. Nil, exposed or unqualified owners return an

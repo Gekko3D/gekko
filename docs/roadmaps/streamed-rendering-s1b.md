@@ -895,6 +895,17 @@ and [delivery record](streamed-rendering-content-optimization.md#s1l9-managed-co
 This is notification scheduling only. Qualified live-content reads, edit/halo
 feed integration and coherent GPU publication remain; no frame-time claim.
 
+### S1l10: Qualified current-sector inputs
+
+Completed 2026-10-06 in this batch. Ordinary managed bindings now expose qualified
+current-sector reads under stable attachment identity. Frozen views retain one
+record and preserve historical content across target/halo edits and removal;
+qualified absence differs from unavailable input. See the
+[canonical contract](../renderer/editing.md#qualified-current-sector-inputs-s1l10) and
+[delivery record](streamed-rendering-content-optimization.md#s1l10-qualified-current-sector-inputs).
+Edit/halo notification wiring, replacement peak accounting, reconciliation and
+coherent GPU publication remain. No frame integration or frame-time claim.
+
 ## Verification and execution record
 
 Workflow: GPT-6.1 sol tests to red; root adversarial test review; GPT-6.1 sol code to green; root adversarial production review; commit. User authorized tests/subagents. Preserve unrelated changes.
