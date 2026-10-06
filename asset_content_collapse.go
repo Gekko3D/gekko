@@ -52,6 +52,10 @@ func trySpawnCollapsedAuthoredAsset(cmd *Commands, assets *AssetServer, def *con
 }
 
 func trySpawnCollapsedAuthoredAssetWithOwnership(cmd *Commands, assets *AssetServer, def *content.AssetDef, rootTransform TransformComponent, opts AuthoredAssetSpawnOptions, result *AuthoredAssetSpawnResult, created func(EntityId, string, bool, bool)) (bool, error) {
+	return trySpawnCollapsedAuthoredAssetWithPreparedOwnership(cmd, assets, def, nil, rootTransform, opts, result, created)
+}
+
+func trySpawnCollapsedAuthoredAssetWithPreparedOwnership(cmd *Commands, assets *AssetServer, def *content.AssetDef, prepared *PreparedAuthoredAsset, rootTransform TransformComponent, opts AuthoredAssetSpawnOptions, result *AuthoredAssetSpawnResult, created func(EntityId, string, bool, bool)) (bool, error) {
 	enabled := def != nil && def.Runtime != nil && def.Runtime.CollapseVoxelParts
 	switch opts.CollapseVoxelParts {
 	case VoxelPartCollapseDisable:
@@ -66,7 +70,21 @@ func trySpawnCollapsedAuthoredAssetWithOwnership(cmd *Commands, assets *AssetSer
 		return false, nil
 	}
 
-	build, err := buildCollapsedAuthoredVoxelAsset(assets, def, opts.DocumentPath)
+	var build collapsedAuthoredVoxelBuild
+	var err error
+	if prepared != nil && prepared.legacyCollapse != nil {
+		if prepared.legacyCollapse.adopted != nil {
+			build = *prepared.legacyCollapse.adopted
+		} else {
+			var parts []authoredCollapseResolvedPart
+			parts, err = resolvePreparedLegacyCollapseParts(assets, prepared)
+			if err == nil {
+				build, err = buildResolvedCollapsedAuthoredVoxelAsset(assets, def, opts.DocumentPath, parts)
+			}
+		}
+	} else {
+		build, err = buildCollapsedAuthoredVoxelAsset(assets, def, opts.DocumentPath)
+	}
 	if err != nil {
 		if opts.CollapseVoxelParts == VoxelPartCollapseForce {
 			return false, err
@@ -143,6 +161,11 @@ func buildCollapsedAuthoredVoxelAsset(assets *AssetServer, def *content.AssetDef
 	if err != nil {
 		return result, err
 	}
+	return buildResolvedCollapsedAuthoredVoxelAsset(assets, def, documentPath, resolvedParts)
+}
+
+func buildResolvedCollapsedAuthoredVoxelAsset(assets *AssetServer, def *content.AssetDef, documentPath string, resolvedParts []authoredCollapseResolvedPart) (collapsedAuthoredVoxelBuild, error) {
+	result := collapsedAuthoredVoxelBuild{}
 	if len(resolvedParts) < 2 {
 		return result, fmt.Errorf("voxel collapse requires at least two voxel-backed parts")
 	}

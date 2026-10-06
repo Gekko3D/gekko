@@ -78,11 +78,12 @@ type AssetServer struct {
 	authoredVoxelCollapseStats     AuthoredVoxelCollapseStats
 }
 
-// AuthoredVoxelCollapseStats reports cold rasterization attempts and validated
-// warm composite reuses. Reading these counters performs no geometry work.
+// AuthoredVoxelCollapseStats reports live cold build attempts (including
+// worker candidate transfers) and validated warm composite reuses.
 type AuthoredVoxelCollapseStats struct {
-	Builds uint64
-	Hits   uint64
+	Builds          uint64
+	Hits            uint64
+	WorkerAdoptions uint64
 }
 
 func (server *AssetServer) AuthoredVoxelCollapseStats() AuthoredVoxelCollapseStats {

@@ -30,10 +30,11 @@ type AuthoredAssetSpawnOptions struct {
 }
 
 type PreparedAuthoredAsset struct {
-	def          *content.AssetDef
-	documentPath string
-	animations   *content.ResolvedAssetAnimations
-	parts        map[string]preparedAuthoredPart
+	def            *content.AssetDef
+	documentPath   string
+	animations     *content.ResolvedAssetAnimations
+	parts          map[string]preparedAuthoredPart
+	legacyCollapse *legacyPreparedCollapse
 }
 
 // PreparedAuthoredAssetHasMarkerKind reports whether an authored asset
@@ -139,7 +140,7 @@ func spawnAuthoredAssetWithOwnership(cmd *Commands, assets *AssetServer, def *co
 	} else {
 		animations = prepared.animations
 	}
-	if collapsed, err := trySpawnCollapsedAuthoredAssetWithOwnership(cmd, assets, def, rootTransform, opts, &result, created); collapsed || err != nil {
+	if collapsed, err := trySpawnCollapsedAuthoredAssetWithPreparedOwnership(cmd, assets, def, prepared, rootTransform, opts, &result, created); collapsed || err != nil {
 		return result, err
 	}
 	shadowSettings := effectiveAuthoredVoxelShadowSettings(def, opts)

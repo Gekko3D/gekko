@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-06. Status: staged implementation; S1a–S1k and S1l1–S1l14 and S1m–S1q, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5l, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals, P3b native workload evaluation and P3c packed mixed materials are complete, with P3 remaining partial; W3a scene BVH, W3b sector and W3c inner grid traversal are complete, with W3 remaining partial; W4a terrain brick-run construction, W4b ordered mixed-material construction, W4c1 tiled height source content and W4c2 resident height queries are complete, with W4 remaining partial; I05 shared page validation and legacy imported-world normalization and I06 explicit imported-world v3 page tooling and I07 terrain v3 page tooling are complete; live page residency remains pending; other sections are proposals.
+Date: 2026-10-06. Status: staged implementation; S1a–S1k and S1l1–S1l14 and S1m–S1q, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5m, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals, P3b native workload evaluation and P3c packed mixed materials are complete, with P3 remaining partial; W3a scene BVH, W3b sector and W3c inner grid traversal are complete, with W3 remaining partial; W4a terrain brick-run construction, W4b ordered mixed-material construction, W4c1 tiled height source content and W4c2 resident height queries are complete, with W4 remaining partial; I05 shared page validation and legacy imported-world normalization and I06 explicit imported-world v3 page tooling and I07 terrain v3 page tooling are complete; live page residency remains pending; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -1051,7 +1051,8 @@ This workflow does not independently authorize tests, delegation or commits.
 | P5j | `14c1d08` | Batched fresh shift/resample/disconnected-component reconstruction | [Construction contract](../renderer/runtime.md#dense-voxel-construction) |
 | P1a | `6397967`; editor `df2f3c8` | Raw-authoritative point-value accessor and consumer migration | [Read contract](../renderer/runtime.md#voxel-point-reads) |
 | P5k | `9c4298a` | Exact deduplicated normal-halo marking in fresh constructors | [Construction contract](../renderer/runtime.md#dense-voxel-construction) |
-| P5l | This batch | Worker-prepared expanded legacy assets with ordinary shared publication | [Asset contract](../assets/runtime-assets.md#legacy-ordinary-worker-preparation-p5l) |
+| P5l | `726b44b` | Worker-prepared expanded legacy assets with ordinary shared publication | [Asset contract](../assets/runtime-assets.md#legacy-ordinary-worker-preparation-p5l) |
+| P5m | This batch | Cold worker composite adoption with live warm-input compatibility | [Collapse contract](../assets/runtime-assets.md#authored-voxel-collapse-reuse) |
 | P1b | `df6896c` | Opt-in compact private prepared sources with current dense authority | [Ownership design](streamed-rendering-p1b.md) |
 | C1a | `2492a3f` | Lossless bounded zstd frames and opt-in compiled imported chunks | [Compiled contract](../content/compiled-voxels.md) |
 | C1b | `5b69193` | Fixed borrowed compiled-chunk codec profile per decoded cache owner | [Decoded ownership](../assets/runtime-assets.md#decoded-content-lifetime) |
@@ -5861,3 +5862,41 @@ construction remain outside this block. Pending charges are conservative, not
 a process-memory ceiling. Profiles and consumer-wide tests were not rerun;
 known actiongame bot failures and examples/testing compilation remain outside
 scope. No measured frame-time or FPS improvement is claimed.
+
+
+### P5m: Worker-prepared legacy collapsed assets
+
+Commit: `perf(streaming): prepare cold composites on workers`. Legacy packets
+retain expanded fallback data and prepare independent composite candidates.
+Cold input transfers qualify atomic composite adoption; warm inputs preserve
+live validation and edits through prepared IDs without source rereads.
+[Canonical contract](../assets/runtime-assets.md#authored-voxel-collapse-reuse).
+
+Verification passed from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test . -run '^Test(P5m|P5l|P5e|P5i|S1g|S3v|E2b)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test .
+env GOCACHE=/tmp/gekko3d-gocache go test -race . -run '^Test(P5m|P5l|P5e|P5i|S1gFatal|S3v|E2b)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./content/...
+env GOCACHE=/tmp/gekko3d-gocache GEKKO_NATIVE_S1M=1 go test ./cmd/voxelbench -run '^TestNativeSectorLookupS1mCorrectness$' -count=1 -v
+git diff --check
+```
+
+Consumer builds passed from their respective module directories:
+
+| Module | Command |
+| --- | --- |
+| `gekko-editor` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p5m-build/gekko-editor/ ./...` |
+| `actiongame` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p5m-build/actiongame/ ./...` |
+| `spacegame_go` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p5m-build/spacegame_go/ ./...` |
+| `spacesim` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p5m-build/spacesim/ ./...` |
+| `examples/testing-vox` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-p5m-build/testing-vox/ ./...` |
+
+Existing production G-buffer parity passed on Apple M4 Pro/Metal. No collapsed
+worker end-to-end native scene, interactive gameplay or frame profile was run.
+Warm-source cold rasterization remains main-thread work; individual bakes remain
+atomic and construction precedes pending admission. Compiled collapse and direct
+public spawning retain their existing paths. No measured FPS gain, aggregate
+construction-memory limit or whole-frame bound is claimed. Consumer-wide tests
+and known actiongame bot/examples/testing failures remain outside this block.

@@ -172,7 +172,8 @@ independently of renderer presence or `EnableManagedPreparedAssets`. Workers
 clone the cached definition before validation and normalization, resolve
 animations, and build group, inline shape, procedural, VOX model and scene-node
 parts without publishing `AssetServer` IDs or ECS entities. Assets with
-`Runtime.CollapseVoxelParts` retain their separate collapse preparation path.
+`Runtime.CollapseVoxelParts` also retain expanded fallback data and use the
+[worker collapse contract](#authored-voxel-collapse-reuse).
 Direct preparation, eager spawning and startup NPC preparation are unchanged.
 
 Packets preserve the public ordinary geometry and palette cache namespaces,
@@ -447,11 +448,12 @@ in mask-selected bricks; occupancy flags/count alone are insufficient.
 Cache keys, cold baking, palette/part IDs and automatic fallback/forced errors
 are unchanged. Fully subtracted empty composites remain valid. Public edits to
 the cached composite remain visible on reuse; deletion permits cold rebuilding.
-`AssetServer.AuthoredVoxelCollapseStats()` reports cumulative `Builds` (cold
-rasterization attempts after source/palette/key resolution) and `Hits` (successful
-validated warm reuse). Reads are scalar and nil-server reads return zero. Source
-loading, temporary hierarchy resolution, palette/key work and live validation
-remain; these counters do not measure frame time.
+`AssetServer.AuthoredVoxelCollapseStats()` reports cumulative `Builds` (live cold
+collapse attempts, including worker-prepared publication), `Hits` (successful
+validated warm reuse) and `WorkerAdoptions` (independent worker composite copies
+transferred into cold global entries). Workers and discarded packets do not
+increment live counters. Reads are scalar and nil-server reads return zero;
+these counters do not measure frame time.
 
 Cold authored collapse and level-brush composition stream accepted rasterized
 writes through [ordered edits](../renderer/editing.md#ordered-edit-streams), once
@@ -459,6 +461,32 @@ per part. Source/sample order, transformed voxel-center tests, epsilon, material
 assignment and add/subtract order are unchanged. Validation precedes writes;
 material flags finalize before the next part. Existing sample arrays remain,
 without an additional write list or a change to warm cache authority.
+
+P5m streamed legacy packets prepare a canonical composite and an independent
+single-use publication copy on workers, without live assets, temporary ECS or
+GPU access. Pure hierarchy resolution uses the engine's asset-local parent
+position/rotation/scale composition, including forward parent references, then
+applies each part's existing collapse pivot. Rasterization retains the public
+collapse ordering, sample and palette semantics and the exact document-spelled
+composite cache key. Expanded packet data remains available for automatic
+ineligibility, including animated assets.
+
+Cold adoption requires cold publication of every input geometry and palette,
+and a cold composite entry. Warm keys or pointer equality cannot certify raw
+mutable inputs. Warm inputs or an existing composite use current live prepared
+part IDs for eligibility, validation and baking/reuse, without rereading VOX
+or animation sources. This preserves edited model rows, maps, nested palettes
+and cached composites; cold rebuilding from warm inputs remains main-thread
+work. Direct public and compiled collapse behavior is unchanged. Faster warm
+preparation requires a separate certification or immutable capture contract.
+
+Candidate geometry, publication storage, keys and metadata participate in the
+existing conservative legacy packet admission charge and idempotent cleanup.
+Unused candidates drain on warm fallback, pressure, cancellation, stale results,
+errors and Stop. Published composites retain ordinary global lifetime and do
+not acquire managed ownership or per-part persistence identity. Construction
+and rasterization remain atomic worker jobs before final pending admission;
+no aggregate construction-memory or frame-time bound is implied.
 
 ## Source Paths and Provenance
 

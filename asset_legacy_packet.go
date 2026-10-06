@@ -20,6 +20,7 @@ type legacyAssetPacket struct {
 	partPalettes map[string]string
 	geometries   map[string]*legacyAssetGeometry
 	palettes     map[string]*compiledAssetPacketPalette
+	collapse     *legacyCollapseCandidate
 }
 type legacyAssetGeometry struct {
 	source       VoxelGeometryAsset
@@ -95,6 +96,10 @@ func (p *legacyAssetPacket) release() {
 	for _, v := range p.palettes {
 		v.registration.release()
 	}
+	if p.collapse != nil {
+		p.collapse.geometry.registration.release()
+		p.collapse.palette.registration.release()
+	}
 }
 
 // Include selected file identity and logical spelling: VOX keys expose spelling.
@@ -115,10 +120,6 @@ func prepareLegacyAssetPacket(path string, loader *RuntimeContentLoader, cancell
 		return nil, err
 	}
 	def := cloneLegacyContent(reflect.ValueOf(cached)).Interface().(*content.AssetDef)
-	// Collapsed spawning builds one composite and ignores prepared parts.
-	if def.Runtime != nil && def.Runtime.CollapseVoxelParts {
-		return nil, nil
-	}
 	if err := checkCompiledAssetWork(loader, cancelled); err != nil {
 		return nil, err
 	}
@@ -256,6 +257,16 @@ func prepareLegacyAssetPacket(path string, loader *RuntimeContentLoader, cancell
 	if err := checkCompiledAssetWork(loader, cancelled); err != nil {
 		return nil, err
 	}
+	if def.Runtime != nil && def.Runtime.CollapseVoxelParts && len(def.AnimationSetPaths) == 0 {
+		// Ineligibility is automatic expanded fallback, not a preparation error.
+		p.collapse, err = prepareLegacyCollapseCandidate(p, loader, cancelled)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := checkCompiledAssetWork(loader, cancelled); err != nil {
+		return nil, err
+	}
 	success = true
 	return p, nil
 }
@@ -263,20 +274,25 @@ func (assets *AssetServer) adoptLegacyGeometry(key string, g *legacyAssetGeometr
 	assets.ensureVoxelStorage()
 	assets.mu.Lock()
 	defer assets.mu.Unlock()
+	id, ok, _ := assets.adoptLegacyGeometryLocked(key, g, r)
+	return id, ok
+}
+
+func (assets *AssetServer) adoptLegacyGeometryLocked(key string, g *legacyAssetGeometry, r *legacyGeometryRegistration) (AssetId, bool, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.key != key {
-		return AssetId{}, false
+		return AssetId{}, false, false
 	}
 	id, warm := assets.voxModelKeys[key]
 	if warm {
 		if _, ok := assets.voxModels[id]; !ok {
-			return AssetId{}, false
+			return AssetId{}, false, false
 		}
 		r.asset = nil
 	} else {
 		if r.asset == nil {
-			return AssetId{}, false
+			return AssetId{}, false, false
 		}
 		id = makeAssetId()
 		assets.voxModels[id] = *r.asset
@@ -288,7 +304,7 @@ func (assets *AssetServer) adoptLegacyGeometry(key string, g *legacyAssetGeometr
 			assets.recordVerifiedAuthoredVoxelBaseLocked(id, lattice, identity)
 		}
 	}
-	return id, true
+	return id, true, !warm
 }
 func publishLegacyAssetPacket(p *legacyAssetPacket, assets *AssetServer, loader *RuntimeContentLoader) (*PreparedAuthoredAsset, error) {
 	if err := checkCompiledAssetWork(loader, nil); err != nil {
@@ -298,27 +314,30 @@ func publishLegacyAssetPacket(p *legacyAssetPacket, assets *AssetServer, loader 
 	models := map[string]AssetId{}
 	palettes := map[string]AssetId{}
 	if assets != nil {
+		assets.ensureVoxelStorage()
+		assets.mu.Lock()
+		defer assets.mu.Unlock()
+		allCold := true
 		for key, g := range p.geometries {
-			id, ok := assets.adoptLegacyGeometry(key, g, g.registration)
+			id, ok, cold := assets.adoptLegacyGeometryLocked(key, g, g.registration)
 			if !ok {
-				if _, warm := assets.SharedVoxelGeometryByCacheKey(key); warm {
+				if _, warm := assets.voxModelKeys[key]; warm {
 					return nil, fmt.Errorf("legacy geometry adoption rejected")
 				}
 				fresh := prepareLegacyGeometryRegistration(key, g.source)
-				id, ok = assets.adoptLegacyGeometry(key, g, fresh)
+				id, ok, cold = assets.adoptLegacyGeometryLocked(key, g, fresh)
 				fresh.release()
 				if !ok {
 					return nil, fmt.Errorf("legacy geometry rebuild rejected")
 				}
 			}
 			models[key] = id
+			allCold = allCold && cold
 		}
 		for key, v := range p.palettes {
-			id, ok := assets.adoptCompiledAssetPalette(key, v.source, v.registration)
+			id, ok, cold := assets.adoptCompiledAssetPaletteLocked(key, v.source, v.registration)
 			if !ok {
-				assets.mu.RLock()
 				_, warm := assets.voxPaletteKeys[key]
-				assets.mu.RUnlock()
 				if warm {
 					return nil, fmt.Errorf("legacy palette adoption rejected")
 				}
@@ -326,13 +345,20 @@ func publishLegacyAssetPacket(p *legacyAssetPacket, assets *AssetServer, loader 
 				if err != nil {
 					return nil, err
 				}
-				id, ok = assets.adoptCompiledAssetPalette(key, v.source, fresh)
+				id, ok, cold = assets.adoptCompiledAssetPaletteLocked(key, v.source, fresh)
 				fresh.release()
 				if !ok {
 					return nil, fmt.Errorf("legacy palette rebuild rejected")
 				}
 			}
 			palettes[key] = id
+			allCold = allCold && cold
+		}
+		if p.def.Runtime != nil && p.def.Runtime.CollapseVoxelParts {
+			prepared.legacyCollapse = &legacyPreparedCollapse{}
+			if allCold && p.collapse != nil {
+				prepared.legacyCollapse.adopted = assets.adoptLegacyCollapseCandidateLocked(p.collapse)
+			}
 		}
 	}
 	for _, part := range p.def.Parts {

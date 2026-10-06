@@ -154,24 +154,31 @@ func (server *AssetServer) adoptCompiledAssetPalette(cacheKey string, source *Vo
 	server.ensureVoxelStorage()
 	server.mu.Lock()
 	defer server.mu.Unlock()
+	id, ok, _ := server.adoptCompiledAssetPaletteLocked(cacheKey, source, registration)
+	return id, ok
+}
+
+// The caller holds the server lock. The third result proves an actual cold
+// transfer, rather than an earlier cache observation.
+func (server *AssetServer) adoptCompiledAssetPaletteLocked(cacheKey string, source *VoxelPaletteAsset, registration *compiledPaletteRegistration) (AssetId, bool, bool) {
 	registration.mu.Lock()
 	defer registration.mu.Unlock()
 	if registration.key != cacheKey || registration.palette != nil && registration.source != source {
-		return AssetId{}, false
+		return AssetId{}, false, false
 	}
 	if id, warm := server.voxPaletteKeys[cacheKey]; warm {
 		if _, exists := server.voxPalettes[id]; !exists {
-			return AssetId{}, false
+			return AssetId{}, false, false
 		}
 		registration.clearLocked()
-		return id, true
+		return id, true, false
 	}
 	if registration.palette == nil {
-		return AssetId{}, false
+		return AssetId{}, false, false
 	}
 	id := makeAssetId()
 	server.voxPalettes[id] = *registration.palette
 	server.voxPaletteKeys[cacheKey] = id
 	registration.clearLocked()
-	return id, true
+	return id, true, true
 }

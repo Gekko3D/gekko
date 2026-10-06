@@ -13,6 +13,24 @@ func streamedLegacyAssetPacketsCharge(packets map[string]*legacyAssetPacket) int
 		}
 		seen[p] = true
 		metadata := *p
+		if p.collapse != nil {
+			candidate := *p.collapse
+			geometry := *candidate.geometry
+			geometry.source = VoxelGeometryAsset{}
+			geometry.registration = nil
+			candidate.geometry = &geometry
+			candidate.palette = &compiledAssetPacketPalette{source: p.collapse.palette.source}
+			metadata.collapse = &candidate
+			r := p.collapse.geometry.registration
+			bytes = runtimeContentChargeSum(bytes, legacyGeometrySourceCharge(p.collapse.geometry.source), int64(unsafe.Sizeof(legacyGeometryRegistration{})), int64(len(r.key)))
+			r.mu.Lock()
+			if r.asset != nil {
+				bytes = runtimeContentChargeSum(bytes, legacyGeometrySourceCharge(*r.asset))
+			}
+			r.mu.Unlock()
+			palette := p.collapse.palette.registration
+			bytes = runtimeContentChargeSum(bytes, int64(unsafe.Sizeof(compiledPaletteRegistration{})), int64(len(palette.key)), palette.charge())
+		}
 		metadata.geometries = make(map[string]*legacyAssetGeometry, len(p.geometries))
 		for key, g := range p.geometries {
 			copy := *g
