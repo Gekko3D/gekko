@@ -13,7 +13,7 @@ import (
 
 // Full demand follows one observer. Proxy demand follows the supported global
 // fallback policy, with the observer outside the full sector throughout.
-// Both jobs use the same real imported-chunk reader and valid authored metadata.
+// Both jobs use their real imported payload reader and valid authored metadata.
 func s2eRuntime(t *testing.T, proxy bool) (*Commands, *StreamedLevelRuntimeState, *AssetServer, EntityId, string) {
 	t.Helper()
 	path := s2bWorldPath(t)
@@ -55,11 +55,26 @@ func s2eRuntime(t *testing.T, proxy bool) (*Commands, *StreamedLevelRuntimeState
 }
 
 type s2eSharedDecode struct {
-	chunk *content.ImportedWorldChunkDef
-	err   error
+	source *content.ImportedWorldChunkRLESource
+	chunk  *content.ImportedWorldChunkDef
+	err    error
 }
 
-func s2eHoldDecode(t *testing.T, loader *RuntimeContentLoader, path string, failure error) (*RuntimeContentLoadScope, func(), <-chan s2eSharedDecode) {
+func s2eSharedVoxelCount(result s2eSharedDecode) int {
+	if result.source != nil {
+		count := 0
+		for range result.source.Voxels() {
+			count++
+		}
+		return count
+	}
+	if result.chunk != nil {
+		return len(result.chunk.Voxels)
+	}
+	return 0
+}
+
+func s2eHoldDecode(t *testing.T, loader *RuntimeContentLoader, path string, failure error, rle ...bool) (*RuntimeContentLoadScope, func(), <-chan s2eSharedDecode) {
 	t.Helper()
 	scope := loader.NewScope()
 	t.Cleanup(scope.Close)
@@ -67,6 +82,18 @@ func s2eHoldDecode(t *testing.T, loader *RuntimeContentLoader, path string, fail
 	entered := make(chan struct{})
 	done := make(chan s2eSharedDecode, 1)
 	go func() {
+		if len(rle) != 0 && rle[0] {
+			source, err := loadRuntimeContent(scope.Loader(), "imported-chunk-rle", path, func(path string) (*content.ImportedWorldChunkRLESource, error) {
+				close(entered)
+				<-held
+				if failure != nil {
+					return nil, failure
+				}
+				return content.LoadImportedWorldChunkRLESource(path)
+			})
+			done <- s2eSharedDecode{source: source, err: err}
+			return
+		}
 		chunk, err := loadRuntimeContent(scope.Loader(), "imported-chunk", path, func(path string) (*content.ImportedWorldChunkDef, error) {
 			close(entered)
 			<-held
@@ -75,7 +102,7 @@ func s2eHoldDecode(t *testing.T, loader *RuntimeContentLoader, path string, fail
 			}
 			return content.LoadImportedWorldChunk(path)
 		})
-		done <- s2eSharedDecode{chunk, err}
+		done <- s2eSharedDecode{chunk: chunk, err: err}
 	}()
 	s2bWait(t, entered)
 	return scope, release, done
@@ -152,7 +179,7 @@ func TestS2eObsoleteWorkerErrorCannotPoisonRuntime(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			cmd, state, assets, observer, path := s2eRuntime(t, proxy)
 			failure := errors.New("obsolete shared decode failed")
-			_, release, done := s2eHoldDecode(t, state.Loader, path, failure)
+			_, release, done := s2eHoldDecode(t, state.Loader, path, failure, proxy)
 			s2eDispatchHeld(t, cmd, state)
 			s2eChangeDemand(t, cmd, state, observer, proxy, true)
 			release()
@@ -179,7 +206,7 @@ func TestS2eRenewedDemandCannotReviveHeldWorkerAndSharedLeaseSurvives(t *testing
 			cmd, state, assets, observer, path := s2eRuntime(t, proxy)
 			metadataBytes := state.Loader.Stats().PinnedBytes
 			geometryMisses := state.Metrics.PreparedGeometryCacheMisses
-			scope, release, done := s2eHoldDecode(t, state.Loader, path, nil)
+			scope, release, done := s2eHoldDecode(t, state.Loader, path, nil, proxy)
 			s2eDispatchHeld(t, cmd, state)
 			s2eChangeDemand(t, cmd, state, observer, proxy, true)
 			s2eChangeDemand(t, cmd, state, observer, proxy, false)
@@ -188,7 +215,7 @@ func TestS2eRenewedDemandCannotReviveHeldWorkerAndSharedLeaseSurvives(t *testing
 			}
 			release()
 			shared := s2bWait(t, done)
-			if shared.err != nil || shared.chunk == nil || len(shared.chunk.Voxels) == 0 {
+			if shared.err != nil || s2eSharedVoxelCount(shared) == 0 {
 				t.Fatalf("cancelled consumer invalidated independent shared decode: %+v", shared)
 			}
 			s2eWaitPrepared(t, state, proxy)
@@ -199,7 +226,12 @@ func TestS2eRenewedDemandCannotReviveHeldWorkerAndSharedLeaseSurvives(t *testing
 			if state.Loader.Stats().PinnedBytes <= metadataBytes {
 				t.Fatal("independent shared scope lost its decoded pin")
 			}
-			if chunk, err := scope.Loader().LoadImportedWorldChunk(path); err != nil || chunk != shared.chunk || len(chunk.Voxels) == 0 {
+			if proxy {
+				source, err := scope.Loader().LoadImportedWorldChunkRLESource(path)
+				if err != nil || source != shared.source || source == nil || source.Metadata().NonEmptyVoxelCount != s2eSharedVoxelCount(shared) || len(source.Metadata().Voxels) != 0 {
+					t.Fatalf("independent scope cannot reuse shared encoded result: %v", err)
+				}
+			} else if chunk, err := scope.Loader().LoadImportedWorldChunk(path); err != nil || chunk != shared.chunk || len(chunk.Voxels) == 0 {
 				t.Fatalf("independent scope cannot reuse shared result: %v", err)
 			}
 			scope.Close()

@@ -2,6 +2,7 @@ package gekko
 
 import (
 	"container/heap"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -549,6 +550,7 @@ type streamedChunkLoadJob struct {
 }
 
 type streamedSectorProxyLoadJob struct {
+	pendingOwner            *streamedPendingPreparedOwner
 	compactPreparedGeometry bool
 	prepareCancel           <-chan struct{}
 	Generation              uint64
@@ -560,6 +562,7 @@ type streamedSectorProxyLoadJob struct {
 }
 
 type streamedPreparedSectorProxy struct {
+	rleSource                *content.ImportedWorldChunkRLESource
 	geometrySource           *streamedGeometrySource
 	prepareCancel            <-chan struct{}
 	loadScope                *RuntimeContentLoadScope
@@ -1555,6 +1558,7 @@ func startStreamedSectorProxyPrepareJob(state *StreamedLevelRuntimeState, job st
 	acquireStreamedWorkAttempt(state, job.Generation, cancel)
 	recordStreamedPreparationDispatch(state, job.SectorCoord, "proxy")
 	owner, results, jobs := state.pendingPrepared, state.PreparedProxyLoads, &state.jobs
+	job.pendingOwner = owner
 	activeMu, active := &state.activePrepareMu, &state.activeProxyPrepares
 	activeMu.Lock()
 	*active++
@@ -2216,7 +2220,14 @@ func prepareStreamedSectorProxyLoad(job streamedSectorProxyLoadJob) (result stre
 		return result
 	}
 	chunkPath := content.ResolveDocumentPath(job.LOD.ChunkPath, job.ManifestPath)
-	chunk, err := job.Loader.LoadImportedWorldChunk(chunkPath)
+	source, err := job.Loader.LoadImportedWorldChunkRLESource(chunkPath)
+	var chunk *content.ImportedWorldChunkDef
+	if errors.Is(err, content.ErrImportedWorldChunkNotRLE) {
+		chunk, err = job.Loader.LoadImportedWorldChunk(chunkPath)
+	} else if err == nil {
+		chunk = source.Metadata()
+		result.rleSource = source
+	}
 	if err != nil || streamedPreparationCancelled(job.prepareCancel) {
 		result.Err = err
 		return result
@@ -2228,14 +2239,30 @@ func prepareStreamedSectorProxyLoad(job streamedSectorProxyLoadJob) (result stre
 	}
 	result.AuxMiss = !result.AuxHit
 	result.PreparedGeometryCacheKey = streamedImportedWorldGeometryCacheKey("sector_proxy", chunkPath, streamedImportedWorldPayloadAndAuxHash(firstNonEmptyString(job.LOD.PayloadHash, chunk.PayloadHash), result.Aux), firstPositiveInt(job.LOD.PayloadSizeBytes, chunk.PayloadSizeBytes))
+	if source != nil && err == nil && job.pendingOwner != nil {
+		cost, estimateErr := streamedRLEProxyPrebuildCharge(source, result.Aux, job.LOD, result.PreparedGeometryCacheKey)
+		if estimateErr != nil {
+			result.Err = estimateErr
+			return result
+		}
+		credit, ok := job.pendingOwner.reserve(cost)
+		if !ok {
+			scope.Close()
+			scope = nil
+			return streamedPreparedSectorProxy{prepareCancel: job.prepareCancel, Generation: job.Generation, SectorCoord: job.SectorCoord, retryCost: cost}
+		}
+		result.pendingCredit = credit
+	}
+	build := func() *volume.XBrickMap {
+		if source != nil {
+			return prepareImportedWorldRLEGeometry(source, result.Aux)
+		}
+		return prepareImportedWorldChunkGeometry(chunk, result.Aux)
+	}
 	if job.compactPreparedGeometry {
-		result.geometrySource, _ = job.PreparedGeometryCache.getOrBuildSource(result.PreparedGeometryCacheKey, true, func() *volume.XBrickMap {
-			return prepareImportedWorldChunkGeometry(chunk, result.Aux)
-		})
+		result.geometrySource, _ = job.PreparedGeometryCache.getOrBuildSource(result.PreparedGeometryCacheKey, true, build)
 	} else {
-		result.PreparedGeometry, _ = job.PreparedGeometryCache.getOrBuild(result.PreparedGeometryCacheKey, func() *volume.XBrickMap {
-			return prepareImportedWorldChunkGeometry(chunk, result.Aux)
-		})
+		result.PreparedGeometry, _ = job.PreparedGeometryCache.getOrBuild(result.PreparedGeometryCacheKey, build)
 	}
 	if !streamedPreparationCancelled(job.prepareCancel) {
 		if result.geometrySource != nil {

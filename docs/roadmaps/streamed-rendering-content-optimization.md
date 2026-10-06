@@ -5183,7 +5183,7 @@ visuals and I14 collision integration. I11 is next.
 
 ### I11: Qualified page handoff transactions
 
-Commit: this batch. Runtime owns complete-cohort refinement, full-frontier
+Commit: `553b3f6`. Runtime owns complete-cohort refinement, full-frontier
 coarsening and fixed-point terminal terrain/POI coverage-group coupling. Sealed
 plans require current renderer identity and explicit generation/revision-qualified
 collision proof on activation and reversal. Immutable groups index once per
@@ -5206,3 +5206,34 @@ remain. Native visibility/collision publication and GPU no-hole checks remain
 gated on I13/I14. Root/nonterminal groups fail closed rather than inventing mask
 inheritance. Group rollback still scans/sorts candidate frontiers and has no
 frame-work budget. I12 byte-budgeted admission and caches are next.
+
+### I12a: Immutable RLE proxy construction and prebuild admission
+
+Commit: this batch. Legacy streamed proxies consume validated immutable RLE
+sources directly through the brick builder. They reuse the existing content
+cache/scope owner and reserve the existing pending-byte credit before geometry
+construction, then reconcile that credit through commit/discard. JSON/C1 and
+full/edit loading preserve existing behavior. See [the owning contract](../content/streaming-and-worlds.md#immutable-rle-proxy-preparation).
+
+Verification from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./content/... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -run 'S2e|I12' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . ./content -run 'I12ConcurrentCredit|I12RLESourceMetadata|I12ScopedRLE' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./content -run '^$' -bench '^BenchmarkI12RLESourceFilledChunk$' -benchmem -benchtime=100ms -count=1
+git diff --check
+```
+
+The uniform 64³ source benchmark allocated 1,488 B/op versus 41,250,960 B/op
+for dense decoding on Apple M4 Pro; this measures decoding rather than total
+proxy preparation. Consumer builds use
+`env GOCACHE=/tmp/gekko3d-gocache go build -o /private/tmp/gekko-i12-editor .`
+from `../gekko-editor` and
+`env GOCACHE=/tmp/gekko3d-gocache go build -o /private/tmp/gekko-i12-actiongame .`
+from `../actiongame`. Consumer test suites and manual GPU/visual checks were not
+rerun. I12 remains partial: arbitrary full-job/placement/override preflight,
+direct C1 construction, page-specific pin/eviction integration and native route
+memory targets remain. Encoded IO/aux loading and allocator overhead are outside
+the prebuild ceiling; live v3 remains gated on I13/I14.

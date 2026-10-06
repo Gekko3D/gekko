@@ -1012,9 +1012,9 @@ Prepared geometry cache update, S2a:
 
 Decoded content and pending preparation, S2b:
 
-- `RuntimeContentLoader` uses one LRU byte budget across its eight decoded content
-  kinds. `RuntimeContentLoaderOptions.MaxCacheBytes` defaults to 128 MiB when
-  zero; negative disables warm retention. Kind plus cleaned absolute path is
+- `RuntimeContentLoader` uses one LRU byte budget across decoded content
+  kinds and validated immutable RLE sources.
+  `RuntimeContentLoaderOptions.MaxCacheBytes` defaults to 128 MiB when zero; negative disables warm retention. Kind plus cleaned absolute path is
   identity; lexical aliases coalesce, symlinks remain distinct. Concurrent loads
   of one identity share decoding, including uncached oversized results.
 - Charge is estimated decoded storage at admission: structs, slice capacity,
@@ -1041,7 +1041,8 @@ Decoded content and pending preparation, S2b:
 - Pending charge is per-result admission cost, including decoded records,
   snapshots, placements and prepared geometry. Shared data may also be charged
   by its loader or geometry-cache owner; do not sum these metrics as physical
-  memory. Retry envelopes remain bounded by existing queue/job counts. Active
+  memory. Retry envelopes remain bounded by existing queue/job counts.
+  Immutable RLE proxies reserve before geometry construction as described below. Other active
   decode/build allocations remain outside the pending ceiling and are bounded
   by `MaxPrepareJobs` in count.
 - Metrics expose `DecodedContentCache*` and `PendingPrepared*` bytes, budgets,
@@ -1050,6 +1051,43 @@ Decoded content and pending preparation, S2b:
   warm ownership. Supplied/shared loader leases survive. Restart creates fresh
   pending credits. Scope, review and verification:
   [S2b](../roadmaps/streamed-rendering-s2b.md).
+
+#### Immutable RLE proxy preparation
+
+Legacy streamed sector proxies load `ImportedWorldChunkRLESource` through the
+existing content LRU and scoped singleflight owner under a separate cache kind.
+The source owns the complete encoded file. Its detached `Metadata()` contains
+an actual occupied count and no voxel array; reusable `Voxels()` iterators feed
+`volume.BuildXBrickMap` directly. Schema, optional hash, lattice arithmetic and
+all run lengths/coverage validate before cache publication. Declared size and
+resolution retain legacy semantics. JSON/C1 fallback uses the existing loader,
+including its configured codec; recognized RLE corruption never falls back.
+Public dense/full/backing/edit loading retains its existing contract.
+
+Before building geometry or copying a warm cache result for registration, an
+async RLE proxy reserves a conservative charge from the existing shared
+`MaxPendingPreparedBytes` owner. The bound covers encoded source, metadata, aux,
+the exact qualified cache key, source and independent registration geometry,
+packed pointers, normal halo
+entries and registration storage descriptors. Checked arithmetic rejects an
+unrepresentable estimate before construction. Compact preparation keeps its
+existing dense-size fallback and cache identity.
+
+One credit transfers to the result and resizes atomically to actual retained
+charge, including the encoded source. A denied worker closes its scope and
+returns only a retry hint without building geometry. Existing scheduling waits
+for capacity. Cancellation, commit, discard and Stop release the same credit
+once; blocked result publication remains charged. Sole oversized admission
+retains its existing rule and counts once per credit. Shared cache builds finish
+atomically, with cancellation checked at phase boundaries.
+
+These are logical retained-storage bounds, excluding allocator/map bucket slack,
+cache bookkeeping and temporary conversion allocations. Encoded file IO and aux
+loading happen before reservation. Other full/placement/override jobs and C1
+construction still lack prebuild byte admission. Cache/result estimates can
+charge shared storage independently and must not be summed as physical memory.
+Page-specific pin/eviction policy and native route memory targets remain I12
+work; live v3 activation still awaits height and collision integration.
 
 Preparation dispatch priority, S1d:
 

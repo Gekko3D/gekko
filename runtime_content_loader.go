@@ -445,6 +445,12 @@ func (l *RuntimeContentLoader) LoadImportedWorldChunk(path string) (*content.Imp
 		return content.LoadImportedWorldChunkWithCodec(path, codec)
 	})
 }
+
+// LoadImportedWorldChunkRLESource borrows an immutable encoded source from the
+// same scoped cache owner as decoded content, under a separate cache kind.
+func (l *RuntimeContentLoader) LoadImportedWorldChunkRLESource(path string) (*content.ImportedWorldChunkRLESource, error) {
+	return loadRuntimeContent(l, "imported-chunk-rle", path, content.LoadImportedWorldChunkRLESource)
+}
 func (l *RuntimeContentLoader) LoadImportedWorldChunkAux(path string) (*content.ImportedWorldChunkAuxDef, error) {
 	return loadRuntimeContent(l, "aux", path, content.LoadImportedWorldChunkAux)
 }

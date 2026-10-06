@@ -16,9 +16,10 @@ type streamedPendingPreparedOwner struct {
 	stats streamedPendingPreparedStats
 }
 type streamedPendingPreparedCredit struct {
-	owner *streamedPendingPreparedOwner
-	bytes int64
-	once  sync.Once
+	owner     *streamedPendingPreparedOwner
+	bytes     int64
+	released  bool
+	oversized bool
 }
 
 func newStreamedPendingPreparedOwner(max int64) *streamedPendingPreparedOwner {
@@ -52,13 +53,43 @@ func (o *streamedPendingPreparedOwner) reserve(cost int64) (*streamedPendingPrep
 	if cost > o.stats.MaxBytes {
 		o.stats.OversizedAdmissions++
 	}
-	return &streamedPendingPreparedCredit{owner: o, bytes: cost}, true
+	return &streamedPendingPreparedCredit{owner: o, bytes: cost, oversized: cost > o.stats.MaxBytes}, true
 }
 func (c *streamedPendingPreparedCredit) release() {
 	if c == nil {
 		return
 	}
-	c.once.Do(func() { c.owner.mu.Lock(); c.owner.stats.Bytes -= c.bytes; c.owner.mu.Unlock() })
+	c.owner.mu.Lock()
+	defer c.owner.mu.Unlock()
+	if !c.released {
+		c.released = true
+		c.owner.stats.Bytes -= c.bytes
+	}
+}
+
+// resize reconciles one credit without releasing its ownership between sizes.
+func (c *streamedPendingPreparedCredit) resize(cost int64) bool {
+	if c == nil || c.owner == nil {
+		return false
+	}
+	o := c.owner
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if c.released || cost < 0 {
+		return false
+	}
+	other := o.stats.Bytes - c.bytes
+	if cost > int64(^uint64(0)>>1)-other || (other != 0 && (other > o.stats.MaxBytes || cost > o.stats.MaxBytes-other)) {
+		o.stats.AdmissionRetries++
+		return false
+	}
+	o.stats.Bytes = other + cost
+	c.bytes = cost
+	if cost > o.stats.MaxBytes && !c.oversized {
+		o.stats.OversizedAdmissions++
+		c.oversized = true
+	}
+	return true
 }
 func (o *streamedPendingPreparedOwner) snapshot() streamedPendingPreparedStats {
 	if o == nil {
@@ -160,9 +191,19 @@ func admitStreamedPreparedProxy(owner *streamedPendingPreparedOwner, p streamedP
 		p.release()
 		return streamedPreparedSectorProxy{prepareCancel: p.prepareCancel, Generation: p.Generation, SectorCoord: p.SectorCoord, Err: p.Err, PrepareDuration: p.PrepareDuration}
 	}
+	if p.retryCost > 0 {
+		return p
+	}
 	cost := streamedPreparedProxyCharge(p)
 	if streamedPreparationCancelled(p.prepareCancel) {
 		return cancelledStreamedPreparedProxy(p)
+	}
+	if p.pendingCredit != nil {
+		if p.pendingCredit.resize(cost) {
+			return p
+		}
+		p.release()
+		return streamedPreparedSectorProxy{prepareCancel: p.prepareCancel, Generation: p.Generation, SectorCoord: p.SectorCoord, retryCost: cost, PrepareDuration: p.PrepareDuration}
 	}
 	credit, ok := owner.reserve(cost)
 	if !ok {
