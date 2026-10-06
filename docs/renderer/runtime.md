@@ -1043,6 +1043,59 @@ replacement and quarantined ranges, without fixed 2,048-record headroom.
 sector entries inspected by this planning step. Other scene scans and the work
 within one new or dirty map remain.
 
+### Managed generation admission (S1l7)
+
+`GpuBufferManager` owns an explicit CPU-only admission ledger. No frame loop calls
+it yet. `SetManagedGeometryAdmissionBudget` selects `Enabled`, `MaxInputBytes` and
+`MaxCopiedStageBytes`; the zero budget disables admission. The opt-in
+`DefaultManagedGeometryAdmissionBudget` enables 128 MiB in each domain. These are
+policy defaults, not measured limits. `ManagedGeometryAdmissionBudget` reports
+the policy. `ManagedGeometryAdmissionStats` reports `InputBytes`,
+`OwnedMetadataBytes`, `ReservedCopiedStageBytes`, `TotalStageBytes`,
+`InputPressureBytes`, `StagePressureBytes`, `OwnerCount` and `GenerationCount`.
+Pressure is the positive excess above each enabled cap.
+
+`AdmitManagedGeometry(object)` lazily captures the current S1l6 producer only when
+enabled. It returns a typed result: Disabled, Unavailable, Accepted, Coalesced,
+Unchanged, Stale, SourceChanged, Pressure or Overflow. The first input becomes
+accepted. A newer generation from the same attachment becomes the sole successor;
+later generations replace that successor. Equal latest generations are unchanged;
+older generations and wrap from the maximum token to zero are stale. A different
+attachment is refused until explicit cancellation. Refusal changes no retained
+input or charge. Unavailable producers do not implicitly drop historical inputs.
+Admission honors the current policy after the trusted capture callback returns;
+disabling from that callback releases the ledger and returns Disabled.
+
+`ManagedGeometryInputs(object)` returns accepted and successor immutable values,
+or zero values when absent. `AdvanceManagedGeometryInput(object, expected)`
+promotes the successor only when expected matches the accepted source and
+generation; absent successors or stale expectations do nothing. This is CPU
+ownership bookkeeping, not GPU readiness or publication.
+`CancelManagedGeometryInputs(object)` releases both descriptors. Disable clears
+the ledger. Lowering enabled caps preserves admitted inputs and reports pressure;
+future growth must fit the lowered limits. Latest-equal offers remain unchanged
+under pressure; promotion and cancellation can release ownership under pressure.
+Enabled zero caps pause new admissions.
+
+Input bytes sum frozen `RetainedBytes`. Copied-stage reservations sum full
+`CopyBytes`, one typed sector-entry reservation (signed coordinate plus sector
+pointer) per captured sector, and a fixed 1,024-coordinate journal per generation.
+Owned metadata counts the language-level size of intrusive owner nodes and
+generation descriptors. `TotalStageBytes` includes owned metadata and copied-stage
+reservations; the stage cap applies to that sum. No registry map or guessed map
+bucket charge is used. These reservations exist before any sector copies,
+entry arrays or journals are allocated. All arithmetic is checked. Replacement
+preflight includes accepted, old successor and incoming charges at once, before
+releasing the old successor. Caps are global across admitted objects; shared
+geometry may be charged conservatively more than once.
+
+Source tokens, producer/engine graphs, caller-retained captures, fixed manager
+storage, allocator overhead, current CPU authority/renderer derivatives and all
+GPU allocations are outside these domains. The ledger requires exclusive manager
+access and its explicit owner lookup is linear. No capture, ledger traversal or
+staged service is added to ordinary frame updates. Allocation service, content
+reconciliation, coverage, lookup publication and GPU retirement remain later work.
+
 ### Auxiliary capacity admission
 
 Auxiliary occupancy/normal storage is independent of sector brick-range capacity.

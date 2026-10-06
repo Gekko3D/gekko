@@ -863,6 +863,17 @@ commands and limits are in the
 Staged metadata accounting, GPU admission/service and coherent publication remain
 next. Synchronous copies and rendering are unchanged; no frame-time claim.
 
+### S1l7: Managed generation admission
+
+Completed 2026-10-06 in this batch. GPU-manager CPU admission now tracks global
+input/stage charges and accepted/coalesced generations with transient peak
+preflight and explicit release. The lasting contract is in
+[managed generation admission](../renderer/runtime.md#managed-generation-admission-s1l7);
+commands and limits are in the
+[delivery record](streamed-rendering-content-optimization.md#s1l7-managed-generation-admission).
+Bounded sector service, reconciliation and coherent GPU publication remain next.
+No frame-loop integration or rendering changes; no frame-time claim.
+
 ## Verification and execution record
 
 Workflow: GPT-6.1 sol tests to red; root adversarial test review; GPT-6.1 sol code to green; root adversarial production review; commit. User authorized tests/subagents. Preserve unrelated changes.

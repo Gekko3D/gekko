@@ -326,6 +326,8 @@ This is the producer-input prerequisite for staged structural admission. CPU
 authority publication, renderer derivative copying, GPU admission and readiness
 remain synchronous. It establishes no per-frame work or memory ceiling.
 
+The GPU manager owns [generation admission and stage reservations](runtime.md#managed-generation-admission-s1l7) for these inputs.
+
 ### Ordinary managed runtime geometry
 
 `AssetServer.RegisterManagedVoxelGeometry(source, sourcePath)` defensively seals

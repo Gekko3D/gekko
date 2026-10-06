@@ -170,6 +170,10 @@ type WaterRippleHost struct {
 }
 
 type GpuBufferManager struct {
+	managedGeometryBudget ManagedGeometryAdmissionBudget
+	managedGeometryOwners *managedGeometryOwner
+	managedGeometryStats  ManagedGeometryAdmissionStats
+
 	Device   *wgpu.Device
 	Profiler *core.Profiler
 
