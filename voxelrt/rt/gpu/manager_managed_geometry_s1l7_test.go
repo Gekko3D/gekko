@@ -66,15 +66,23 @@ func s1l7Stats(t *testing.T, m *gpu.GpuBufferManager, inputs []core.ManagedGeome
 	s := m.ManagedGeometryAdmissionStats()
 	var input, reserved uint64
 	// These language-level sizes specify reservations, not private ledger layout.
-	type entry struct {
-		coord    [3]int
-		sector   *volume.Sector
-		previous *entry
+	type node struct {
+		left, right       *node
+		sector            *volume.Sector
+		bytes, generation uint64
 	}
 	for _, in := range inputs {
 		v := in.Geometry()
 		input += v.RetainedBytes()
-		reserved += v.CopyBytes() + uint64(v.Len())*uint64(unsafe.Sizeof(entry{})) + uint64(unsafe.Sizeof([1024][3]int{}))
+		var nodes, scratch uint64
+		if v.Len() > 0 {
+			nodes = 2*uint64(v.Len()) - 1
+			scratch = 1
+			for span := uint64(1); span < uint64(v.Len()); span *= 2 {
+				scratch++
+			}
+		}
+		reserved += v.CopyBytes() + (nodes+scratch)*uint64(unsafe.Sizeof(node{})) + uint64(unsafe.Sizeof([1024][3]int{}))
 	}
 	if s.InputBytes != input || s.ReservedCopiedStageBytes != reserved || s.OwnerCount != owners || s.GenerationCount != len(inputs) {
 		t.Fatalf("ownership stats = %+v, want input %d, reserved %d, owners %d, generations %d", s, input, reserved, owners, len(inputs))

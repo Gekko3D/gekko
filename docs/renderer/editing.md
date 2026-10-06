@@ -402,7 +402,9 @@ input. Missing state, app, manager or admission, disabled budgets and stale or
 exposed attachments skip the feed. Rejection preserves retained journal work.
 Notifications use the accepted input identity, even when a successor exists;
 added coordinates remain outside accepted topology. The existing 1,024-coordinate
-journal and overflow sweep rules apply. No second queue or retained input is added.
+journal and overflow sweep rules apply. No second queue or retained input is added. After the complete notification batch,
+the feed records its previous-to-current publication edge for S1l13 exhaustive
+coverage. Missing edges require a stable accepted-topology repair sweep.
 
 `VoxelObject.MatchesManagedGeometrySource(expected)` checks only current source
 identity and core derivative/selection guards. It invokes neither provider,
@@ -423,7 +425,8 @@ and their fixed halo, use existing per-coordinate manager owner lookup and bound
 journal duplicate checks; their cost is not a frame-time bound. Structural-copy
 progress and admission charges are unchanged. Draining notifications still does
 not reconcile copied content or certify GPU readiness. Replacement peak accounting,
-bounded reconciliation and coherent GPU publication remain subsequent steps.
+[bounded CPU reconciliation](runtime.md#managed-cpu-content-reconciliation-s1l13)
+is available; coherent GPU publication remains subsequent work.
 
 ### Ordinary managed runtime geometry
 

@@ -1078,14 +1078,13 @@ under pressure; promotion and cancellation can release ownership under pressure.
 Enabled zero caps pause new admissions.
 
 Input bytes sum frozen `RetainedBytes`. Copied-stage reservations sum full
-`CopyBytes`, one typed sector-entry reservation (signed coordinate, sector
-pointer and previous-entry pointer) per captured sector, and a fixed
-1,024-coordinate journal per generation.
+`CopyBytes`, the immutable ordinal-tree capacity and one maximum replacement
+path (see S1l13), and a fixed 1,024-coordinate journal per generation.
 Owned metadata counts the language-level size of intrusive owner nodes and
 generation descriptors. `TotalStageBytes` includes owned metadata and copied-stage
 reservations; the stage cap applies to that sum. No registry map or guessed map
 bucket charge is used. These reservations exist before any sector copies,
-entry arrays or journals are allocated. All arithmetic is checked. Replacement
+tree nodes or journals are allocated. All arithmetic is checked. Replacement
 preflight includes accepted, old successor and incoming charges at once, before
 releasing the old successor. Caps are global across admitted objects; shared
 geometry may be charged conservatively more than once.
@@ -1094,8 +1093,8 @@ Source tokens, producer/engine graphs, caller-retained captures, fixed manager
 storage, allocator overhead, current CPU authority/renderer derivatives and all
 GPU allocations are outside these domains. The ledger requires exclusive manager
 access and its explicit owner lookup is linear. No capture, ledger traversal or
-staged service is added to ordinary frame updates. GPU allocation service, content
-reconciliation, coverage, lookup publication and GPU retirement remain later work.
+staged service is added to ordinary frame updates. CPU reconciliation is available through S1l13. GPU allocation service, lookup
+publication and GPU retirement remain later work.
 
 ### Managed sector copy service (S1l8)
 
@@ -1108,12 +1107,12 @@ does not capture producers, traverse uncopied geometry, service the successor or
 promote generations. Successor admission/coalescing never restarts accepted work.
 Lowered admission caps do not prevent service of already reserved inputs.
 
-Each serviced sector gets one immutable linked entry, prepended to the copied
-prefix. No generation-sized array, map, sort or journal is allocated. Admission
-reserves the full entry linkage size before service; descriptor cursor and head
+Each serviced sector installs an immutable ordinal-tree leaf (S1l13). No
+generation-sized array, map, sort or journal is allocated. Admission reserves
+tree capacity and replacement scratch before service; descriptor cursor and root
 storage count as owned metadata. Service consumes that reservation without
 changing admission charges. Cancellation, disable and explicit promotion drop
-manager ownership of old copied entries without traversing them. A promoted
+manager ownership of old tree roots without traversing them. A promoted
 successor begins with its own empty copy prefix; promotion remains explicit CPU
 bookkeeping and does not require completion or imply GPU readiness.
 
@@ -1124,8 +1123,8 @@ bytes copied and enumeration completion. `Coord(index)` and `CopySector(index)`
 address the copied prefix in source order; invalid indices return zero/nil and
 false. The zero view has no input, zero counts/bytes and `Complete() == true`;
 the availability flag distinguishes it from an admitted empty generation.
-Index inspection walks the linked prefix and is linear, outside the service
-allowance. `CopySector` returns an independent mutable copy, never manager-owned
+Index inspection follows an ordinal-tree path and is logarithmic, outside the
+service allowance. `CopySector` returns an independent mutable copy, never manager-owned
 headers, bricks or auxiliary backing. Captured stage views remain unchanged after
 further service, producer edits, successor replacement, cancellation, disable or
 promotion. Caller-retained views/copies are outside manager ownership charges.
@@ -1135,7 +1134,7 @@ frame or wall time. Each copy's full auxiliary capacity is already reserved, but
 allocation/zeroing can depend on that capacity. Producer capture, inspection,
 allocator overhead and Go GC reclamation remain separate costs. Calls require
 exclusive manager access. No frame-loop or GPU allocation/publication is added;
-live-content reconciliation and coherent publication remain subsequent steps.
+CPU reconciliation is explicit in S1l13; GPU publication remains subsequent work.
 
 ### Managed content work scheduling (S1l9)
 
@@ -1181,7 +1180,8 @@ sweep remains. The absent status is zero. Status reads do not capture producers.
 most `maxEntries` visits and returns the number attempted, including a failed
 visit. Nil callbacks, nonpositive allowances and missing/mismatched ownership do
 no work. Sweeps visit signed lexicographic accepted order before journal work;
-journal order is unspecified. A true callback result consumes that coordinate.
+journal order is unspecified. A true callback result consumes that coordinate
+and marks CPU coverage as requiring materializing repair (S1l13).
 False stops the call and preserves its coordinate/cursor for retry; a panic also
 leaves that visit unconsumed. Callbacks may inspect immutable inputs/status but
 must not mutate the manager or producer, admit/cancel/promote generations, or
@@ -1198,8 +1198,8 @@ certificate. A drained journal does not establish content coherence or GPU
 readiness. [Qualified current-content reads](editing.md#qualified-current-sector-inputs-s1l10)
 and the [engine edit/halo feed](editing.md#managed-edit-notifications-s1l11) are
 available, along with [current-sector reservation preflight](#managed-current-sector-reservations-s1l12).
-Replacement-capable stage storage, copy service, frame-loop integration and coherent
-publication remain later work. The allowance bounds attempted coordinates per
+S1l13 supplies replacement storage and CPU reconciliation. Frame-loop integration
+and GPU publication remain later work. The allowance bounds attempted coordinates per
 explicit call, not total calls per frame, callback cost, wall time or Go GC
 reclamation.
 
@@ -1236,7 +1236,7 @@ objects. Only successful installation releases the previous reservation's exact
 charges. Smaller replacements and tombstones still need this simultaneous peak;
 refusal preserves previous ownership. The copy reservation covers only the
 existing independent sector-output domain, not a future replacement index.
-That representation's metadata and transient paths must be preflighted separately.
+S1l13 precharges that representation and its transient path at admission.
 
 After the trusted sector reader returns, reservation rechecks the current budget
 and the exact accepted descriptor, so cancellation/readmission with equal source
@@ -1263,9 +1263,101 @@ All calls require exclusive manager access. The temporary reader result is inspe
 before preflight, like full-input admission; no sector copy or reservation descriptor
 is allocated on refusal. Capture, fixed manager storage, allocator overhead, caller
 captures and Go GC reclamation remain outside the ledger's domains. Journal/sweep
-state and immutable copied-prefix views remain unchanged. Bounded replacement
-service, a replacement-capable stage representation, coherent publication and GPU retirement
-remain later steps; this reservation is neither readiness nor a frame-time bound.
+state and immutable copied-prefix views remain unchanged. S1l13 provides bounded
+CPU replacement service; GPU publication and retirement remain later steps; this reservation is neither readiness nor a frame-time bound.
+
+### Managed CPU content reconciliation (S1l13)
+
+This explicit CPU service replaces accepted-sector content without changing its
+fixed topology or publishing GPU state. It requires exclusive engine-thread and
+manager access. Ordinary frame updates do not invoke it.
+
+Accepted stages use an immutable midpoint tree over their frozen coordinate
+ordinals. A node contains two child pointers, a sector pointer, its output-byte
+charge and publication generation. Admission reserves `2*N-1` nodes plus one
+maximum path of `ceil(log2(N))+1` nodes; empty topology reserves neither.
+`ManagedGeometryStageStorageBytes(N)` returns this checked language-level byte
+charge (negative or overflowing counts refuse). Payload and journal reservations
+are separate. Each installation clones one path before swapping the root. The
+scratch charge covers simultaneous old and incoming paths; historical roots held
+by callers, allocator overhead and delayed GC reclamation are outside manager
+ownership. The current root retains only current leaves, with no replacement
+history or growing overlay.
+
+`ManagedGeometryStageView` retains its root and copied prefix. `Complete` means
+initial enumeration only. `CopiedBytes` sums current initialized leaf outputs;
+`SectorGeneration(index)` returns a leaf's publication token. A removed sector
+is an initialized tombstone: `CopySector` returns nil/true. Invalid indices return
+nil/false. Inspection copies preserve brick values and auxiliary nilness, length
+and capacity without exposing manager-owned backing. Old views remain frozen.
+
+`SetManagedGeometryProducerWithGenerationReader` installs lazy full, sector and
+scalar-generation callbacks under one fresh source identity. Existing setters
+remain compatible but do not supply the scalar reader.
+`CurrentManagedGeometryGeneration(expected)` invokes only that scalar reader,
+checking attachment, ordinary render selection and non-rollback generation before
+and after the callback. The engine adapter additionally checks live owner/binding,
+asset and completed publication through its existing qualification path. Missing
+or failed scalar readers never fall back to full or sector capture.
+
+`ApplyManagedGeometrySectorReservation(object, expected)` consumes a previously
+reserved candidate only for an initialized accepted ordinal. It requires the
+qualified live generation to equal the candidate and not precede the leaf, and
+rechecks exact owner, accepted descriptor and pending-candidate identity after
+callbacks. Its result is Disabled, Unavailable, Mismatch, Uncopied, Stale, Overflow
+or Applied. Refusal does not copy output, replace a root or acknowledge content.
+The incoming output charge transfers from the pending descriptor to the stage;
+the old leaf output, pending retained input and descriptor charges then release.
+Already reserved replacement service works under lowered enabled caps, including
+zero. The original frozen input remains charged. Cancellation, promotion and
+disable release the updated stage and any pending candidate. Apply alone does
+not acknowledge journal work or certify coherence.
+
+`RecordManagedGeometryContentPublication(object, expected, previous, current)`
+is a trusted exhaustive batch marker, called after all changed-sector and normal-
+halo notifications. The engine edit feed records the previous and completed
+publication versions, including finalized panic prefixes. No-op edits stay silent.
+Continuous version edges advance covered publication even when changed topology
+lies outside accepted coordinates. Duplicate current markers cannot repair a
+coverage gap. Missing edges, rollback and successful legacy callback acknowledgements
+require a whole stable materializing sweep before coherence can be certified.
+Manual queueing alone makes no exhaustive-history assertion.
+
+`ServiceManagedGeometryReconciliation(object, expected, maxEntries)` shares one
+entry allowance across initial enumeration, pending candidates and content work.
+It enumerates first, then refreshes/applies pending candidates and services sweeps
+before journal entries. The return value counts attempted coordinates, including
+failed content attempts. Nonpositive allowances and missing/mismatched ownership
+do no work. A refused copy leaves the coordinate and cursor pending for retry.
+With valid publication history, fresh leaves at the exact qualified generation
+can be acknowledged without another copy. Repair sweeps materialize every ordinal;
+only a retry already materialized by that pass may reuse its current leaf. New
+captures still obey simultaneous old-plus-incoming preflight. Trusted readers may change policy or lifecycle ownership, but must not reenter reservation,
+release, notification, publication-recording or reconciliation operations.
+Postcallback identity checks prevent acknowledgements on detached owners.
+
+Unknown publication history triggers a bounded full accepted-topology sweep.
+Generation changes and late notifications preserve its cursor and require at most
+one follow-up pass; they do not restart progress. Only a whole pass performed by
+this materializing service at a stable qualified generation repairs missing
+history. Legacy callback progress cannot form that certificate. Empty accepted
+topology may be repaired by stable scalar qualification with positive allowance,
+without consuming an entry. Repeated edits can delay coherence indefinitely.
+The manager retains a scalar high-water token from successful qualified reads
+and recorded publications, including status reads. A lower token is unavailable;
+status may advance this scalar or invalidate certification after rollback or
+unavailable qualification, but never schedules or copies work. Recovery to the
+high-water token still requires a stable materializing sweep. A generation wrap requires a fresh
+admitted identity.
+
+`ManagedGeometryReconciliationStatus(object)` returns accepted `Input`, `Copied`,
+`Total`, `Pending`, `Qualified`, `Generation`, `Coherent` and `RepairRequired`, plus
+availability. `Pending` includes incomplete enumeration, journal/sweep/candidate
+work and required repair. The getter performs scalar qualification only and
+rechecks ownership after the callback. Coherent requires complete enumeration,
+no journal/sweep/candidate, valid exhaustive coverage or completed repair, and covered version equal to the
+qualified live version. This certifies CPU content for accepted topology only;
+it says nothing about successor topology, GPU readiness or frame-time limits.
 
 ### Auxiliary capacity admission
 

@@ -37,6 +37,7 @@ type managedGeometryProducer struct {
 	derivative *volume.XBrickMap
 	capture    func() (volume.ManagedGeometryView, uint64, bool)
 	read       func([3]int) (volume.ManagedSectorView, uint64, bool)
+	current    func() (uint64, bool)
 	source     *managedGeometrySource
 }
 
@@ -50,12 +51,17 @@ func (obj *VoxelObject) SetManagedGeometryProducer(derivative *volume.XBrickMap,
 // SetManagedGeometryProducerWithSectorReader atomically installs lazy full and
 // coordinate callbacks under a fresh identity. A nil full callback clears both.
 func (obj *VoxelObject) SetManagedGeometryProducerWithSectorReader(derivative *volume.XBrickMap, capture func() (volume.ManagedGeometryView, uint64, bool), read func([3]int) (volume.ManagedSectorView, uint64, bool)) {
+	obj.SetManagedGeometryProducerWithGenerationReader(derivative, capture, read, nil)
+}
+
+// SetManagedGeometryProducerWithGenerationReader installs all readers atomically.
+func (obj *VoxelObject) SetManagedGeometryProducerWithGenerationReader(derivative *volume.XBrickMap, capture func() (volume.ManagedGeometryView, uint64, bool), read func([3]int) (volume.ManagedSectorView, uint64, bool), current func() (uint64, bool)) {
 	if obj == nil {
 		return
 	}
 	obj.managedGeometryProducer = nil
 	if capture != nil {
-		obj.managedGeometryProducer = &managedGeometryProducer{derivative: derivative, capture: capture, read: read, source: &managedGeometrySource{}}
+		obj.managedGeometryProducer = &managedGeometryProducer{derivative: derivative, capture: capture, read: read, current: current, source: &managedGeometrySource{}}
 	}
 }
 
@@ -108,4 +114,20 @@ func (obj *VoxelObject) CaptureManagedGeometryInput() (ManagedGeometryInput, boo
 		return ManagedGeometryInput{}, false
 	}
 	return ManagedGeometryInput{geometry: geometry, generation: generation, source: producer.source}, true
+}
+
+// CurrentManagedGeometryGeneration qualifies only the scalar reader. It keeps no history.
+func (obj *VoxelObject) CurrentManagedGeometryGeneration(expected ManagedGeometryInput) (uint64, bool) {
+	if obj == nil {
+		return 0, false
+	}
+	p := obj.managedGeometryProducer
+	if p == nil || p.current == nil || expected.source == nil || expected.source != p.source || !obj.managedGeometrySelectionQualified(p) {
+		return 0, false
+	}
+	g, ok := p.current()
+	if !ok || g < expected.generation || obj.managedGeometryProducer != p || !obj.managedGeometrySelectionQualified(p) {
+		return 0, false
+	}
+	return g, true
 }

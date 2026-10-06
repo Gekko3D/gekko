@@ -236,13 +236,14 @@ func ApplyManagedVoxelWrites(cmd *Commands, assets *AssetServer, eid EntityId, w
 		return nil
 	}
 	id := vmc.GeometryAsset()
+	previousGeneration := entry.generation
 	var accepted []volume.VoxelWrite
 	publicationComplete := false
 	entry.producerActive = true
 	defer func() {
 		entry.producerActive = false
 		if publicationComplete {
-			notifyManagedVoxelGeometryContent(cmd, assets, eid, id, entry, accepted)
+			notifyManagedVoxelGeometryContent(cmd, assets, eid, id, entry, accepted, previousGeneration)
 		}
 	}()
 	defer func() {

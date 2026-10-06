@@ -106,6 +106,10 @@ func (m *GpuBufferManager) QueueManagedGeometryContent(object *core.VoxelObject,
 	if gen.contentJournal == nil {
 		gen.contentJournal = new([1024][3]int)
 	}
+	if gen.passActive && gen.sweepCursor > 0 {
+		gen.passStable = false
+		gen.sweepAgain = true
+	}
 	gen.contentJournal[gen.contentCount] = coord
 	gen.contentCount++
 	return ManagedGeometryContentQueued
@@ -164,6 +168,10 @@ func (m *GpuBufferManager) ServiceManagedGeometryContent(object *core.VoxelObjec
 			if !visit(coord) {
 				break
 			}
+			gen.repairRequired = true
+			gen.coverageValid = false
+			gen.passActive = false
+			gen.passStable = false
 			gen.sweepCursor++
 			if gen.sweepCursor == geometry.Len() {
 				gen.sweepCursor = 0
@@ -176,6 +184,10 @@ func (m *GpuBufferManager) ServiceManagedGeometryContent(object *core.VoxelObjec
 			if !visit(coord) {
 				break
 			}
+			gen.repairRequired = true
+			gen.coverageValid = false
+			gen.passActive = false
+			gen.passStable = false
 			gen.contentCount--
 		} else {
 			break

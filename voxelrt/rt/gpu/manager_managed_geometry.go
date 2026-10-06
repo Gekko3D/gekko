@@ -4,7 +4,6 @@ import (
 	"unsafe"
 
 	"github.com/gekko3d/gekko/voxelrt/rt/core"
-	"github.com/gekko3d/gekko/voxelrt/rt/volume"
 )
 
 // ManagedGeometryAdmissionBudget controls the explicit CPU admission ledger.
@@ -54,26 +53,23 @@ type managedGeometryOwner struct {
 }
 
 type managedGeometryGeneration struct {
-	input          core.ManagedGeometryInput
-	inputBytes     uint64
-	reserved       uint64
-	pending        *managedGeometrySectorReservation
-	head           *managedGeometrySectorEntry
-	copied         int
-	copiedBytes    uint64
-	contentJournal *[1024][3]int
-	contentCount   int
-	sweepCursor    int
-	sweepPending   bool
-	sweepAgain     bool
-}
-
-// Admission reserves each full entry before service allocates it. Entries are
-// immutable after prepend; no entry array or journal is allocated by admission.
-type managedGeometrySectorEntry struct {
-	coord    [3]int
-	sector   *volume.Sector
-	previous *managedGeometrySectorEntry
+	input                         core.ManagedGeometryInput
+	inputBytes                    uint64
+	reserved                      uint64
+	pending                       *managedGeometrySectorReservation
+	root                          *managedGeometryStageNode
+	copied                        int
+	copiedBytes                   uint64
+	contentJournal                *[1024][3]int
+	contentCount                  int
+	sweepCursor                   int
+	sweepPending                  bool
+	sweepAgain                    bool
+	covered, scalarFloor          uint64
+	coverageValid, repairRequired bool
+	passEntryMaterialized         bool
+	passActive, passStable        bool
+	passGeneration                uint64
 }
 
 func (m *GpuBufferManager) SetManagedGeometryAdmissionBudget(budget ManagedGeometryAdmissionBudget) {
@@ -183,7 +179,7 @@ func (m *GpuBufferManager) AdmitManagedGeometry(object *core.VoxelObject) Manage
 	}
 
 	view := input.Geometry()
-	entries, ok := managedGeometryMultiply(uint64(view.Len()), uint64(unsafe.Sizeof(managedGeometrySectorEntry{})))
+	entries, ok := ManagedGeometryStageStorageBytes(view.Len())
 	if !ok {
 		return ManagedGeometryAdmissionOverflow
 	}
@@ -229,7 +225,7 @@ func (m *GpuBufferManager) AdmitManagedGeometry(object *core.VoxelObject) Manage
 	if budget.MaxInputBytes == 0 || budget.MaxCopiedStageBytes == 0 || peak.InputBytes > budget.MaxInputBytes || peak.TotalStageBytes > budget.MaxCopiedStageBytes {
 		return ManagedGeometryAdmissionPressure
 	}
-	gen := &managedGeometryGeneration{input: input, inputBytes: view.RetainedBytes(), reserved: reserved}
+	gen := &managedGeometryGeneration{input: input, inputBytes: view.RetainedBytes(), reserved: reserved, covered: input.Generation(), scalarFloor: input.Generation(), coverageValid: true}
 	m.managedGeometryStats = peak
 	if owner == nil {
 		m.managedGeometryOwners = &managedGeometryOwner{object: object, accepted: gen, next: m.managedGeometryOwners}
