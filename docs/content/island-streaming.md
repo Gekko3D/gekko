@@ -1105,7 +1105,7 @@ but do not split a row so that it leaves its external contract half-active.
 | I05 | - | Complete: shared page types/validator and imported-world v1/v2 normalization; see [runtime contract](streaming-and-worlds.md#streaming-page-contracts-and-legacy-normalization). |
 | I06 | I05 | Complete: explicit `.gkworld` v3 tooling and deterministic POI page bake; live runtime remains gated. See [bake contract](streaming-and-worlds.md#imported-world-v3-page-baking). |
 | I07 | I05 | Complete: terrain v3 page tooling, independent source backing and deterministic height-page publication; live runtime remains gated. See [bake contract](streaming-and-worlds.md#terrain-v3-page-baking). |
-| I08 | I06, I07 | Independent terrain/POI world-space indexes; remove resolution equality. |
+| I08 | I06, I07 | Complete: independent terrain/POI world-space indexes and authored optional streaming bounds; content accepts independent grids, live runtime remains gated. See [assembly contract](streaming-and-worlds.md#independent-level-layer-indexes). |
 | I09 | I06, I07 | Deterministic 15 km harness builder and generated fixture recipe. |
 | I10 | I02, I04, I08, I09 | Root startup gate and distance/hysteresis/velocity page selection. |
 | I11 | I10 | Atomic refine/coarsen and cross-layer coverage-group handoff. |

@@ -245,6 +245,11 @@ func LoadTerrainHeightPagePayload(d *TerrainChunkManifestDef, manifestPath strin
 	if uint64(pageIndex) >= uint64(len(d.Pages)) {
 		return nil, fmt.Errorf("terrain page index out of range")
 	}
+	return loadValidatedTerrainHeightPagePayload(d, manifestPath, pageIndex)
+}
+
+// The caller has validated the manifest and page index once for its batch.
+func loadValidatedTerrainHeightPagePayload(d *TerrainChunkManifestDef, manifestPath string, pageIndex uint32) (*TerrainHeightTileDef, error) {
 	p := d.Pages[pageIndex].Payload
 	_, coord, err := terrainPagePayloadCoverage(p)
 	if err != nil {

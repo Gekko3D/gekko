@@ -33,6 +33,12 @@ func (r ImportedWorldValidationResult) Error() string {
 }
 
 func ValidateImportedWorld(def *ImportedWorldDef, opts ImportedWorldValidationOptions) ImportedWorldValidationResult {
+	return validateImportedWorld(def, opts, false)
+}
+
+// Independent level indexes retain the normalized legacy unspecified-bounds
+// sentinel; direct legacy validation keeps its established stricter policy.
+func validateImportedWorld(def *ImportedWorldDef, opts ImportedWorldValidationOptions, allowUnspecifiedSectorBounds bool) ImportedWorldValidationResult {
 	result := ImportedWorldValidationResult{}
 	if def == nil {
 		result.addError("nil_imported_world", "imported world definition is nil")
@@ -124,7 +130,7 @@ func ValidateImportedWorld(def *ImportedWorldDef, opts ImportedWorldValidationOp
 			result.addError("empty_sector_chunks", fmt.Sprintf("imported world sector %s has no full chunk refs", sectorKey))
 			continue
 		}
-		if sector.BoundsMax[0] <= sector.BoundsMin[0] || sector.BoundsMax[1] <= sector.BoundsMin[1] || sector.BoundsMax[2] <= sector.BoundsMin[2] {
+		if (sector.BoundsMax[0] <= sector.BoundsMin[0] || sector.BoundsMax[1] <= sector.BoundsMin[1] || sector.BoundsMax[2] <= sector.BoundsMin[2]) && !(allowUnspecifiedSectorBounds && sector.BoundsMin == ([3]float32{}) && sector.BoundsMax == ([3]float32{})) {
 			result.addError("invalid_sector_bounds", fmt.Sprintf("imported world sector %s has invalid bounds", sectorKey))
 		}
 		for _, ref := range sector.FullChunkRefs {

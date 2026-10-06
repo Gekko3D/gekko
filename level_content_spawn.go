@@ -119,6 +119,10 @@ func SpawnAuthoredLevel(cmd *Commands, assets *AssetServer, loader *RuntimeConte
 		return result, fmt.Errorf("level validation failed: %s", validation.Error())
 	}
 
+	if err := preflightLevelStreamingManifests(loader, def, opts.LevelPath, false); err != nil {
+		return result, err
+	}
+
 	result.LevelID = def.ID
 	result.RootEntity = cmd.AddEntity(
 		&TransformComponent{

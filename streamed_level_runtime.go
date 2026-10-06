@@ -683,6 +683,11 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 		return err
 	}
 
+	if err := preflightLevelStreamingManifests(loader, level, cfg.LevelPath, true); err != nil {
+		state.InitErr = err
+		return err
+	}
+
 	worldDeltaPath, sessionDeltaDir, worldDelta, err := streamedLevelWorldDelta(cfg, level)
 	if err != nil {
 		state.InitErr = err

@@ -232,7 +232,23 @@ func TestS2bRuntimeStartupFailuresReleaseUnpublishedAndRetainPublishedScope(t *t
 				t.Fatal(err)
 			}
 			if published {
-				level.Terrain.ManifestPath = "missing"
+				// Fail at the live legacy grid guard after scope publication. A
+				// missing manifest now fails closed during tooling validation.
+				manifestPath := content.ResolveDocumentPath(level.Terrain.ManifestPath, path)
+				manifest, err := content.LoadTerrainChunkManifest(manifestPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				manifest.ChunkSize = level.ChunkSize * 2
+				if err := content.SaveTerrainChunkManifest(manifestPath, manifest); err != nil {
+					t.Fatal(err)
+				}
+				if v := content.ValidateLevel(level, content.LevelValidationOptions{DocumentPath: path}); v.HasErrors() {
+					t.Fatalf("partial-session fixture failed before runtime admission: %s", v.Error())
+				}
+				if _, err := loader.LoadTerrainChunkManifest(manifestPath); err != nil {
+					t.Fatalf("valid legacy manifest rejected before publication: %v", err)
+				}
 			} else {
 				level.Placements = append(level.Placements, level.Placements[0])
 			}

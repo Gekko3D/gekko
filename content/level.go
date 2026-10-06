@@ -46,38 +46,46 @@ const (
 )
 
 type LevelDef struct {
-	ID               string                  `json:"id"`
-	SchemaVersion    int                     `json:"schema_version"`
-	Name             string                  `json:"name"`
-	Tags             []string                `json:"tags,omitempty"`
-	ChunkSize        int                     `json:"chunk_size,omitempty"`
-	VoxelResolution  float32                 `json:"voxel_resolution,omitempty"`
-	Materials        []LevelMaterialDef      `json:"materials,omitempty"`
-	BrushLayers      []LevelBrushLayerDef    `json:"brush_layers,omitempty"`
-	Brushes          []LevelBrushDef         `json:"brushes,omitempty"`
-	Terrain          *LevelTerrainDef        `json:"terrain,omitempty"`
-	BaseWorld        *LevelBaseWorldDef      `json:"base_world,omitempty"`
-	Navigation       *LevelNavigationDef     `json:"navigation,omitempty"`
-	Player           *LevelPlayerDef         `json:"player,omitempty"`
-	Placements       []LevelPlacementDef     `json:"placements,omitempty"`
-	PlacementVolumes []PlacementVolumeDef    `json:"placement_volumes,omitempty"`
-	Environment      *LevelEnvironmentDef    `json:"environment,omitempty"`
-	Lights           []LevelLightDef         `json:"lights,omitempty"`
-	WaterBodies      []LevelWaterBodyDef     `json:"water_bodies,omitempty"`
-	LadderVolumes    []LevelLadderVolumeDef  `json:"ladder_volumes,omitempty"`
-	MovingBrushes    []LevelMovingBrushDef   `json:"moving_brushes,omitempty"`
-	PathNodes        []LevelPathNodeDef      `json:"path_nodes,omitempty"`
-	UseTriggers      []LevelUseTriggerDef    `json:"use_triggers,omitempty"`
-	TriggerVolumes   []LevelTriggerVolumeDef `json:"trigger_volumes,omitempty"`
-	DamageVolumes    []LevelDamageVolumeDef  `json:"damage_volumes,omitempty"`
-	ChangeLevels     []LevelChangeLevelDef   `json:"change_levels,omitempty"`
-	Chargers         []LevelChargerDef       `json:"chargers,omitempty"`
-	TargetRelays     []LevelTargetRelayDef   `json:"target_relays,omitempty"`
-	MultiTargets     []LevelMultiTargetDef   `json:"multi_targets,omitempty"`
-	Breakables       []LevelBreakableDef     `json:"breakables,omitempty"`
-	Pickups          []LevelPickupDef        `json:"pickups,omitempty"`
-	NPCs             []LevelNPCDef           `json:"npcs,omitempty"`
-	Markers          []LevelMarkerDef        `json:"markers,omitempty"`
+	StreamingBounds  *LevelStreamingBoundsDef `json:"streaming_bounds,omitempty"`
+	ID               string                   `json:"id"`
+	SchemaVersion    int                      `json:"schema_version"`
+	Name             string                   `json:"name"`
+	Tags             []string                 `json:"tags,omitempty"`
+	ChunkSize        int                      `json:"chunk_size,omitempty"`
+	VoxelResolution  float32                  `json:"voxel_resolution,omitempty"`
+	Materials        []LevelMaterialDef       `json:"materials,omitempty"`
+	BrushLayers      []LevelBrushLayerDef     `json:"brush_layers,omitempty"`
+	Brushes          []LevelBrushDef          `json:"brushes,omitempty"`
+	Terrain          *LevelTerrainDef         `json:"terrain,omitempty"`
+	BaseWorld        *LevelBaseWorldDef       `json:"base_world,omitempty"`
+	Navigation       *LevelNavigationDef      `json:"navigation,omitempty"`
+	Player           *LevelPlayerDef          `json:"player,omitempty"`
+	Placements       []LevelPlacementDef      `json:"placements,omitempty"`
+	PlacementVolumes []PlacementVolumeDef     `json:"placement_volumes,omitempty"`
+	Environment      *LevelEnvironmentDef     `json:"environment,omitempty"`
+	Lights           []LevelLightDef          `json:"lights,omitempty"`
+	WaterBodies      []LevelWaterBodyDef      `json:"water_bodies,omitempty"`
+	LadderVolumes    []LevelLadderVolumeDef   `json:"ladder_volumes,omitempty"`
+	MovingBrushes    []LevelMovingBrushDef    `json:"moving_brushes,omitempty"`
+	PathNodes        []LevelPathNodeDef       `json:"path_nodes,omitempty"`
+	UseTriggers      []LevelUseTriggerDef     `json:"use_triggers,omitempty"`
+	TriggerVolumes   []LevelTriggerVolumeDef  `json:"trigger_volumes,omitempty"`
+	DamageVolumes    []LevelDamageVolumeDef   `json:"damage_volumes,omitempty"`
+	ChangeLevels     []LevelChangeLevelDef    `json:"change_levels,omitempty"`
+	Chargers         []LevelChargerDef        `json:"chargers,omitempty"`
+	TargetRelays     []LevelTargetRelayDef    `json:"target_relays,omitempty"`
+	MultiTargets     []LevelMultiTargetDef    `json:"multi_targets,omitempty"`
+	Breakables       []LevelBreakableDef      `json:"breakables,omitempty"`
+	Pickups          []LevelPickupDef         `json:"pickups,omitempty"`
+	NPCs             []LevelNPCDef            `json:"npcs,omitempty"`
+	Markers          []LevelMarkerDef         `json:"markers,omitempty"`
+}
+
+// LevelStreamingBoundsDef is optional authored, padded world-space coverage.
+// It is independent of the grids owned by terrain and imported-world layers.
+type LevelStreamingBoundsDef struct {
+	BoundsMin [3]float32 `json:"bounds_min"`
+	BoundsMax [3]float32 `json:"bounds_max"`
 }
 
 type LevelMaterialDef = AssetMaterialDef

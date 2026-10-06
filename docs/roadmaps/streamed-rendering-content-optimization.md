@@ -5070,7 +5070,7 @@ frame-time improvement were not measured. Terrain page tooling follows in I07.
 
 ### I07: Terrain v3 page tooling
 
-Commit: this batch. Content owns terrain manifest indexes and height-page
+Commit: `6108226`. Content owns terrain manifest indexes and height-page
 qualification; the derived producer emits deterministic regional/macro/root
 pages with immutable, generation-qualified publication. Shared source tiles
 retain query/navigation ownership independently from the terminal visual
@@ -5097,3 +5097,30 @@ of page bodies; this is an offline smoke check, not a frame-time measurement.
 Live runtime still rejects v3; GPU visuals, collision handoff and local surface
 generation remain pending. I08 independent terrain/POI world-space indexes are
 next.
+
+### I08: Independent world-space layer indexes
+
+Commit: this batch. Content owns detached terrain/POI source, page and sector
+indexes in world meters. Assemblies containing v3 accept independent layer
+grids, qualify height payloads, validate optional authored padded bounds and
+cross-layer coverage groups, and bind voxel navigation to its imported owner.
+Legacy-only grid/navigation policy remains. Runtime rejects unsupported v3
+before entity/session publication; the legacy shared-grid guards remain until
+I10. See [the owning contract](../content/streaming-and-worlds.md#independent-level-layer-indexes).
+
+Verification from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./content/... -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./... -count=1
+git diff --check
+```
+
+Consumer builds passed with
+`env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-i08-editor .`
+from `../gekko-editor` and
+`env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-i08-actiongame .`
+from `../actiongame`. Consumer suites were not rerun; their recorded failures
+remain. Native GPU visuals and frame-time gains were not measured because live
+v3 selection/residency is still gated. I09, the deterministic 15 km harness
+builder, is next.

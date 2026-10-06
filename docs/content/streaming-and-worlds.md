@@ -249,8 +249,52 @@ using `-1` for roots and unowned empty leaves; failures return no partial index.
 Page bounds have positive volume. Caller-qualified payload/leaf bounds may be
 flat, including constant-height surfaces. The owning compiler or decoder supplies
 that coverage; the validator performs no payload I/O and cannot infer height Y
-coverage from sample spacing. Cross-layer coverage-group readiness remains a
-later level/runtime responsibility.
+coverage from sample spacing. Level assembly validates cross-layer coverage-group
+membership; runtime readiness remains a later responsibility.
+
+### Independent level layer indexes
+
+`BuildLevelStreamingIndex(level, terrain, poi)` assembles already-loaded
+manifests without payload I/O. Terrain and POI bounds stay in their existing
+world-meter coordinates; level defaults do not rescale or rebase either layer.
+Each layer retains its owner ID, source hash, grid, normalized page forest and
+source/sector coordinate maps. If either manifest is explicitly v3,
+`ValidateLevel` accepts independent grids for both referenced layers. Legacy-only
+levels retain their previous equality checks. In the independent context,
+voxel navigation uses the imported-world owner's grid and source identity.
+It requires an exact source-world ID and exact serialized float32 resolution;
+legacy assemblies retain optional identity and their existing resolution
+tolerance.
+
+Each layer has separate source, page and sector spatial indexes. Queries accept
+finite, ordered AABBs, including points; intersections include touching edges.
+Results are sorted original manifest-local indices. They are qualified by the
+layer identity, never a shared level chunk bucket. Legacy generated sectors and
+normalized pages retain their deterministic normalized order. Index snapshots
+own their metadata and private spatial storage; modifying authored inputs or
+returned metadata does not change query results.
+
+Known bounds include every source entry, including empty backing records.
+Source-only terrain v3 without height calibration has a known X/Z footprint and
+unknown Y; queries conservatively match any height in that footprint. Unspecified
+legacy sector bounds conservatively match every valid query. Optional authored
+`streaming_bounds` require fully known containment for sources, visual pages and
+sectors. They cover padded fallback coverage, not only playable land; unknown
+coverage fails validation rather than acquiring an invented height.
+Mixed assemblies accept the exact all-zero legacy sector-bounds sentinel when
+bounds are omitted. Direct legacy-world and legacy-only level validation retain
+their existing stricter bounds checks.
+
+Nonempty `coverage_group` IDs are stable POI IDs. Each group requires members
+in both terrain and POI pages with overlapping bounds. This validates the static
+assembly; generation readiness and atomic visibility/collision handoff follow
+in I11.
+
+These indexes prepare tooling and page selection. The live streamed scheduler
+still uses legacy shared chunk coordinates and retains its grid checks. Runtime
+loaders reject v3 before cache admission, and spawn paths reject unsupported
+render layers before queueing entities. Page selection and residency must be
+integrated before those guards can be removed.
 
 `LoadImportedWorld` accepts schema 1, schema 2 and missing-version legacy files,
 normalizes them to the current v2 defaults and computes a nonserialized,

@@ -35,6 +35,7 @@ The top-level `LevelDef` contains:
 - `tags`
 - `chunk_size`
 - `voxel_resolution`
+- optional `streaming_bounds`
 - `terrain`
 - `base_world`
 - `navigation`
@@ -48,6 +49,13 @@ The top-level `LevelDef` contains:
 - `markers`
 
 Schema version is currently `3`.
+
+`streaming_bounds` declares padded streaming coverage in world meters, using
+finite `bounds_min` and `bounds_max` arrays with positive extent on every axis.
+It includes source tiles and coarser fallback pages, rather than only playable
+land. Omission preserves legacy levels without a containment guarantee. Explicit
+bounds reject out-of-range or unqualified layer coverage. See
+[independent layer indexes](streaming-and-worlds.md#independent-level-layer-indexes).
 
 ## Core Sections
 
@@ -102,6 +110,16 @@ Current level validation expects:
 
 - `kind == "heightfield"`
 - `source_path` pointing to a `.gkterrain`
+
+When `manifest_path` references terrain v3, that manifest is authoritative and
+`source_path` is optional authoring provenance; validation never reads it or
+falls back to it after a manifest error. Referenced height payloads are qualified
+against their metadata. If either terrain or imported-world manifest is v3,
+each referenced layer owns its chunk size and resolution, independently of the
+level defaults. All-legacy assemblies retain the existing equality checks.
+
+Source-only legacy terrain without a tiled manifest cannot establish padded
+coverage for explicit `streaming_bounds`; bake a manifest first.
 
 During basic authored-level spawn, terrain chunk manifests are loaded and chunk entities are spawned under the level root.
 

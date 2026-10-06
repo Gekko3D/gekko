@@ -204,9 +204,7 @@ func ValidateLevel(def *LevelDef, opts LevelValidationOptions) LevelValidationRe
 		validateLevelNPC(&result, npc, opts)
 	}
 
-	validateLevelTerrain(&result, def, opts)
-	validateLevelBaseWorld(&result, def, opts)
-	validateLevelNavigation(&result, def, opts)
+	validateLevelStreamingContent(&result, def, opts)
 	validateShooterLevelRequirements(&result, def, opts)
 
 	return result
@@ -909,13 +907,22 @@ func validateLevelBrushVoxelShape(result *LevelValidationResult, brush LevelBrus
 	}
 }
 
-func validateLevelTerrain(result *LevelValidationResult, level *LevelDef, opts LevelValidationOptions) {
+func validateLevelTerrain(result *LevelValidationResult, level *LevelDef, opts LevelValidationOptions, layers *levelStreamingValidationContext) {
 	if level == nil || level.Terrain == nil {
 		return
 	}
 	terrain := level.Terrain
 	if terrain.Kind != TerrainKindHeightfield {
 		result.addError("invalid_terrain_kind", fmt.Sprintf("unsupported terrain kind %q", terrain.Kind), "", "", "", "", "", "", "")
+	}
+	if layers.terrainReferenced {
+		if layers.terrainErr != nil {
+			return
+		}
+		if layers.terrain.SchemaVersion == TerrainHeightTileManifestSchemaVersion {
+			validateLevelHeightTileFiles(result, layers.terrain, layers.terrainPath)
+			return
+		}
 	}
 	if strings.TrimSpace(terrain.SourcePath) == "" {
 		result.addError("empty_terrain_source_path", "terrain source_path is required", "", "", "", "", "", "", "")
@@ -942,15 +949,15 @@ func validateLevelTerrain(result *LevelValidationResult, level *LevelDef, opts L
 	for _, issue := range terrainValidation.Issues {
 		result.addError("invalid_terrain_source", issue.Message, "", "", "", "", "", "", "")
 	}
-	if level.ChunkSize > 0 && terrainDef.ChunkSize != level.ChunkSize {
+	if !layers.independent && level.ChunkSize > 0 && terrainDef.ChunkSize != level.ChunkSize {
 		result.addError("terrain_chunk_size_mismatch", fmt.Sprintf("terrain chunk size %d does not match level chunk size %d", terrainDef.ChunkSize, level.ChunkSize), "", "", "", "", "", "", "")
 	}
-	if level.VoxelResolution > 0 && absLevelFloat32(terrainDef.VoxelResolution-level.VoxelResolution) > 1e-4 {
+	if !layers.independent && level.VoxelResolution > 0 && absLevelFloat32(terrainDef.VoxelResolution-level.VoxelResolution) > 1e-4 {
 		result.addError("terrain_voxel_resolution_mismatch", fmt.Sprintf("terrain voxel size %.4f does not match level voxel size %.4f", terrainDef.VoxelResolution, level.VoxelResolution), "", "", "", "", "", "", "")
 	}
 }
 
-func validateLevelBaseWorld(result *LevelValidationResult, def *LevelDef, opts LevelValidationOptions) {
+func validateLevelBaseWorld(result *LevelValidationResult, def *LevelDef, opts LevelValidationOptions, layers *levelStreamingValidationContext) {
 	if def == nil || def.BaseWorld == nil {
 		return
 	}
@@ -962,33 +969,24 @@ func validateLevelBaseWorld(result *LevelValidationResult, def *LevelDef, opts L
 		result.addError("empty_base_world_manifest_path", "base world manifest_path is required", "", "", "", "", "", "", baseWorld.ManifestPath)
 		return
 	}
-	resolvedPath := ResolveDocumentPath(baseWorld.ManifestPath, opts.DocumentPath)
-	if strings.ToLower(filepath.Ext(resolvedPath)) != ".gkworld" {
-		result.addError("invalid_base_world_manifest_path", fmt.Sprintf("base world manifest_path must point to a .gkworld: %s", baseWorld.ManifestPath), "", "", "", "", "", "", baseWorld.ManifestPath)
+	if layers.poiErr != nil {
 		return
 	}
-	if _, err := os.Stat(resolvedPath); err != nil {
-		result.addError("missing_base_world_manifest", fmt.Sprintf("missing base world manifest %s", baseWorld.ManifestPath), "", "", "", "", "", "", baseWorld.ManifestPath)
-		return
-	}
-	importedWorld, err := LoadImportedWorld(resolvedPath)
-	if err != nil {
-		result.addError("invalid_base_world_manifest", fmt.Sprintf("failed to load base world manifest %s: %v", baseWorld.ManifestPath, err), "", "", "", "", "", "", baseWorld.ManifestPath)
-		return
-	}
-	validation := ValidateImportedWorld(importedWorld, ImportedWorldValidationOptions{DocumentPath: resolvedPath})
+	resolvedPath := layers.poiPath
+	importedWorld := layers.poi
+	validation := validateImportedWorld(importedWorld, ImportedWorldValidationOptions{DocumentPath: resolvedPath}, layers.independent)
 	for _, issue := range validation.Issues {
 		result.addError(issue.Code, issue.Message, "", "", "", "", "", "", baseWorld.ManifestPath)
 	}
-	if def.ChunkSize > 0 && importedWorld.ChunkSize != def.ChunkSize {
+	if !layers.independent && def.ChunkSize > 0 && importedWorld.ChunkSize != def.ChunkSize {
 		result.addError("base_world_chunk_size_mismatch", fmt.Sprintf("base world chunk size %d does not match level chunk size %d", importedWorld.ChunkSize, def.ChunkSize), "", "", "", "", "", "", baseWorld.ManifestPath)
 	}
-	if def.VoxelResolution > 0 && absLevelFloat32(importedWorld.VoxelResolution-def.VoxelResolution) > 1e-4 {
+	if !layers.independent && def.VoxelResolution > 0 && absLevelFloat32(importedWorld.VoxelResolution-def.VoxelResolution) > 1e-4 {
 		result.addError("base_world_voxel_resolution_mismatch", fmt.Sprintf("base world voxel size %.4f does not match level voxel size %.4f", importedWorld.VoxelResolution, def.VoxelResolution), "", "", "", "", "", "", baseWorld.ManifestPath)
 	}
 }
 
-func validateLevelNavigation(result *LevelValidationResult, def *LevelDef, opts LevelValidationOptions) {
+func validateLevelNavigation(result *LevelValidationResult, def *LevelDef, opts LevelValidationOptions, layers *levelStreamingValidationContext) {
 	if def == nil || def.Navigation == nil {
 		return
 	}
@@ -1010,17 +1008,23 @@ func validateLevelNavigation(result *LevelValidationResult, def *LevelDef, opts 
 		result.addError("invalid_navigation_manifest", fmt.Sprintf("failed to load navigation manifest %s: %v", path, err), "", "", "", "", "", "", path)
 		return
 	}
-	if def.BaseWorld != nil {
-		worldPath := ResolveDocumentPath(def.BaseWorld.ManifestPath, opts.DocumentPath)
-		if world, err := LoadImportedWorld(worldPath); err == nil && manifest.SourceWorldID != "" && manifest.SourceWorldID != world.WorldID {
-			result.addError("navigation_source_world_id_mismatch", fmt.Sprintf("navigation source world id %q does not match base world %q", manifest.SourceWorldID, world.WorldID), "", "", "", "", "", "", path)
-		}
+	independentOwner := layers.independent && layers.poi != nil
+	if world := layers.poi; world != nil && (independentOwner || manifest.SourceWorldID != "") && manifest.SourceWorldID != world.WorldID {
+		result.addError("navigation_source_world_id_mismatch", fmt.Sprintf("navigation source world id %q does not match base world %q", manifest.SourceWorldID, world.WorldID), "", "", "", "", "", "", path)
 	}
-	if def.ChunkSize > 0 && manifest.ChunkSize != def.ChunkSize {
-		result.addError("navigation_chunk_size_mismatch", fmt.Sprintf("navigation chunk size %d does not match level chunk size %d", manifest.ChunkSize, def.ChunkSize), "", "", "", "", "", "", path)
+	chunkSize, resolution := def.ChunkSize, def.VoxelResolution
+	if independentOwner {
+		chunkSize, resolution = layers.poi.ChunkSize, layers.poi.VoxelResolution
 	}
-	if def.VoxelResolution > 0 && absLevelFloat32(manifest.VoxelResolution-def.VoxelResolution) > 1e-4 {
-		result.addError("navigation_voxel_resolution_mismatch", fmt.Sprintf("navigation voxel size %.4f does not match level voxel size %.4f", manifest.VoxelResolution, def.VoxelResolution), "", "", "", "", "", "", path)
+	if chunkSize > 0 && manifest.ChunkSize != chunkSize {
+		result.addError("navigation_chunk_size_mismatch", fmt.Sprintf("navigation chunk size %d does not match level chunk size %d", manifest.ChunkSize, chunkSize), "", "", "", "", "", "", path)
+	}
+	resolutionMismatch := absLevelFloat32(manifest.VoxelResolution-resolution) > 1e-4
+	if independentOwner {
+		resolutionMismatch = manifest.VoxelResolution != resolution
+	}
+	if resolution > 0 && resolutionMismatch {
+		result.addError("navigation_voxel_resolution_mismatch", fmt.Sprintf("navigation voxel size %.4f does not match level voxel size %.4f", manifest.VoxelResolution, resolution), "", "", "", "", "", "", path)
 	}
 }
 
