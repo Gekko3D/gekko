@@ -874,6 +874,17 @@ commands and limits are in the
 Bounded sector service, reconciliation and coherent GPU publication remain next.
 No frame-loop integration or rendering changes; no frame-time claim.
 
+### S1l8: Bounded managed sector copies
+
+Completed 2026-10-06 in this batch. Explicit CPU service advances accepted sector
+copies under an entry allowance, with precharged immutable entries and frozen
+prefix inspection. Successor coalescing preserves progress; release drops stage
+roots without traversal. See the
+[canonical contract](../renderer/runtime.md#managed-sector-copy-service-s1l8) and
+[delivery record](streamed-rendering-content-optimization.md#s1l8-bounded-managed-sector-copies).
+Live-content reconciliation and coherent GPU publication remain next. No frame
+integration or frame-time claim.
+
 ## Verification and execution record
 
 Workflow: GPT-6.1 sol tests to red; root adversarial test review; GPT-6.1 sol code to green; root adversarial production review; commit. User authorized tests/subagents. Preserve unrelated changes.

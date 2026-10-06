@@ -67,8 +67,9 @@ func s1l7Stats(t *testing.T, m *gpu.GpuBufferManager, inputs []core.ManagedGeome
 	var input, reserved uint64
 	// These language-level sizes specify reservations, not private ledger layout.
 	type entry struct {
-		coord  [3]int
-		sector *volume.Sector
+		coord    [3]int
+		sector   *volume.Sector
+		previous *entry
 	}
 	for _, in := range inputs {
 		v := in.Geometry()

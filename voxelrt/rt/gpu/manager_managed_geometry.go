@@ -54,16 +54,20 @@ type managedGeometryOwner struct {
 }
 
 type managedGeometryGeneration struct {
-	input      core.ManagedGeometryInput
-	inputBytes uint64
-	reserved   uint64
+	input       core.ManagedGeometryInput
+	inputBytes  uint64
+	reserved    uint64
+	head        *managedGeometrySectorEntry
+	copied      int
+	copiedBytes uint64
 }
 
-// These types specify future copied-stage reservations; no entry array or
-// journal is allocated by admission.
+// Admission reserves each full entry before service allocates it. Entries are
+// immutable after prepend; no entry array or journal is allocated by admission.
 type managedGeometrySectorEntry struct {
-	coord  [3]int
-	sector *volume.Sector
+	coord    [3]int
+	sector   *volume.Sector
+	previous *managedGeometrySectorEntry
 }
 
 func (m *GpuBufferManager) SetManagedGeometryAdmissionBudget(budget ManagedGeometryAdmissionBudget) {

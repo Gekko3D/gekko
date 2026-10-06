@@ -1078,8 +1078,9 @@ under pressure; promotion and cancellation can release ownership under pressure.
 Enabled zero caps pause new admissions.
 
 Input bytes sum frozen `RetainedBytes`. Copied-stage reservations sum full
-`CopyBytes`, one typed sector-entry reservation (signed coordinate plus sector
-pointer) per captured sector, and a fixed 1,024-coordinate journal per generation.
+`CopyBytes`, one typed sector-entry reservation (signed coordinate, sector
+pointer and previous-entry pointer) per captured sector, and a fixed
+1,024-coordinate journal per generation.
 Owned metadata counts the language-level size of intrusive owner nodes and
 generation descriptors. `TotalStageBytes` includes owned metadata and copied-stage
 reservations; the stage cap applies to that sum. No registry map or guessed map
@@ -1093,8 +1094,48 @@ Source tokens, producer/engine graphs, caller-retained captures, fixed manager
 storage, allocator overhead, current CPU authority/renderer derivatives and all
 GPU allocations are outside these domains. The ledger requires exclusive manager
 access and its explicit owner lookup is linear. No capture, ledger traversal or
-staged service is added to ordinary frame updates. Allocation service, content
+staged service is added to ordinary frame updates. GPU allocation service, content
 reconciliation, coverage, lookup publication and GPU retirement remain later work.
+
+### Managed sector copy service (S1l8)
+
+`ServiceManagedGeometry(object, maxEntries)` explicitly copies at most
+`maxEntries` sectors of the accepted input and returns the number copied in this
+call. Nil managers, absent owners and nonpositive allowances do no work. Empty
+accepted inputs are complete immediately. Each copied entry advances a saved
+ordinal through the frozen input's signed lexicographic coordinates. The service
+does not capture producers, traverse uncopied geometry, service the successor or
+promote generations. Successor admission/coalescing never restarts accepted work.
+Lowered admission caps do not prevent service of already reserved inputs.
+
+Each serviced sector gets one immutable linked entry, prepended to the copied
+prefix. No generation-sized array, map, sort or journal is allocated. Admission
+reserves the full entry linkage size before service; descriptor cursor and head
+storage count as owned metadata. Service consumes that reservation without
+changing admission charges. Cancellation, disable and explicit promotion drop
+manager ownership of old copied entries without traversing them. A promoted
+successor begins with its own empty copy prefix; promotion remains explicit CPU
+bookkeeping and does not require completion or imply GPU readiness.
+
+`ManagedGeometryStage(object)` returns an immutable `ManagedGeometryStageView`
+and availability flag. Its `Input`, `Len`, `Total`, `CopiedBytes` and `Complete`
+methods describe accepted identity, copied count, captured count, sector-output
+bytes copied and enumeration completion. `Coord(index)` and `CopySector(index)`
+address the copied prefix in source order; invalid indices return zero/nil and
+false. The zero view has no input, zero counts/bytes and `Complete() == true`;
+the availability flag distinguishes it from an admitted empty generation.
+Index inspection walks the linked prefix and is linear, outside the service
+allowance. `CopySector` returns an independent mutable copy, never manager-owned
+headers, bricks or auxiliary backing. Captured stage views remain unchanged after
+further service, producer edits, successor replacement, cancellation, disable or
+promotion. Caller-retained views/copies are outside manager ownership charges.
+
+The entry allowance limits sectors copied per explicit call, not total calls per
+frame or wall time. Each copy's full auxiliary capacity is already reserved, but
+allocation/zeroing can depend on that capacity. Producer capture, inspection,
+allocator overhead and Go GC reclamation remain separate costs. Calls require
+exclusive manager access. No frame-loop or GPU allocation/publication is added;
+live-content reconciliation and coherent publication remain subsequent steps.
 
 ### Auxiliary capacity admission
 
