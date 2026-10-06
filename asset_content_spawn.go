@@ -115,6 +115,10 @@ func spawnAuthoredAssetWithOptions(cmd *Commands, assets *AssetServer, def *cont
 
 // Ownership is reported before any internal flush, including partial failures.
 func spawnAuthoredAssetWithOwnership(cmd *Commands, assets *AssetServer, def *content.AssetDef, prepared *PreparedAuthoredAsset, rootTransform TransformComponent, opts AuthoredAssetSpawnOptions, created func(EntityId, string, bool, bool)) (AuthoredAssetSpawnResult, error) {
+	return spawnAuthoredAssetWithEmitterTextures(cmd, assets, def, prepared, rootTransform, opts, created, nil)
+}
+
+func spawnAuthoredAssetWithEmitterTextures(cmd *Commands, assets *AssetServer, def *content.AssetDef, prepared *PreparedAuthoredAsset, rootTransform TransformComponent, opts AuthoredAssetSpawnOptions, created func(EntityId, string, bool, bool), textures *streamedPreparedEmitterTextures) (AuthoredAssetSpawnResult, error) {
 	result := AuthoredAssetSpawnResult{
 		EntitiesByAssetID:  make(map[string]EntityId),
 		ItemKindsByAssetID: make(map[string]AuthoredItemKind),
@@ -210,7 +214,11 @@ func spawnAuthoredAssetWithOwnership(cmd *Commands, assets *AssetServer, def *co
 		result.ItemKindsByAssetID[light.ID] = AuthoredItemKindLight
 	}
 	for _, emitter := range def.Emitters {
-		eid, err := spawnAuthoredEmitter(cmd, assets, def.ID, emitter)
+		var texture *streamedEmitterTextureRegistration
+		if textures != nil && textures.def == def {
+			texture = textures.emitters[emitter.ID]
+		}
+		eid, err := spawnAuthoredEmitterWithTexture(cmd, assets, def.ID, emitter, texture)
 		if err != nil {
 			return result, err
 		}
@@ -511,9 +519,22 @@ func spawnAuthoredLight(cmd *Commands, assetID string, light content.AssetLightD
 }
 
 func spawnAuthoredEmitter(cmd *Commands, assets *AssetServer, assetID string, emitter content.AssetEmitterDef) (EntityId, error) {
+	return spawnAuthoredEmitterWithTexture(cmd, assets, assetID, emitter, nil)
+}
+
+func spawnAuthoredEmitterWithTexture(cmd *Commands, assets *AssetServer, assetID string, emitter content.AssetEmitterDef, texture *streamedEmitterTextureRegistration) (EntityId, error) {
 	tr := AssetTransformFromDef(emitter.Transform)
 	local := AssetLocalTransformFromDef(emitter.Transform)
-	emitterComp, err := ParticleEmitterFromContent(emitter.Emitter, assets)
+	var emitterComp ParticleEmitterComponent
+	var err error
+	if assets != nil && texture != nil && texture.texturePath == emitter.Emitter.TexturePath {
+		emitterComp, err = ParticleEmitterFromContent(emitter.Emitter, nil)
+		if err == nil {
+			emitterComp.Texture, err = texture.adopt(assets)
+		}
+	} else {
+		emitterComp, err = ParticleEmitterFromContent(emitter.Emitter, assets)
+	}
 	if err != nil {
 		return 0, err
 	}

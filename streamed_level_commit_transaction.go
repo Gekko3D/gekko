@@ -246,7 +246,7 @@ func advanceStreamedChunkCommit(cmd *Commands, assets *AssetServer, state *Strea
 				legacy = prepared.legacyAssets[key]
 			}
 			placementStart := time.Now()
-			spawnResult, spawnErr := spawnAuthoredLevelPlacementWithPackets(cmd, assets, loader, state.LevelRoot, state.LevelID, state.LevelPath, AuthoredPlacementSpawnDef{
+			spawnResult, spawnErr := spawnAuthoredLevelPlacementWithEmitterTextures(cmd, assets, loader, state.LevelRoot, state.LevelID, state.LevelPath, AuthoredPlacementSpawnDef{
 				PlacementID: placement.PlacementID, VolumeID: placement.VolumeID, AssetPath: placement.AssetPath, Transform: placement.Transform, Tags: append([]string(nil), placement.Tags...),
 			}, packet, legacy, func(entity EntityId, item string, root, voxel bool) {
 				chunk.OwnedEntities[entity] = struct{}{}
@@ -263,7 +263,7 @@ func advanceStreamedChunkCommit(cmd *Commands, assets *AssetServer, state *Strea
 					chunk.ObjectEntities[key] = entity
 					state.ObjectChunk[key] = prepared.Coord
 				}
-			}, prepared.managedPreparedAssets[placement.PlacementID])
+			}, prepared.emitterTextures[placement.PlacementID], prepared.managedPreparedAssets[placement.PlacementID])
 			state.Metrics.LastCommitPlacementDuration += time.Since(placementStart)
 			if !tx.live(state) {
 				return entityCount, placementUnit, false, nil

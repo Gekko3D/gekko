@@ -140,6 +140,14 @@ func (o *streamedPendingPreparedOwner) snapshot() streamedPendingPreparedStats {
 	return stats
 }
 func (p streamedPreparedChunk) release() {
+	for _, bundle := range p.emitterTextures {
+		for _, r := range bundle.emitters {
+			r.release()
+		}
+	}
+	for _, source := range p.emitterTextureSources {
+		source.release()
+	}
 	p.registration.release()
 	p.terrainRegistration.release()
 	p.releaseObjectSnapshotGeometry()
@@ -164,6 +172,8 @@ func (p streamedPreparedSectorProxy) release() {
 // Copy the envelope and sever owner/geometry links before estimating. Geometry
 // has its own deliberately bounded traversal, excluding borrowed GPU managers.
 func streamedPreparedChunkCharge(p streamedPreparedChunk) int64 {
+	textureBytes := streamedEmitterTexturesCharge(p)
+	p.emitterTextures, p.emitterTextureSources = nil, nil
 	geometry := p.PreparedImportedWorldGeometry
 	sourceBytes := p.geometrySource.charge()
 	p.geometrySource = nil
@@ -189,7 +199,7 @@ func streamedPreparedChunkCharge(p streamedPreparedChunk) int64 {
 	p.pendingCredit = nil
 	p.prepareCancel = nil
 	p.Err = nil
-	return runtimeContentChargeSum(runtimeContentGraphCharge(p), streamedPendingGeometryCharge(geometry), sourceBytes, registrationBytes,
+	return runtimeContentChargeSum(textureBytes, runtimeContentGraphCharge(p), streamedPendingGeometryCharge(geometry), sourceBytes, registrationBytes,
 		streamedPendingGeometryCharge(terrainGeometry), terrainRegistrationBytes, snapshotGeometryBytes, compiledAssetBytes, legacyAssetBytes, managedBytes)
 }
 func streamedPreparedProxyCharge(p streamedPreparedSectorProxy) int64 {

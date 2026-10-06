@@ -205,7 +205,7 @@ func streamedChunkCapturedPrebuildCharge(payload streamedPreparedChunk, job stre
 			return 0, err
 		}
 	}
-	total := m.add(base, imported, m.otherGeometry(payload, job), managed)
+	total := m.add(base, imported, m.otherGeometry(payload, job), managed, streamedEmitterTextureFutureCopies(payload, &m))
 	return total, m.err
 }
 

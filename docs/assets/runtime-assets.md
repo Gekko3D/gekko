@@ -132,6 +132,35 @@ Texture creation helpers live in `asset_texture.go`:
 - `CreateVoxelBasedTexture(...)`
   - builds a 3D texture from a voxel model plus palette
 
+#### Streamed emitter textures (P5o)
+
+Streamed legacy and compiled placements prepare emitter PNGs on workers when
+the runtime starts with an asset server, including CPU-only streaming. Each
+chunk owns one decoded source per clean absolute filename and an independent
+publication copy for every placement/emitter pair. Main-thread emitter spawning
+transfers that copy into a fresh texture ID. Pixels, premultiplied RGBA conversion,
+dimensions, format, emitter settings and hierarchy preserve direct spawning.
+Disabled emitters still prepare their textures. Legacy paths retain cwd-relative
+semantics; compiled references use their resolved absolute paths.
+
+Bindings require the selected packet domain, exact definition identity, emitter
+ID and texture path. A changed selection or definition uses direct spawning;
+consumed or released matching handles fail rather than rebuild. Direct prepared
+and selected-part APIs retain delayed texture loading, `CreateTexture` retains
+its PNG-error panic, and `CreateTextureFromTexels` still borrows caller pixels.
+A runtime started without an asset server skips worker PNG access; a later
+server uses the direct path. Streamed PNG failures instead return preparation
+errors before live publication, validating alpha before each emitter's file access.
+
+Pending admission charges decoded sources once, handle metadata and every future
+publication copy before workers build those copies. Transfers remove pixels from
+the envelope's actual charge; reserved credit stays conservative until final
+drain. Cancellation, error, pressure retry, stale results and Stop release unused
+storage idempotently. Published textures retain ordinary global lifetime across
+unload and Stop. PNG decode/conversion remains atomic and precedes reservation;
+this accounting excludes allocator/map slack and does not bound total process
+memory. GPU atlas selection and upload retain the existing renderer path.
+
 ### Materials and meshes
 
 Also in `asset_texture.go`:
@@ -212,7 +241,8 @@ the existing worker count. Packet aliases are charged once; separate scalar
 graph estimates may count shared string backing more than once. Accounting
 excludes allocator and map bucket slack and is not a total process-memory bound.
 Selected-path resolution retains its filesystem metadata checks. ECS spawning
-and emitter texture decoding remain main-thread work.
+remains main-thread work; emitter PNG preparation follows the
+[streamed texture contract](#streamed-emitter-textures-p5o).
 
 ### Compiled ordinary asset preparation
 
@@ -260,7 +290,8 @@ Prepared metadata is an owned copy of the immutable cached header. Compiled
 animation-set references resolve relative to the header, and rig references
 relative to the selected set, without cwd fallback. Both require portable
 relative paths. Emitter texture paths become absolute in the prepared copy;
-existing texture decoding remains unchanged. Authoring sources are unnecessary.
+direct texture decoding remains unchanged, while streamed placements follow the
+[worker texture contract](#streamed-emitter-textures-p5o). Authoring sources are unnecessary.
 
 Canonical bricks already include `ModelScale`; dense construction does not
 resample or form voxel JSON cache keys. After typed/profile validation, compiled

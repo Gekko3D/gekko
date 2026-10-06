@@ -338,11 +338,12 @@ type StreamedLevelRuntimeState struct {
 	snapshotGeometryAssets    map[EntityId]streamedGeometryAssetLease
 	managedVoxelCommit        *managedVoxelCommitContext
 
-	renderManaged     bool
-	nextRenderTicket  uint64
-	renderTicketBatch streamedRenderTicketBatch
-	renderTargets     map[EntityId]streamedRenderTarget
-	retiredRenderIDs  map[uint64]struct{}
+	renderManaged          bool
+	prepareEmitterTextures bool
+	nextRenderTicket       uint64
+	renderTicketBatch      streamedRenderTicketBatch
+	renderTargets          map[EntityId]streamedRenderTarget
+	retiredRenderIDs       map[uint64]struct{}
 
 	Config                     StreamedLevelRuntimeConfig
 	Loader                     *RuntimeContentLoader
@@ -528,6 +529,8 @@ type streamedPreparedChunk struct {
 	v2Placements                          map[string]bool
 	objectSnapshotGeometry                map[string]*streamedObjectSnapshotGeometry
 	objectSnapshotProofs                  map[string]*streamedSnapshotProof
+	emitterTextures                       map[string]*streamedPreparedEmitterTextures
+	emitterTextureSources                 map[string]*streamedEmitterTextureSource
 	compiledAssets                        map[string]*compiledAssetPacket
 	legacyAssets                          map[string]*legacyAssetPacket
 	managedPreparedAssets                 map[string]*streamedManagedPreparedAsset
@@ -540,6 +543,7 @@ type streamedChunkLoadJob struct {
 	compactPreparedGeometry   bool
 	renderManaged             bool
 	managedPreparedAssets     bool
+	prepareEmitterTextures    bool
 	prepareCancel             <-chan struct{}
 	Generation                uint64
 	Coord                     ChunkCoord
@@ -750,6 +754,7 @@ func StartStreamedLevelRuntime(cmd *Commands, assets *AssetServer, cfg StreamedL
 	state.prepareScheduler = streamedPrepareScheduler{}
 	state.readyCommits = streamedReadyOwner{}
 	state.renderManaged = voxelRtStateFromApp(cmd.app) != nil
+	state.prepareEmitterTextures = assets != nil
 	state.streamingWork.blocked = 0
 	state.Initialized = true
 	state.InitErr = nil
@@ -2108,6 +2113,7 @@ func buildStreamedChunkLoadJob(state *StreamedLevelRuntimeState, coord ChunkCoor
 	job := streamedChunkLoadJob{
 		compactPreparedGeometry: state.Config.CompactPreparedGeometry,
 		renderManaged:           state.renderManaged,
+		prepareEmitterTextures:  state.prepareEmitterTextures,
 		managedPreparedAssets:   state.Config.EnableManagedPreparedAssets,
 		Generation:              state.Generation,
 		Coord:                   coord,
@@ -2374,6 +2380,10 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 		}
 		result.compiledAssets[key] = packet
 	}
+	if err := prepareStreamedEmitterTextureSources(&result, job); err != nil {
+		result.Err = err
+		return result
+	}
 	result.ObjectSnapshots = make(map[string]*content.VoxelObjectSnapshotDef)
 	result.objectSnapshotGeometry = make(map[string]*streamedObjectSnapshotGeometry)
 	if job.TerrainOverride != nil {
@@ -2472,6 +2482,10 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 		result.pendingCredit, prebuildCost = credit, cost
 	}
 	if streamedPreparationCancelled(job.prepareCancel) {
+		return result
+	}
+	if err := prepareStreamedEmitterTextureCopies(&result, job); err != nil {
+		result.Err = err
 		return result
 	}
 	if err := prepareStreamedManagedAssets(&result, job); err != nil {

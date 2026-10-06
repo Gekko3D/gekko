@@ -65,24 +65,30 @@ func (server *AssetServer) CreateTextureFromTexels(texels []uint8, texWidth uint
 func (server *AssetServer) CreateTexture(filename string) AssetId {
 	id := makeAssetId()
 
+	texture, err := decodeTexturePNG(filename)
+	if err != nil {
+		panic(err)
+	}
+	server.mu.Lock()
+	server.textures[id] = texture
+	server.mu.Unlock()
+	return id
+}
+
+// Pure CPU decoding preserves the public texture path's premultiplied RGBA conversion.
+func decodeTexturePNG(filename string) (TextureAsset, error) {
 	file, err := os.Open(filename)
 	if err != nil {
-		panic(err)
+		return TextureAsset{}, err
 	}
 	defer file.Close()
-
-	// Decode the image
 	img, err := png.Decode(file)
 	if err != nil {
-		panic(err)
+		return TextureAsset{}, err
 	}
-
 	bounds := img.Bounds()
-
-	// Convert to RGBA if needed
 	rgbaImg, ok := img.(*image.RGBA)
 	if !ok {
-		// Convert to RGBA format
 		rgbaImg = image.NewRGBA(bounds)
 		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 			for x := bounds.Min.X; x < bounds.Max.X; x++ {
@@ -90,20 +96,9 @@ func (server *AssetServer) CreateTexture(filename string) AssetId {
 			}
 		}
 	}
-
-	server.mu.Lock()
-	server.textures[id] = TextureAsset{
-		Version:   0,
-		Texels:    rgbaImg.Pix,
-		Width:     uint32(bounds.Max.X - bounds.Min.X),
-		Height:    uint32(bounds.Max.Y - bounds.Min.Y),
-		Depth:     1,
-		Dimension: TextureDimension2D,
-		Format:    TextureFormatRGBA8Unorm,
-	}
-	server.mu.Unlock()
-
-	return id
+	return TextureAsset{Version: 0, Texels: rgbaImg.Pix,
+		Width: uint32(bounds.Dx()), Height: uint32(bounds.Dy()), Depth: 1,
+		Dimension: TextureDimension2D, Format: TextureFormatRGBA8Unorm}, nil
 }
 
 func (server *AssetServer) CreateSampler() AssetId {

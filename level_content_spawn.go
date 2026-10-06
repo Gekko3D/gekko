@@ -1133,6 +1133,10 @@ func spawnAuthoredLevelPlacementWithPacket(cmd *Commands, assets *AssetServer, l
 }
 
 func spawnAuthoredLevelPlacementWithPackets(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, parent EntityId, levelID string, levelPath string, placement AuthoredPlacementSpawnDef, packet *compiledAssetPacket, legacy *legacyAssetPacket, created func(EntityId, string, bool, bool), managed ...*streamedManagedPreparedAsset) (AuthoredAssetSpawnResult, error) {
+	return spawnAuthoredLevelPlacementWithEmitterTextures(cmd, assets, loader, parent, levelID, levelPath, placement, packet, legacy, created, nil, managed...)
+}
+
+func spawnAuthoredLevelPlacementWithEmitterTextures(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, parent EntityId, levelID string, levelPath string, placement AuthoredPlacementSpawnDef, packet *compiledAssetPacket, legacy *legacyAssetPacket, created func(EntityId, string, bool, bool), textures *streamedPreparedEmitterTextures, managed ...*streamedManagedPreparedAsset) (AuthoredAssetSpawnResult, error) {
 	if loader == nil {
 		loader = NewRuntimeContentLoader()
 	}
@@ -1185,6 +1189,12 @@ func spawnAuthoredLevelPlacementWithPackets(cmd *Commands, assets *AssetServer, 
 		return AuthoredAssetSpawnResult{}, fmt.Errorf("load asset %s: %w", placement.AssetPath, err)
 	}
 
+	if textures != nil {
+		selection, selectionErr := streamedEmitterTextureSelection(placement.AssetPath, levelPath)
+		if selectionErr != nil || textures.selection != selection || textures.def != assetDef {
+			textures = nil
+		}
+	}
 	state := streamedLevelRuntimeStateFromApp(cmd.app)
 	var adopted map[string]AssetId
 	if packet != nil && len(managed) != 0 {
@@ -1233,13 +1243,13 @@ func spawnAuthoredLevelPlacementWithPackets(cmd *Commands, assets *AssetServer, 
 	if created != nil {
 		ownership = record
 	}
-	spawnResult, err := spawnAuthoredAssetWithOwnership(cmd, assets, assetDef, prepared, levelTransformToComponent(placement.Transform), AuthoredAssetSpawnOptions{
+	spawnResult, err := spawnAuthoredAssetWithEmitterTextures(cmd, assets, assetDef, prepared, levelTransformToComponent(placement.Transform), AuthoredAssetSpawnOptions{
 		DocumentPath:                   resolvedAssetPath,
 		OverrideCastShadows:            placement.OverrideCastShadows,
 		OverrideShadowMaxDistance:      placement.OverrideShadowMaxDistance,
 		OverrideShadowCasterGroupID:    placement.OverrideShadowCasterGroupID,
 		OverrideShadowCasterGroupLimit: placement.OverrideShadowCasterGroupLimit,
-	}, ownership)
+	}, ownership, textures)
 	if err != nil {
 		return AuthoredAssetSpawnResult{}, fmt.Errorf("spawn asset %s for placement %s: %w", placement.AssetPath, placement.PlacementID, err)
 	}
