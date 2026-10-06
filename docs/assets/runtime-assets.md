@@ -476,6 +476,52 @@ other AssetServer records. See
 [S2a](../roadmaps/streamed-rendering-s2a.md) for the storage-charge definition,
 defaults and remaining memory bounds.
 
+### Worker-prepared ordinary managed assets (S1n)
+
+`StreamedLevelRuntimeConfig.EnableManagedPreparedAssets` opts compiled ordinary
+placements into worker-prepared managed ownership. The zero value keeps existing
+publication. Each eligible placement/part owns a single-use sealed owner,
+independent CPU authority snapshot and independent first renderer map. Workers
+publish neither asset IDs nor ECS/GPU state. Their pending reservation includes
+these inputs, metadata and construction peak before creating owners; cancellation,
+stale results and unused handles drain idempotently. Existing shared pending-byte
+policy, including its sole oversized-result exception, remains unchanged.
+
+Only fresh cold geometry from the exact compiled publication qualifies. Its proof
+is local to that publication: multiple parts can share one ordinary global ID
+while receiving independent managed overrides. Later warm reuse always takes the
+existing path, including edited or exposed shared assets. No pointer/revision test
+certifies immutable warm content. Legacy authored inputs, declared LODs, collapsed
+composites and restored snapshots retain their existing preparation. This first
+consumer does not migrate terrain, imported-world, retained, planet or backing
+ownership.
+
+Main-thread adoption transfers prepared authority into an entity-owned
+`OverrideGeometry` before spawn callbacks. It preserves the ordinary shared ID,
+palettes, source lattice and authored pivot bounds. Provisional overrides are
+removed unless the exact chunk lease claims them. Qualified shapes retain verified
+construction provenance and persistence counts/bytes from worker validation;
+models keep existing full persistence fallback. Unload, failed partial commits
+and Stop release owned overrides without revoking ordinary global geometry.
+
+The renderer consumes the prepared map once under exact sealed-entry, source and
+generation qualification, without a whole-map comparison or copy. Its existing
+`PreparedVoxelRendererCopyStats` accounts for retained candidates and transfers.
+Tracked edits before attachment or public exposure discard obsolete candidates
+and preserve current authority through the existing compatibility path. If a
+placement hook installs unsupported ownership, the exact automatically adopted
+override becomes ordinary authority while preserving its edits, ID, bounds and
+lease; explicit hook replacement overrides are untouched.
+
+Managed edit callbacks feed the existing bounded renderer pipeline. CPU picking,
+collision and saves continue to use authority. This flag does not enable GPU
+admission, managed frame service or bounded lookup budgets. Those remain separate
+opt-in policies; see [managed publication](../renderer/runtime.md#managed-gpu-publication-s1l14)
+and [lookup publication](../renderer/runtime.md#bounded-sector-lookup-publication-s1m).
+Worker construction is still one finite job. Metadata publication, placement hooks
+and compatibility copies remain main-thread work. Pending charges end at transfer;
+live CPU asset storage has its existing lifetime and is not an aggregate heap cap.
+
 ### Compact private prepared sources
 
 Opt-in `StreamedLevelRuntimeConfig.CompactPreparedGeometry` qualifies fresh

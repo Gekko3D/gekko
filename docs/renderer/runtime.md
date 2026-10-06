@@ -1463,6 +1463,16 @@ and shadow dependency keys, while private-map `ComputeAABB()` supplies occupied
 bake bounds. Ordinary and LOD selections retain their existing local bounds.
 CPU picking, collision, saves and producer reads continue to use authority.
 
+### Streamed ordinary worker integration (S1n)
+
+Qualified cold compiled placement parts can supply managed authority and the
+first renderer map from workers, using the existing managed generation callbacks.
+The [asset ownership contract](../assets/runtime-assets.md#worker-prepared-ordinary-managed-assets-s1n)
+defines opt-in, conservative warm fallback, leases and hook ownership transitions.
+This integration changes no shader layouts or GPU budget defaults. Managed
+structural promotion still requires complete content, materials and exact
+committed lookup coverage; CPU authority remains independent of displayed stages.
+
 ### Bounded sector lookup publication (S1m)
 
 `GpuBufferManager` owns optional lookup preparation through

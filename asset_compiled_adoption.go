@@ -10,8 +10,13 @@ import (
 // original-base identities before preparing the single-use registration.
 // Lock order is server then registration; no registration lock escapes this call.
 func (server *AssetServer) adoptCompiledAssetGeometry(contentID string, lattice content.VoxelObjectLatticeDef, baseIdentity string, source *volume.XBrickMap, registration *streamedGeometryRegistration) (AssetId, bool) {
+	id, adopted, _ := server.adoptCompiledAssetGeometryOutcome(contentID, lattice, baseIdentity, source, registration)
+	return id, adopted
+}
+
+func (server *AssetServer) adoptCompiledAssetGeometryOutcome(contentID string, lattice content.VoxelObjectLatticeDef, baseIdentity string, source *volume.XBrickMap, registration *streamedGeometryRegistration) (AssetId, bool, bool) {
 	if server == nil || source == nil || registration == nil || contentID == "" || baseIdentity == "" || !validAuthoredVoxelShapeLattice(lattice) || lattice.RasterizationVersion != authoredVoxelShapeRasterizationVersion {
-		return AssetId{}, false
+		return AssetId{}, false, false
 	}
 	server.ensureVoxelStorage()
 	key := "compiled-asset-shape:" + contentID
@@ -22,17 +27,17 @@ func (server *AssetServer) adoptCompiledAssetGeometry(contentID string, lattice 
 		// registration belongs to this attempt and must drain on either outcome.
 		registration.release()
 		if _, exists := server.voxModels[id]; !exists {
-			return AssetId{}, false
+			return AssetId{}, false, false
 		}
 		if original := server.authoredVoxelBases[id][lattice]; original != "" && original != baseIdentity {
-			return AssetId{}, false
+			return AssetId{}, false, false
 		}
 		server.recordVerifiedAuthoredVoxelBaseLocked(id, lattice, baseIdentity)
-		return id, true
+		return id, true, false
 	}
 	asset, rendererCopy, rendererBytes, _, taken := registration.take(source)
 	if !taken {
-		return AssetId{}, false
+		return AssetId{}, false, false
 	}
 	id := makeAssetId()
 	asset.SourcePath = key
@@ -47,5 +52,5 @@ func (server *AssetServer) adoptCompiledAssetGeometry(contentID string, lattice 
 		server.preparedVoxelRendererCopyStats.Entries++
 		server.preparedVoxelRendererCopyStats.Bytes += rendererBytes
 	}
-	return id, true
+	return id, true, true
 }

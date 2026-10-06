@@ -255,7 +255,7 @@ func advanceStreamedChunkCommit(cmd *Commands, assets *AssetServer, state *Strea
 					chunk.ObjectEntities[key] = entity
 					state.ObjectChunk[key] = prepared.Coord
 				}
-			})
+			}, prepared.managedPreparedAssets[placement.PlacementID])
 			state.Metrics.LastCommitPlacementDuration += time.Since(placementStart)
 			if !tx.live(state) {
 				return entityCount, placementUnit, false, nil
@@ -313,6 +313,7 @@ func advanceStreamedChunkCommit(cmd *Commands, assets *AssetServer, state *Strea
 					return entityCount, placementUnit, false, state.InitErr
 				}
 			}
+			reconcileStreamedManagedParts(cmd, assets, state, chunk, placement.PlacementID, spawnResult.EntitiesByAssetID, prepared.managedPreparedAssets[placement.PlacementID])
 		}
 		break
 	}

@@ -118,6 +118,7 @@ func (server *AssetServer) GetVoxelGeometry(id AssetId) (VoxelGeometryAsset, boo
 		asset.XBrickMap = entry.owner.ExposeMutable()
 		asset.XBrickMap.ComputeAABB()
 		server.voxModels[id] = asset
+		server.removePreparedVoxelRendererCopyLocked(id)
 		entry.exposed = true
 		entry.authoredBase = authoredVoxelBase{}
 		entry.generation++

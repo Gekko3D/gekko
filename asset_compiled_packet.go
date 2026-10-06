@@ -30,13 +30,14 @@ type compiledAssetPacketPalette struct {
 }
 
 type compiledAssetPacketShape struct {
-	contentID    string
-	lattice      content.VoxelObjectLatticeDef
-	baseIdentity string
-	model        bool
-	dimensions   [3]uint32
-	source       *volume.XBrickMap
-	registration *streamedGeometryRegistration
+	contentID        string
+	lattice          content.VoxelObjectLatticeDef
+	baseIdentity     string
+	baseDecodedBytes int64
+	model            bool
+	dimensions       [3]uint32
+	source           *volume.XBrickMap
+	registration     *streamedGeometryRegistration
 }
 
 // Release only pending handles. Already adopted storage stays with AssetServer;
@@ -113,7 +114,7 @@ func prepareCompiledAssetPacketFromVerification(path string, session *compiledAs
 		if _, exists := packet.shapes[verified.contentID]; !exists {
 			source, _ := compiledShapeGeometry(verified.definition)
 			registration := prepareStreamedGeometryRegistration(source)
-			packet.shapes[verified.contentID] = &compiledAssetPacketShape{contentID: verified.contentID, lattice: verified.definition.Lattice, baseIdentity: verified.baseIdentity, source: source, registration: registration}
+			packet.shapes[verified.contentID] = &compiledAssetPacketShape{contentID: verified.contentID, lattice: verified.definition.Lattice, baseIdentity: verified.baseIdentity, baseDecodedBytes: verified.baseDecodedBytes, source: source, registration: registration}
 		}
 		if err := checkCompiledAssetWork(loader, cancelled); err != nil {
 			return nil, err
@@ -176,6 +177,7 @@ func publishCompiledAssetPacket(packet *compiledAssetPacket, assets *AssetServer
 	}
 	prepared := &PreparedAuthoredAsset{def: packet.def, documentPath: packet.documentPath, animations: packet.animations, parts: make(map[string]preparedAuthoredPart, len(packet.def.Parts))}
 	models := make(map[string]AssetId, len(packet.shapes))
+	coldModels := make(map[string]bool, len(packet.shapes))
 	if assets != nil {
 		for _, part := range packet.def.Parts {
 			contentID, exists := packet.parts[part.ID]
@@ -189,7 +191,7 @@ func publishCompiledAssetPacket(packet *compiledAssetPacket, assets *AssetServer
 			if shape == nil {
 				return nil, fmt.Errorf("compiled packet shape is missing")
 			}
-			id, adopted := adoptCompiledAssetPacketGeometry(assets, shape, shape.source, shape.registration)
+			id, adopted, cold := adoptCompiledAssetPacketGeometryOutcome(assets, shape, shape.source, shape.registration)
 			if !adopted {
 				// A warm conflict must never be bypassed by defensive registration.
 				// Rebuild only a consumed cold handle after public key deletion.
@@ -208,6 +210,7 @@ func publishCompiledAssetPacket(packet *compiledAssetPacket, assets *AssetServer
 				}
 			}
 			models[contentID] = id
+			coldModels[contentID] = cold
 		}
 	}
 	if assets != nil {
@@ -260,7 +263,7 @@ func publishCompiledAssetPacket(packet *compiledAssetPacket, assets *AssetServer
 		preparedPart := preparedAuthoredPart{}
 		if assets != nil {
 			if contentID, exists := packet.parts[part.ID]; exists {
-				preparedPart = preparedAuthoredPart{model: models[contentID], palette: palettes[packet.partPalettes[part.ID]]}
+				preparedPart = preparedAuthoredPart{model: models[contentID], palette: palettes[packet.partPalettes[part.ID]], compiledCold: coldModels[contentID]}
 				if _, declared := packet.partLODs[part.ID]; declared {
 					if binding, exists := assets.compiledAssetLODForGeometry(preparedPart.model); exists {
 						preparedPart.compiledLOD = binding.coarseID

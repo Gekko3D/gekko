@@ -9,9 +9,10 @@ import (
 )
 
 type verifiedCompiledAssetShape struct {
-	definition   *content.CompiledAssetShapeDef
-	baseIdentity string
-	contentID    string
+	definition       *content.CompiledAssetShapeDef
+	baseIdentity     string
+	baseDecodedBytes int64
+	contentID        string
 }
 
 type verifiedCompiledAssetModel struct {
@@ -127,6 +128,7 @@ func verifyCompiledAssetInput(path string, loader *RuntimeContentLoader, cancell
 	}
 	verified := make(map[string]verifiedCompiledAssetShape, len(header.Shapes))
 	identities := make(map[*content.CompiledAssetShapeDef]string)
+	identityBytes := make(map[*content.CompiledAssetShapeDef]int64)
 	for _, ref := range header.Shapes {
 		if err := checkCompiledAssetWork(loader, cancelled); err != nil {
 			return nil, err
@@ -148,7 +150,7 @@ func verifyCompiledAssetInput(path string, loader *RuntimeContentLoader, cancell
 		}
 		identity, exists := identities[shape]
 		if !exists {
-			identity, _, err = content.CompiledAssetShapeBaseIdentity(shape, nil)
+			identity, identityBytes[shape], err = content.CompiledAssetShapeBaseIdentity(shape, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -157,7 +159,7 @@ func verifyCompiledAssetInput(path string, loader *RuntimeContentLoader, cancell
 		if identity != ref.BaseIdentity {
 			return nil, fmt.Errorf("compiled shape original base identity mismatch")
 		}
-		verified[part.ID] = verifiedCompiledAssetShape{definition: shape, baseIdentity: identity, contentID: ref.ContentID}
+		verified[part.ID] = verifiedCompiledAssetShape{definition: shape, baseIdentity: identity, baseDecodedBytes: identityBytes[shape], contentID: ref.ContentID}
 	}
 	models, err := verifyCompiledAssetModels(modelHeader, parts, verification, loader, path, cancelled)
 	if err != nil {

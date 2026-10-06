@@ -1128,7 +1128,7 @@ func spawnAuthoredLevelPlacementWithOwnership(cmd *Commands, assets *AssetServer
 	return spawnAuthoredLevelPlacementWithPacket(cmd, assets, loader, parent, levelID, levelPath, placement, nil, created)
 }
 
-func spawnAuthoredLevelPlacementWithPacket(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, parent EntityId, levelID string, levelPath string, placement AuthoredPlacementSpawnDef, packet *compiledAssetPacket, created func(EntityId, string, bool, bool)) (AuthoredAssetSpawnResult, error) {
+func spawnAuthoredLevelPlacementWithPacket(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, parent EntityId, levelID string, levelPath string, placement AuthoredPlacementSpawnDef, packet *compiledAssetPacket, created func(EntityId, string, bool, bool), managed ...*streamedManagedPreparedAsset) (AuthoredAssetSpawnResult, error) {
 	if loader == nil {
 		loader = NewRuntimeContentLoader()
 	}
@@ -1165,6 +1165,34 @@ func spawnAuthoredLevelPlacementWithPacket(cmd *Commands, assets *AssetServer, l
 	if err != nil {
 		return AuthoredAssetSpawnResult{}, fmt.Errorf("load asset %s: %w", placement.AssetPath, err)
 	}
+
+	state := streamedLevelRuntimeStateFromApp(cmd.app)
+	var adopted map[string]AssetId
+	if packet != nil && len(managed) != 0 {
+		adopted = adoptStreamedManagedParts(cmd, assets, state, placement.PlacementID, prepared, managed[0])
+		for partID, id := range adopted {
+			part := prepared.parts[partID]
+			part.managedOverride = id
+			prepared.parts[partID] = part
+		}
+	}
+	// Publication precedes callbacks. IDs remain provisional until the existing
+	// exact chunk lease claims their part entity; failures and panic drain them.
+	defer func() {
+		for _, id := range adopted {
+			entry := assets.managedVoxelEntry(id)
+			if entry == nil {
+				continue
+			}
+			lease := streamedGeometryAssetLease{}
+			if state != nil {
+				lease = state.snapshotGeometryAssets[entry.entity]
+			}
+			if lease.ID != id || lease.Server != assets {
+				assets.DeleteVoxelGeometry(id)
+			}
+		}
+	}()
 	record := func(entity EntityId, itemID string, root, voxel bool) {
 		if root {
 			cmd.AddComponents(entity, &Parent{Entity: parent}, &AuthoredLevelPlacementRefComponent{
@@ -1177,6 +1205,9 @@ func spawnAuthoredLevelPlacementWithPacket(cmd *Commands, assets *AssetServer, l
 		}
 		if created != nil {
 			created(entity, itemID, root, voxel)
+		}
+		if id := adopted[itemID]; id != (AssetId{}) {
+			claimStreamedManagedPart(cmd, assets, state, entity, id)
 		}
 	}
 	var ownership func(EntityId, string, bool, bool)

@@ -82,3 +82,10 @@ func adoptCompiledAssetPacketGeometry(assets *AssetServer, shape *compiledAssetP
 	}
 	return assets.adoptCompiledAssetGeometry(shape.contentID, shape.lattice, shape.baseIdentity, source, registration)
 }
+
+func adoptCompiledAssetPacketGeometryOutcome(assets *AssetServer, shape *compiledAssetPacketShape, source *volume.XBrickMap, registration *streamedGeometryRegistration) (AssetId, bool, bool) {
+	if shape.model {
+		return assets.adoptCompiledAssetModelGeometryOutcome(shape.contentID, shape.lattice, shape.baseIdentity, shape.dimensions, source, registration)
+	}
+	return assets.adoptCompiledAssetGeometryOutcome(shape.contentID, shape.lattice, shape.baseIdentity, source, registration)
+}

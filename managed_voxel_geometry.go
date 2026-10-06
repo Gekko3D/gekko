@@ -13,14 +13,16 @@ import (
 // Managed entries share AssetServer's geometry lifetime. Operations run on the
 // engine thread; callers exclusively own source and exposed raw maps.
 type managedVoxelGeometry struct {
-	authoredBase       authoredVoxelBase
-	persistenceBinding *managedVoxelPersistenceBinding
-	owner              *volume.ManagedXBrickMap
-	exposed            bool
-	generation         uint64
-	entity             EntityId
-	app                *App
-	producerActive     bool
+	authoredBase                           authoredVoxelBase
+	persistenceBinding                     *managedVoxelPersistenceBinding
+	owner                                  *volume.ManagedXBrickMap
+	exposed                                bool
+	generation                             uint64
+	entity                                 EntityId
+	app                                    *App
+	producerActive                         bool
+	preparedBaseBricks, preparedBaseVoxels int
+	preparedBaseBytes                      int64
 }
 
 type managedVoxelBinding struct {
@@ -258,6 +260,7 @@ func ApplyManagedVoxelWrites(cmd *Commands, assets *AssetServer, eid EntityId, w
 		asset.XBrickMap.ComputeAABB()
 		assets.voxModels[id] = asset
 		entry.generation++
+		assets.removePreparedVoxelRendererCopyLocked(id)
 		assets.mu.Unlock()
 		if state := voxelRtStateFromApp(cmd.app); state != nil {
 			if binding, ok := state.managedVoxelBindings[eid]; ok && binding.entry == entry && binding.id == id && !entry.exposed {

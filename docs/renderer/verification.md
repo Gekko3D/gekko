@@ -244,3 +244,20 @@ readiness and scoped shadow invalidation. Native readback covers the G-buffer;
 full interactive shadow, transparency, lighting and particle simulation remain
 outside this check. Representative profiles were skipped by user instruction;
 no frame-performance gain is established.
+
+
+## Streamed Ordinary Worker Native Integration
+
+S1n verifies actual worker preparation, commit adoption and renderer attachment
+using a real device, native uploads and queue submissions:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache GEKKO_NATIVE_S1N=1 go test . -run '^TestS1nNativeWorkerBridgePublishesBoundedGeometryAndLookup$' -count=1 -v
+```
+
+The test requires GPU access. It checks hidden initial stages, entry/upload caps,
+multi-frame content and committed lookup completion, current coverage during a
+structural edit, qualified edit generations, unload and bounded retirement. It
+passed on Apple M4 Pro/Metal. It submits uploads without drawing or pixel readback;
+the separate S1m production G-buffer regression supplies rendered parity coverage.
+Full interactive passes and representative frame profiles remain unverified.

@@ -197,7 +197,15 @@ func streamedChunkCapturedPrebuildCharge(payload streamedPreparedChunk, job stre
 	if captured != nil {
 		imported = max(imported, m.capturedImported(captured, !job.HasImportedWorldBacking, job.compactPreparedGeometry && !job.HasImportedWorldBacking))
 	}
-	total := m.add(base, imported, m.otherGeometry(payload, job))
+	managed := int64(0)
+	if payload.managedPreparedAssets == nil {
+		var err error
+		managed, err = streamedManagedPreparedPreflight(payload, job)
+		if err != nil {
+			return 0, err
+		}
+	}
+	total := m.add(base, imported, m.otherGeometry(payload, job), managed)
 	return total, m.err
 }
 

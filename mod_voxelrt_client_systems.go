@@ -488,7 +488,10 @@ func voxelRtSystem(input *Input, state *VoxelRtState, server *AssetServer, t *Ti
 				if entry.exposed {
 					obj.XBrickMap = source
 				} else {
-					obj.XBrickMap = source.Copy()
+					obj.XBrickMap = server.takeManagedPreparedRendererCopy(displayGeometryID, entry, source)
+					if obj.XBrickMap == nil {
+						obj.XBrickMap = source.Copy()
+					}
 				}
 				state.RtApp.Scene.StructureRevision++
 			} else if entry.exposed {

@@ -108,6 +108,16 @@ proxies, edit removals or implicit interiors; producers retain those contracts.
 public `Brick.Payload` access retain their mutable contracts. Managed maps are
 CPU owners and do not inherit the source's GPU editing mode.
 
+`PreflightManagedXBrickMap(source)` performs an allocation-free conservative
+construction preflight for exclusively owned sources. Its `ManagedConstructionCharge`
+reports `OwnerBytes`, independent `SnapshotBytes` and `PeakBytes`, including
+constructor coordinate scratch. Packed occurrences count independently; auxiliary
+and cloned pointer capacities are conservatively bounded. Nil means empty;
+malformed sectors, nil bricks, GPU-first sources and unsupported auxiliary
+storage are refused without source mutation. These are fresh-construction logical
+bounds, excluding map buckets, allocator/GC overhead and later owner edits;
+they are not live-owner or process-memory totals.
+
 `NewManagedXBrickMapWithBase(base, current)` defensively copies both inputs and
 computes final assignments relative to the original base once. Nil inputs mean
 empty geometry. It preserves current auxiliary data, bounds, revisions and

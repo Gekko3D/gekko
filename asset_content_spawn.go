@@ -54,7 +54,9 @@ type preparedAuthoredPart struct {
 	model   AssetId
 	palette AssetId
 	// Explicit per-part intent; shared geometry availability never grants opt-in.
-	compiledLOD AssetId
+	compiledLOD     AssetId
+	compiledCold    bool
+	managedOverride AssetId
 }
 
 func PreparedAuthoredAssetPartGeometry(prepared *PreparedAuthoredAsset, partID string) (AssetId, bool) {
@@ -173,6 +175,9 @@ func spawnAuthoredAssetWithOwnership(cmd *Commands, assets *AssetServer, def *co
 			model = preparedPart.model
 			eid, err = spawnAuthoredPartWithAssets(cmd, def, part, shadowSettings, preparedPart.model, preparedPart.palette)
 			if err == nil {
+				if preparedPart.managedOverride != (AssetId{}) {
+					bindStreamedManagedPart(cmd, assets, eid, preparedPart.managedOverride)
+				}
 				if intent := compiledAssetLODIntent(preparedPart); intent != nil {
 					cmd.AddComponents(eid, intent)
 				}

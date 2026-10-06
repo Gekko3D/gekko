@@ -54,6 +54,9 @@ const (
 )
 
 type StreamedLevelRuntimeConfig struct {
+	// EnableManagedPreparedAssets opts cold compiled ordinary placements into
+	// worker-prepared independent managed authority. GPU policies stay separate.
+	EnableManagedPreparedAssets bool
 	// EnableHybridVoxelObjectDeltas selects schema-3 brick replacements when they
 	// reduce owned records and strictly reduce logical document bytes.
 	EnableHybridVoxelObjectDeltas   bool
@@ -524,6 +527,7 @@ type streamedPreparedChunk struct {
 	v2Placements                          map[string]bool
 	objectSnapshotGeometry                map[string]*streamedObjectSnapshotGeometry
 	compiledAssets                        map[string]*compiledAssetPacket
+	managedPreparedAssets                 map[string]*streamedManagedPreparedAsset
 	PrepareDuration                       time.Duration
 	Err                                   error
 }
@@ -532,6 +536,7 @@ type streamedChunkLoadJob struct {
 	pendingOwner              *streamedPendingPreparedOwner
 	compactPreparedGeometry   bool
 	renderManaged             bool
+	managedPreparedAssets     bool
 	prepareCancel             <-chan struct{}
 	Generation                uint64
 	Coord                     ChunkCoord
@@ -1524,6 +1529,7 @@ func startStreamedChunkPrepareJob(state *StreamedLevelRuntimeState, job streamed
 	recordStreamedPreparationDispatch(state, job.Coord, "full")
 	owner, results, jobs := state.pendingPrepared, state.PreparedLoads, &state.jobs
 	job.pendingOwner = owner
+	job.managedPreparedAssets = state.Config.EnableManagedPreparedAssets
 	activeMu, active := &state.activePrepareMu, &state.activeChunkPrepares
 	activeMu.Lock()
 	*active++
@@ -2099,6 +2105,7 @@ func buildStreamedChunkLoadJob(state *StreamedLevelRuntimeState, coord ChunkCoor
 	job := streamedChunkLoadJob{
 		compactPreparedGeometry: state.Config.CompactPreparedGeometry,
 		renderManaged:           state.renderManaged,
+		managedPreparedAssets:   state.Config.EnableManagedPreparedAssets,
 		Generation:              state.Generation,
 		Coord:                   coord,
 		LevelPath:               state.LevelPath,
@@ -2439,6 +2446,10 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 		result.pendingCredit, prebuildCost = credit, cost
 	}
 	if streamedPreparationCancelled(job.prepareCancel) {
+		return result
+	}
+	if err := prepareStreamedManagedAssets(&result, job); err != nil {
+		result.Err = err
 		return result
 	}
 	if result.PreparedImportedWorldGeometryCacheKey != "" {

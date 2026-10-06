@@ -11,8 +11,13 @@ import (
 // declared dimensions retain source bounds without reconstructing raw samples.
 // Lock order is server then registration, matching ordinary shape adoption.
 func (server *AssetServer) adoptCompiledAssetModelGeometry(contentID string, lattice content.VoxelObjectLatticeDef, baseIdentity string, dimensions [3]uint32, source *volume.XBrickMap, registration *streamedGeometryRegistration) (AssetId, bool) {
+	id, adopted, _ := server.adoptCompiledAssetModelGeometryOutcome(contentID, lattice, baseIdentity, dimensions, source, registration)
+	return id, adopted
+}
+
+func (server *AssetServer) adoptCompiledAssetModelGeometryOutcome(contentID string, lattice content.VoxelObjectLatticeDef, baseIdentity string, dimensions [3]uint32, source *volume.XBrickMap, registration *streamedGeometryRegistration) (AssetId, bool, bool) {
 	if server == nil || source == nil || registration == nil || contentID == "" || baseIdentity == "" || !compiledModelPositiveFinite(lattice.VoxelResolution) || lattice.RasterizationVersion != compiledAssetModelRasterizationVersion {
-		return AssetId{}, false
+		return AssetId{}, false, false
 	}
 	server.ensureVoxelStorage()
 	key := "compiled-asset-model:" + contentID
@@ -23,17 +28,17 @@ func (server *AssetServer) adoptCompiledAssetModelGeometry(contentID string, lat
 		// registration belongs to this attempt and must drain on either outcome.
 		registration.release()
 		if _, exists := server.voxModels[id]; !exists {
-			return AssetId{}, false
+			return AssetId{}, false, false
 		}
 		if original := server.authoredVoxelBases[id][lattice]; original != "" && original != baseIdentity {
-			return AssetId{}, false
+			return AssetId{}, false, false
 		}
 		server.recordVerifiedAuthoredVoxelBaseLocked(id, lattice, baseIdentity)
-		return id, true
+		return id, true, false
 	}
 	asset, rendererCopy, rendererBytes, _, taken := registration.take(source)
 	if !taken {
-		return AssetId{}, false
+		return AssetId{}, false, false
 	}
 	id := makeAssetId()
 	asset.SourcePath = key
@@ -53,5 +58,5 @@ func (server *AssetServer) adoptCompiledAssetModelGeometry(contentID string, lat
 		server.preparedVoxelRendererCopyStats.Entries++
 		server.preparedVoxelRendererCopyStats.Bytes += rendererBytes
 	}
-	return id, true
+	return id, true, true
 }
