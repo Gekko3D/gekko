@@ -917,6 +917,17 @@ publication. Successors and structural-copy progress are preserved. See the
 Replacement peak accounting, bounded reconciliation and coherent GPU publication
 remain. Notification cost stays synchronous; no frame-time claim.
 
+### S1l12: Managed current-sector reservations
+
+Completed 2026-10-06 in this batch. One pending qualified sector reservation per
+accepted generation preflights simultaneous input/copy/metadata ownership,
+rechecks callback identity and policy, and releases through existing lifecycle
+operations. Current stage views and content work remain unchanged. See the
+[canonical contract](../renderer/runtime.md#managed-current-sector-reservations-s1l12) and
+[delivery record](streamed-rendering-content-optimization.md#s1l12-managed-current-sector-reservations).
+Replacement-capable stage storage, its metadata peaks, bounded copy/reconciliation
+and coherent GPU publication remain. No frame integration or frame-time claim.
+
 ## Verification and execution record
 
 Workflow: GPT-6.1 sol tests to red; root adversarial test review; GPT-6.1 sol code to green; root adversarial production review; commit. User authorized tests/subagents. Preserve unrelated changes.

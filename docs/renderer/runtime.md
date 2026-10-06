@@ -1197,10 +1197,75 @@ This is notification scheduling, not live-content reconciliation or a readiness
 certificate. A drained journal does not establish content coherence or GPU
 readiness. [Qualified current-content reads](editing.md#qualified-current-sector-inputs-s1l10)
 and the [engine edit/halo feed](editing.md#managed-edit-notifications-s1l11) are
-available; replacement-copy peak accounting, frame-loop integration and coherent
+available, along with [current-sector reservation preflight](#managed-current-sector-reservations-s1l12).
+Replacement-capable stage storage, copy service, frame-loop integration and coherent
 publication remain later work. The allowance bounds attempted coordinates per
 explicit call, not total calls per frame, callback cost, wall time or Go GC
 reclamation.
+
+### Managed current-sector reservations (S1l12)
+
+`ReserveManagedGeometrySector(object, expected, coord)` explicitly retains one
+qualified current-sector input and reserves its independent copy output. Each
+accepted generation owns at most one such pending reservation. This is a permanent
+ownership/backpressure prerequisite for later replacement service; it does not
+copy sectors, replace immutable stage entries or acknowledge content work.
+
+The typed `ManagedGeometrySectorReservationResult` is Disabled for a disabled/nil
+manager, Unavailable for missing ownership or failed qualified capture, Mismatch
+for an unexpected accepted source/generation or changed accepted descriptor,
+Ignored for coordinates outside accepted topology, Stale for a captured generation
+older than the existing pending input, Pressure for a cap refusal, Overflow for
+unrepresentable charges, and Reserved on success. Identity/topology rejection
+happens before the sector reader runs. Enabled zero caps pause new reservations.
+There is no full-input capture fallback. Qualified removal is a valid reserved
+input with `Present() == false` and zero payload charges.
+
+The global preflight adds the incoming view's `RetainedBytes()` to `InputBytes`,
+its `CopyBytes()` to `ReservedCopiedStageBytes`, and the language-level size of a
+typed reservation descriptor to `OwnedMetadataBytes`. The descriptor contains
+the frozen sector input and its two cached charges. Its generation's pointer
+field is already covered by generation metadata admission. `TotalStageBytes`
+remains the sum of owned metadata and copied-stage reservations. Owner and
+generation counts do not change. All additions are checked, including the total.
+
+Preflight includes the entire old ledger plus the incoming input/output/descriptor
+before allocating or retaining the new descriptor. This includes an existing
+reservation, even for the same coordinate/publication, and all successors/other
+objects. Only successful installation releases the previous reservation's exact
+charges. Smaller replacements and tombstones still need this simultaneous peak;
+refusal preserves previous ownership. The copy reservation covers only the
+existing independent sector-output domain, not a future replacement index.
+That representation's metadata and transient paths must be preflighted separately.
+
+After the trusted sector reader returns, reservation rechecks the current budget
+and the exact accepted descriptor, so cancellation/readmission with equal source
+and generation cannot charge a detached owner. Reader-triggered disable returns
+Disabled; other accepted-ownership changes return Mismatch. Successor admission
+may leave the accepted descriptor unchanged; its new charges participate in the
+postcallback preflight. Readers may adjust policy or explicitly cancel, admit or
+promote, but must not reenter reservation/release or staged/content service. Reader
+panics propagate without outer reservation mutation; explicit callback side effects
+remain. Core supplies source, selection, requested-coordinate and accepted-generation
+qualification. Pending-generation comparison adds a further rollback guard.
+
+`ManagedGeometrySectorReservation(object)` returns the held frozen sector input
+and availability flag without capture; absence is zero/false. It remains readable
+after producer edits, replacement, exposure, release or manager cancellation.
+Caller-retained values are outside manager charges.
+`ReleaseManagedGeometrySectorReservation(object, expected)` releases only a
+matching accepted generation's pending reservation and reports whether one existed.
+It invokes no provider and works under pressure or invalid live selection.
+Cancellation, promotion away from accepted and disable also release pending
+ownership. Successor coalescing and lowered enabled caps preserve it.
+
+All calls require exclusive manager access. The temporary reader result is inspected
+before preflight, like full-input admission; no sector copy or reservation descriptor
+is allocated on refusal. Capture, fixed manager storage, allocator overhead, caller
+captures and Go GC reclamation remain outside the ledger's domains. Journal/sweep
+state and immutable copied-prefix views remain unchanged. Bounded replacement
+service, a replacement-capable stage representation, coherent publication and GPU retirement
+remain later steps; this reservation is neither readiness nor a frame-time bound.
 
 ### Auxiliary capacity admission
 

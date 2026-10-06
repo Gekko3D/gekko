@@ -57,6 +57,7 @@ type managedGeometryGeneration struct {
 	input          core.ManagedGeometryInput
 	inputBytes     uint64
 	reserved       uint64
+	pending        *managedGeometrySectorReservation
 	head           *managedGeometrySectorEntry
 	copied         int
 	copiedBytes    uint64
@@ -242,6 +243,7 @@ func (m *GpuBufferManager) AdmitManagedGeometry(object *core.VoxelObject) Manage
 }
 
 func (m *GpuBufferManager) releaseManagedGeometryGeneration(gen *managedGeometryGeneration) {
+	m.releaseManagedGeometrySectorReservation(gen)
 	s := &m.managedGeometryStats
 	s.InputBytes -= gen.inputBytes
 	s.ReservedCopiedStageBytes -= gen.reserved

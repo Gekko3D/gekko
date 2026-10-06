@@ -1,6 +1,6 @@
 # Streamed Rendering and Content Optimization Proposals
 
-Date: 2026-10-06. Status: staged implementation; S1a–S1k and S1l1–S1l11, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals, P3b native workload evaluation and P3c packed mixed materials are complete, with P3 remaining partial; W3a scene BVH, W3b sector and W3c inner grid traversal are complete, with W3 remaining partial; W4a terrain brick-run construction, W4b ordered mixed-material construction, W4c1 tiled height source content and W4c2 resident height queries are complete, with W4 remaining partial; I05 shared page validation and legacy imported-world normalization and I06 explicit imported-world v3 page tooling and I07 terrain v3 page tooling are complete; live page residency remains pending; other sections are proposals.
+Date: 2026-10-06. Status: staged implementation; S1a–S1k and S1l1–S1l12, S2a–S2k, S3a–S3v, S4a–S4c, P5a–P5k, E1a–E1b, P1a–P1e, E2a–E2c3, C1a–C1d and C3a–C3f4c and C3d4a–C3d4c and C3h0–C3h11 and C3h12a–C3h12b and C3h13a–C3h13c and C3g1–C3g13 complete. S1/S2/S3/P5/E1/P1/E2/C3 remain partial; R2a–R2m are complete; R2 remains partial; P4 and P2a–P2c are complete; P2 density-policy benchmarking remains; P3a packed fitted normals, P3b native workload evaluation and P3c packed mixed materials are complete, with P3 remaining partial; W3a scene BVH, W3b sector and W3c inner grid traversal are complete, with W3 remaining partial; W4a terrain brick-run construction, W4b ordered mixed-material construction, W4c1 tiled height source content and W4c2 resident height queries are complete, with W4 remaining partial; I05 shared page validation and legacy imported-world normalization and I06 explicit imported-world v3 page tooling and I07 terrain v3 page tooling are complete; live page residency remains pending; other sections are proposals.
 
 Source: [rusty-voxelrt roadmap](/Users/ddevidch/code/rust/rusty-voxelrt/docs/roadmaps/OPEN_WORLD_STREAMED_RENDERING.md). Optimization proposals only; measurement phase/status excluded. Gekko inspected at `1f7a281`, including working-tree content. Rust targets/ratios are not Gekko predictions.
 
@@ -5478,3 +5478,41 @@ Replacement-copy peak accounting, bounded reconciliation and coherent GPU
 publication remain. Notifications add synchronous producer work; no frame-loop
 service or GPU behavior changed. Native visuals, profiles and consumer test suites
 were not rerun. No frame-performance gain or total-memory ceiling is claimed.
+
+
+### S1l12: Managed current-sector reservations
+
+Commit: this batch. The GPU manager now owns one pending qualified sector input
+per accepted generation and reserves its future copy bytes. Global preflight
+includes old plus incoming input/output/descriptor charges; pressure preserves
+the old reservation. Callback rechecks prevent charging detached generations.
+Explicit release, cancellation, promotion and disable release charges. See the
+[canonical contract](../renderer/runtime.md#managed-current-sector-reservations-s1l12).
+
+Verification passed from the engine module:
+
+```sh
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu -run '^TestS1l12' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test ./voxelrt/rt/gpu -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . ./voxelrt/rt/core ./voxelrt/rt/volume -run '^(TestS1l6|TestS1l7|TestS1l8|TestS1l9|TestS1l10|TestS1l11|TestS1l12|TestP1d|TestP1e)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test -race . ./voxelrt/rt/core ./voxelrt/rt/volume ./voxelrt/rt/gpu -run '^(TestS1l6|TestS1l7|TestS1l8|TestS1l9|TestS1l10|TestS1l11|TestS1l12|TestP1d|TestP1e)' -count=1
+env GOCACHE=/tmp/gekko3d-gocache go test . ./voxelrt/rt/gpu ./voxelrt/rt/core ./voxelrt/rt/volume
+git diff --check
+```
+
+Consumer builds passed from their respective workspace modules:
+
+| Module | Command |
+| --- | --- |
+| `gekko-editor` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l12-build/gekko-editor/ ./...` |
+| `actiongame` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l12-build/actiongame/ ./...` |
+| `spacegame_go` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l12-build/spacegame_go/ ./...` |
+| `spacesim` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l12-build/spacesim/ ./...` |
+| `examples/testing-vox` | `env GOCACHE=/tmp/gekko3d-gocache go build -o /tmp/gekko-s1l12-build/examples/testing-vox/ ./...` |
+
+This is the ownership/backpressure prerequisite. Replacement-capable stage
+storage and its metadata peaks, actual sector copies, bounded reconciliation,
+coherent GPU publication and retirement remain. Journal/sweep and copied-prefix
+progress are unchanged. Native visuals, profiles and consumer test suites were
+not rerun. No GPU/frame integration, frame-performance gain or total-memory
+ceiling is claimed.
