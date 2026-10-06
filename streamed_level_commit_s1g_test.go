@@ -409,6 +409,7 @@ func TestS1gFatalPartialSpawnAndHookFailureRetainTransactionWithoutRetry(t *test
 				}
 			}
 			f = s1gRuntime(t, []int{2}, 1, true, false, hook)
+			var lateAssetPath string
 			if failure == "partial-spawn" || failure == "partial-spawn-group" {
 				path := filepath.Join(filepath.Dir(f.runtime.LevelPath), "placement.gkasset")
 				asset, err := content.LoadAsset(path)
@@ -421,14 +422,23 @@ func TestS1gFatalPartialSpawnAndHookFailureRetainTransactionWithoutRetry(t *test
 					asset.Parts = append(asset.Parts, content.AssetPartDef{ID: "group", Name: "group", Source: content.AssetSourceDef{Kind: content.AssetSourceKindGroup}, Transform: content.AssetTransformDef{Rotation: content.Quat{0, 0, 0, 1}, Scale: content.Vec3{1, 1, 1}}})
 				}
 				asset.Parts = append(asset.Parts, content.AssetPartDef{ID: "bad-later-part", Name: "bad later part", Source: content.AssetSourceDef{Kind: content.AssetSourceKindVoxModel, Path: "valid.vox", ModelIndex: 99}, Transform: content.AssetTransformDef{Rotation: content.Quat{0, 0, 0, 1}, Scale: content.Vec3{1, 1, 1}}})
-				if validation := content.ValidateAsset(asset, content.AssetValidationOptions{DocumentPath: path}); validation.HasErrors() {
+				lateAssetPath = filepath.Join(filepath.Dir(path), "late-invalid.gkasset")
+				if validation := content.ValidateAsset(asset, content.AssetValidationOptions{DocumentPath: lateAssetPath}); validation.HasErrors() {
 					t.Fatalf("invalid partial spawn fixture: %s", validation.Error())
 				}
-				if err := content.SaveAsset(path, asset); err != nil {
+				if err := content.SaveAsset(lateAssetPath, asset); err != nil {
 					t.Fatal(err)
 				}
 			}
 			s1fPrepared(t, f.streamedRenderHarness, ChunkCoord{}, false)
+			if lateAssetPath != "" {
+				// The worker validates the original selected asset. A different path
+				// selected for commit uses the ordinary late-load fallback, which can
+				// fail after publishing the root and preceding parts.
+				prepared := <-f.runtime.PreparedLoads
+				prepared.PlacementItems[0].AssetPath = lateAssetPath
+				f.runtime.PreparedLoads <- prepared
+			}
 			refreshStreamedRuntimeMetricsCounts(f.runtime)
 			bytes := f.runtime.Metrics.PendingPreparedBytes
 			commitPreparedStreamedChunksSystem(f.cmd, f.assets, f.runtime)

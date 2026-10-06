@@ -49,11 +49,17 @@ func TestS3vOverrideSelectionLoadsOnlySelectedRuntimeSnapshots(t *testing.T) {
 func TestS3vOverrideSelectionPreservesFullPrefixAndOriginalValueAuthority(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "selected.gkvoxobj")
 	p5cSnapshot(t, path, 3, false)
+	assetPath := filepath.Join(filepath.Dir(path), "selection.gkasset")
+	asset := content.NewAssetDef("selection")
+	asset.Parts = []content.AssetPartDef{{ID: "group", Name: "group", Source: content.AssetSourceDef{Kind: content.AssetSourceKindGroup}, Transform: content.AssetTransformDef{Rotation: content.Quat{0, 0, 0, 1}, Scale: content.Vec3{1, 1, 1}}}}
+	if err := content.SaveAsset(assetPath, asset); err != nil {
+		t.Fatal(err)
+	}
 	missing := filepath.Join(t.TempDir(), "missing.gkvoxobj")
 	coord := ChunkCoord{}
 	state := &StreamedLevelRuntimeState{
 		PlacementsByChunk: map[ChunkCoord][]streamedPlacementInstance{coord: {
-			{PlacementID: "root\x00nested"}, {PlacementID: "a"}, {PlacementID: "a\x00b"}, {PlacementID: ""}, {PlacementID: "a"},
+			{PlacementID: "root\x00nested", AssetPath: assetPath}, {PlacementID: "a", AssetPath: assetPath}, {PlacementID: "a\x00b", AssetPath: assetPath}, {PlacementID: "", AssetPath: assetPath}, {PlacementID: "a", AssetPath: assetPath},
 		}},
 		voxelOverrideMap: make(map[string]content.VoxelObjectOverrideDef),
 	}
@@ -89,7 +95,7 @@ func TestS3vOverrideSelectionPreservesFullPrefixAndOriginalValueAuthority(t *tes
 		{"a\x00b", []string{"a\x00b\x00body"}},
 		{"a", []string{"a\x00b", "a\x00b\x00body"}},
 	} {
-		state.PlacementsByChunk[coord] = []streamedPlacementInstance{{PlacementID: selection.id}}
+		state.PlacementsByChunk[coord] = []streamedPlacementInstance{{PlacementID: selection.id, AssetPath: assetPath}}
 		result := prepareStreamedChunkLoad(buildStreamedChunkLoadJob(state, coord))
 		if result.Err != nil || len(result.ObjectSnapshots) != len(selection.keys) {
 			result.release()

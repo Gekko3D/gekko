@@ -40,6 +40,32 @@ func immutableCompiledPaletteProperty(value any) bool {
 }
 
 func prepareCompiledPaletteRegistration(source *VoxelPaletteAsset) (*compiledPaletteRegistration, error) {
+	return preparePaletteRegistrationWithKey(source, "")
+}
+
+// An explicit sealed key preserves the ordinary VOX palette namespace.
+func preparePaletteRegistrationWithKey(source *VoxelPaletteAsset, sealedKey string) (*compiledPaletteRegistration, error) {
+	palette, err := clonePalettePublication(source)
+	if err != nil {
+		return nil, err
+	}
+
+	// The exact existing key preserves nil/empty distinctions and scalar types.
+	// A failed JSON marshal produces an empty key; private preparation rejects it
+	// rather than using the public creator's historical fallback behavior.
+	key := sealedKey
+	if key == "" {
+		key = voxelPaletteAssetCacheKey(*palette)
+	}
+	if key == "" {
+		return nil, fmt.Errorf("compiled palette cannot produce a valid cache key")
+	}
+	return &compiledPaletteRegistration{source: source, palette: palette, key: key, bytes: compiledPalettePublicationCharge(palette)}, nil
+}
+
+// Clone the complete palette graph, preserving container shape and scalar types.
+// Both packet sources and publication copies use this independent ownership pass.
+func clonePalettePublication(source *VoxelPaletteAsset) (*VoxelPaletteAsset, error) {
 	if source == nil {
 		return nil, fmt.Errorf("compiled palette source is nil")
 	}
@@ -92,14 +118,7 @@ func prepareCompiledPaletteRegistration(source *VoxelPaletteAsset) (*compiledPal
 			frame.Transparency = cloneCompiledPaletteSlice(originalFrame.Transparency)
 		}
 	}
-	// The exact existing key preserves nil/empty distinctions and scalar types.
-	// A failed JSON marshal produces an empty key; private preparation rejects it
-	// rather than using the public creator's historical fallback behavior.
-	key := voxelPaletteAssetCacheKey(palette)
-	if key == "" {
-		return nil, fmt.Errorf("compiled palette cannot produce a valid cache key")
-	}
-	return &compiledPaletteRegistration{source: source, palette: &palette, key: key, bytes: compiledPalettePublicationCharge(&palette)}, nil
+	return &palette, nil
 }
 
 func (registration *compiledPaletteRegistration) clearLocked() {

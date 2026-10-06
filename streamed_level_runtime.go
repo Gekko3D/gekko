@@ -529,6 +529,7 @@ type streamedPreparedChunk struct {
 	objectSnapshotGeometry                map[string]*streamedObjectSnapshotGeometry
 	objectSnapshotProofs                  map[string]*streamedSnapshotProof
 	compiledAssets                        map[string]*compiledAssetPacket
+	legacyAssets                          map[string]*legacyAssetPacket
 	managedPreparedAssets                 map[string]*streamedManagedPreparedAsset
 	PrepareDuration                       time.Duration
 	Err                                   error
@@ -2336,6 +2337,23 @@ func prepareStreamedChunkLoad(job streamedChunkLoadJob) (result streamedPrepared
 	for _, placement := range job.Placements {
 		resolved := content.ResolveDocumentPath(placement.AssetPath, job.LevelPath)
 		if !isCompiledAssetPath(resolved) {
+			key, err := legacyAssetPacketKey(placement.AssetPath, job.LevelPath)
+			if err != nil {
+				result.Err = err
+				return result
+			}
+			if _, exists := result.legacyAssets[key]; exists {
+				continue
+			}
+			packet, err := prepareLegacyAssetPacket(resolved, job.Loader, func() bool { return streamedPreparationCancelled(job.prepareCancel) })
+			if err != nil {
+				result.Err = err
+				return result
+			}
+			if result.legacyAssets == nil {
+				result.legacyAssets = make(map[string]*legacyAssetPacket)
+			}
+			result.legacyAssets[key] = packet
 			continue
 		}
 		key, err := compiledAssetPacketKey(placement.AssetPath, job.LevelPath)

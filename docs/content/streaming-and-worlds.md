@@ -1083,7 +1083,7 @@ atomically, with cancellation checked at phase boundaries.
 These are logical retained-storage bounds, excluding allocator/map bucket slack,
 cache bookkeeping and temporary conversion allocations. Encoded file IO and aux
 loading happen before reservation. Full workers use the final-geometry admission
-phase below. Earlier compiled packet/canonical resolution, decode and direct C1
+phase below. Earlier authored packet/canonical resolution, decode and direct C1
 construction still need preflight work. Cache/result estimates can
 charge shared storage independently and must not be summed as physical memory.
 Page-specific pin/eviction policy and native route memory targets remain I12
@@ -1092,12 +1092,14 @@ work; live v3 activation still awaits height and collision integration.
 #### Full-worker final-geometry admission
 
 Full workers resolve terrain, imported payloads, aux, object snapshots and
-compiled placement packets before constructing their final geometry. Dense
+compiled and expanded legacy placement packets before constructing their final geometry. Dense
 imported records remain available for collision, terrain metadata, backing and
 edits. A resolved asynchronous worker reserves one composite credit from the
 same pending owner, then builds its imported, terrain and snapshot maps and independent
 registrations. Managed terrain includes its separate renderer copy. Completed
-compiled packets count in that reservation. Denial releases resolved payloads,
+authored packets count in that reservation. Legacy packet ownership follows
+the [runtime asset contract](../assets/runtime-assets.md#legacy-ordinary-worker-preparation-p5l).
+Denial releases resolved payloads,
 scopes and packet handles and returns the existing small retry hint. Synchronous
 preparation without a pending owner retains its immediate behavior.
 
@@ -1120,7 +1122,7 @@ only the requesting worker's ownership. Cache eviction or closure does not
 invalidate a locally captured source. Cache identity semantics remain unchanged.
 
 Payload resolution itself is outside this final-geometry ceiling. It includes
-IO/decode, compiled packet construction and canonical base geometry used to
+IO/decode, compiled and legacy packet construction and canonical base geometry used to
 resolve v2 object deltas; active worker count still bounds their concurrency.
 Commit-time backing/removal copies also remain outside the worker guarantee.
 These earlier phases, direct C1 construction, page pin/eviction policy and native

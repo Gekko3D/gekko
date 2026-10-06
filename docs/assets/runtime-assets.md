@@ -165,6 +165,54 @@ light, emitter and marker entities retain teardown ownership. Public spawn APIs
 and collapse eligibility remain unchanged. Collapsed composites do not gain a
 new per-item persistence identity or disk format.
 
+### Legacy ordinary worker preparation (P5l)
+
+Streamed expanded `.gkasset` placements prepare owned CPU packets on workers,
+independently of renderer presence or `EnableManagedPreparedAssets`. Workers
+clone the cached definition before validation and normalization, resolve
+animations, and build group, inline shape, procedural, VOX model and scene-node
+parts without publishing `AssetServer` IDs or ECS entities. Assets with
+`Runtime.CollapseVoxelParts` retain their separate collapse preparation path.
+Direct preparation, eager spawning and startup NPC preparation are unchanged.
+
+Packets preserve the public ordinary geometry and palette cache namespaces,
+including the exact resolved document/source path spelling. Two spellings of
+one physical document can therefore produce different VOX keys. Inline shape
+keys and their key-valued `SourcePath` remain unchanged. VOX/procedural geometry
+retains its complete scaled `VoxModel`, declared bounds and brick metadata;
+VOX material override facts still use the original unscaled samples.
+
+Each unique geometry and palette owns an immutable worker source and an
+independent single-use publication copy. Cold publication transfers the copy under
+the server lock without source loading, geometry reconstruction, key serialization
+or another full copy. Warm commit drains unused copies and preserves existing
+mutable geometry, palette data, bounds and IDs. Inline original-base identities
+are derived from canonical worker sources for each valid lattice and only fill
+missing provenance; edited warm geometry never supplies an original base.
+Legacy publication grants no compiled certificate or automatic managed owner.
+
+Repeated placements reuse a packet for the exact selected document spelling.
+A changed selection uses the existing selected loader. If public deletion
+removes an adopted shared ID between publications, recovery may create another
+independent publication copy from the packet source, without rereading files.
+Entity ownership, animation bindings, shadows, callbacks and rollback retain
+the existing prepared spawning contracts. Published IDs keep ordinary global
+lifetime across chunk unload and Stop.
+
+Pending admission conservatively charges owned definitions, animations, keys, model rows,
+geometry sources, palettes and independent registration storage, including
+retained handle metadata after transfer. Cancellation checks surround loads
+and whole-part builds; individual decoders, animation resolution and builders
+remain atomic. Error, pressure retry, cancellation, stale results, partial Stop
+and completion release unused handles and loader pins idempotently. Packet
+construction precedes full-worker final-geometry reservation, so its temporary
+allocations remain outside the pending ceiling and concurrency is bounded by
+the existing worker count. Packet aliases are charged once; separate scalar
+graph estimates may count shared string backing more than once. Accounting
+excludes allocator and map bucket slack and is not a total process-memory bound.
+Selected-path resolution retains its filesystem metadata checks. ECS spawning
+and emitter texture decoding remain main-thread work.
+
 ### Compiled ordinary asset preparation
 
 `LoadAndPrepareAuthoredAsset` and `LoadAndSpawnAuthoredAsset` explicitly select
@@ -176,8 +224,9 @@ spawning keeps the existing hierarchy, material, animation and ECS contracts.
 Ordinary direct and expanded level placements use the same path, including
 streamed commits and their existing ownership callbacks, shadows and rollback.
 Streamed workers prepare compiled ordinary CPU packets per resolved asset path.
-Main-thread placement commits publish their geometry and palettes. Legacy JSON
-ordinary preparation retains its existing commit path. Direct level and streamed
+Main-thread placement commits publish their geometry and palettes. Expanded legacy
+JSON placements use the [legacy worker preparation contract](#legacy-ordinary-worker-preparation-p5l).
+Direct level and streamed
 startup NPCs use compiled preparation with the existing multipart asset root under
 the NPC entity. Health, animation bindings and creation-before-load-error behavior
 are unchanged. Moving brushes, chargers, breakables and pickups select only the

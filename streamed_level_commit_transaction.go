@@ -237,10 +237,18 @@ func advanceStreamedChunkCommit(cmd *Commands, assets *AssetServer, state *Strea
 				}
 				packet = prepared.compiledAssets[packetKey]
 			}
+			var legacy *legacyAssetPacket
+			if len(prepared.legacyAssets) != 0 && !isCompiledAssetPath(strings.TrimSpace(placement.AssetPath)) {
+				key, err := legacyAssetPacketKey(placement.AssetPath, state.LevelPath)
+				if err != nil {
+					return entityCount, placementUnit, false, err
+				}
+				legacy = prepared.legacyAssets[key]
+			}
 			placementStart := time.Now()
-			spawnResult, spawnErr := spawnAuthoredLevelPlacementWithPacket(cmd, assets, loader, state.LevelRoot, state.LevelID, state.LevelPath, AuthoredPlacementSpawnDef{
+			spawnResult, spawnErr := spawnAuthoredLevelPlacementWithPackets(cmd, assets, loader, state.LevelRoot, state.LevelID, state.LevelPath, AuthoredPlacementSpawnDef{
 				PlacementID: placement.PlacementID, VolumeID: placement.VolumeID, AssetPath: placement.AssetPath, Transform: placement.Transform, Tags: append([]string(nil), placement.Tags...),
-			}, packet, func(entity EntityId, item string, root, voxel bool) {
+			}, packet, legacy, func(entity EntityId, item string, root, voxel bool) {
 				chunk.OwnedEntities[entity] = struct{}{}
 				if tx.resumable || root || item != "" {
 					entityCount++

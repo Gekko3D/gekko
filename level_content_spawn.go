@@ -1129,6 +1129,10 @@ func spawnAuthoredLevelPlacementWithOwnership(cmd *Commands, assets *AssetServer
 }
 
 func spawnAuthoredLevelPlacementWithPacket(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, parent EntityId, levelID string, levelPath string, placement AuthoredPlacementSpawnDef, packet *compiledAssetPacket, created func(EntityId, string, bool, bool), managed ...*streamedManagedPreparedAsset) (AuthoredAssetSpawnResult, error) {
+	return spawnAuthoredLevelPlacementWithPackets(cmd, assets, loader, parent, levelID, levelPath, placement, packet, nil, created, managed...)
+}
+
+func spawnAuthoredLevelPlacementWithPackets(cmd *Commands, assets *AssetServer, loader *RuntimeContentLoader, parent EntityId, levelID string, levelPath string, placement AuthoredPlacementSpawnDef, packet *compiledAssetPacket, legacy *legacyAssetPacket, created func(EntityId, string, bool, bool), managed ...*streamedManagedPreparedAsset) (AuthoredAssetSpawnResult, error) {
 	if loader == nil {
 		loader = NewRuntimeContentLoader()
 	}
@@ -1149,7 +1153,22 @@ func spawnAuthoredLevelPlacementWithPacket(cmd *Commands, assets *AssetServer, l
 			packet = nil
 		}
 	}
-	if packet != nil {
+	if legacy != nil {
+		selected, e := legacyAssetPacketKey(placement.AssetPath, levelPath)
+		expected, pe := legacyAssetPacketKey(legacy.documentPath, "")
+		if e != nil {
+			return AuthoredAssetSpawnResult{}, e
+		}
+		if pe != nil || selected != expected || resolvedAssetPath != legacy.documentPath {
+			legacy = nil
+		}
+	}
+	if legacy != nil {
+		prepared, err = publishLegacyAssetPacket(legacy, assets, loader)
+		if err == nil {
+			assetDef = prepared.def
+		}
+	} else if packet != nil {
 		prepared, err = publishCompiledAssetPacket(packet, assets, loader)
 		if err == nil {
 			assetDef = prepared.def
