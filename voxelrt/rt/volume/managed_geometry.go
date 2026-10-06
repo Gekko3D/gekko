@@ -307,21 +307,10 @@ func (m *ManagedXBrickMap) refreshGeometryHalo(w VoxelWrite) {
 	if !m.geometryQualified {
 		return
 	}
-	minKey, _ := sectorBrickKeyForVoxel(w.X-VoxelNormalExtendedSurfaceFitRadius, w.Y-VoxelNormalExtendedSurfaceFitRadius, w.Z-VoxelNormalExtendedSurfaceFitRadius)
-	maxKey, _ := sectorBrickKeyForVoxel(w.X+VoxelNormalExtendedSurfaceFitRadius, w.Y+VoxelNormalExtendedSurfaceFitRadius, w.Z+VoxelNormalExtendedSurfaceFitRadius)
-	// The target remains mandatory even if integer-edge halo arithmetic wraps.
-	target, _ := sectorBrickKeyForVoxel(w.X, w.Y, w.Z)
-	m.refreshGeometrySector(target)
-	for x := minKey[0]; x <= maxKey[0]; x++ {
-		for y := minKey[1]; y <= maxKey[1]; y++ {
-			for z := minKey[2]; z <= maxKey[2]; z++ {
-				key := [3]int{x, y, z}
-				if key != target {
-					m.refreshGeometrySector(key)
-				}
-			}
-		}
-	}
+	VisitVoxelNormalHaloSectors(w.X, w.Y, w.Z, func(key [3]int) bool {
+		m.refreshGeometrySector(key)
+		return true
+	})
 }
 
 // Material finalization can change flags and AtlasOffset on target bricks.

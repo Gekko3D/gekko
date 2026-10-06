@@ -82,6 +82,17 @@ func (obj *VoxelObject) managedGeometrySelectionQualified(producer *managedGeome
 	return obj.XBrickMap != nil && obj.XBrickMap == producer.derivative && !obj.XBrickMap.GPUEditMode && !obj.hasSpecialRenderLattice() && obj.renderRepresentation == nil
 }
 
+// MatchesManagedGeometrySource checks current attachment identity and selection
+// without invoking either provider. Live ownership and generation qualification
+// remain the caller's responsibility. Calls require exclusive engine-thread access.
+func (obj *VoxelObject) MatchesManagedGeometrySource(expected ManagedGeometryInput) bool {
+	if obj == nil || expected.source == nil {
+		return false
+	}
+	producer := obj.managedGeometryProducer
+	return producer != nil && producer.source == expected.source && obj.managedGeometrySelectionQualified(producer)
+}
+
 // CaptureManagedGeometryInput lazily captures ordinary sealed geometry. Capture
 // requires exclusive engine-thread access; the resulting view is independently readable.
 func (obj *VoxelObject) CaptureManagedGeometryInput() (ManagedGeometryInput, bool) {

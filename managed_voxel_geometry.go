@@ -237,8 +237,14 @@ func ApplyManagedVoxelWrites(cmd *Commands, assets *AssetServer, eid EntityId, w
 	}
 	id := vmc.GeometryAsset()
 	var accepted []volume.VoxelWrite
+	publicationComplete := false
 	entry.producerActive = true
-	defer func() { entry.producerActive = false }()
+	defer func() {
+		entry.producerActive = false
+		if publicationComplete {
+			notifyManagedVoxelGeometryContent(cmd, assets, eid, id, entry, accepted)
+		}
+	}()
 	defer func() {
 		if len(accepted) == 0 {
 			return
@@ -268,6 +274,7 @@ func ApplyManagedVoxelWrites(cmd *Commands, assets *AssetServer, eid EntityId, w
 			}
 		}
 		MarkVoxelEntityPersistenceDirty(cmd, eid)
+		publicationComplete = true
 	}()
 	sequence := func(yield func(volume.VoxelWrite) bool) {
 		for w := range writes {

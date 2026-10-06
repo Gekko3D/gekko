@@ -1148,7 +1148,8 @@ new coordinate, Coalesced for an already queued coordinate, or SweepScheduled on
 overflow. Signed coordinates are filtered by binary search over frozen accepted
 coordinates without enumerating the input. Added topology belongs to successors.
 Callers supply sector notifications, including fitted-normal halo sectors; this
-step neither derives halos nor connects an engine edit feed.
+API does not derive halos. Ordinary managed engine edits now supply them through
+the [qualified edit feed](editing.md#managed-edit-notifications-s1l11).
 
 Each generation retains at most 1,024 distinct pending coordinates, in a lazily
 allocated fixed array. Duplicate checks scan at most that fixed capacity; no map,
@@ -1194,10 +1195,12 @@ or modify S1l8 entries, and retained copied-prefix views stay immutable.
 
 This is notification scheduling, not live-content reconciliation or a readiness
 certificate. A drained journal does not establish content coherence or GPU
-readiness. Qualified current-content reads, an edit/halo feed, replacement-copy
-peak accounting, frame-loop integration and coherent publication remain later
-work. The allowance bounds attempted coordinates per explicit call, not total
-calls per frame, callback cost, wall time or Go GC reclamation.
+readiness. [Qualified current-content reads](editing.md#qualified-current-sector-inputs-s1l10)
+and the [engine edit/halo feed](editing.md#managed-edit-notifications-s1l11) are
+available; replacement-copy peak accounting, frame-loop integration and coherent
+publication remain later work. The allowance bounds attempted coordinates per
+explicit call, not total calls per frame, callback cost, wall time or Go GC
+reclamation.
 
 ### Auxiliary capacity admission
 

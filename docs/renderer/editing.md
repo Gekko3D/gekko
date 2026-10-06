@@ -385,6 +385,46 @@ or frame-loop service. Future consumers must account for these retained inputs
 and replacement peaks before holding/copying them; no staged-memory, elapsed-time
 or total-process-memory ceiling is established here.
 
+#### Managed edit notifications (S1l11)
+
+After `ApplyManagedVoxelWrites` finishes material finalization and asset/renderer
+publication, it clears the active-producer guard and feeds changed assignments to
+the explicitly enabled manager's existing accepted-generation content journal.
+An applied panic prefix follows the same path before the original panic resumes.
+Nil, empty and entirely no-op sequences emit nothing. Transient changes that
+return to their initial values still notify; final removal still notifies the
+accepted coordinate. Notification neither admits nor advances generations.
+
+The feed reuses the existing changed-write list. It requires the current live
+entity/asset/binding and pending-command qualification, matching derivative and
+core source/selection, and a publication generation no older than the accepted
+input. Missing state, app, manager or admission, disabled budgets and stale or
+exposed attachments skip the feed. Rejection preserves retained journal work.
+Notifications use the accepted input identity, even when a successor exists;
+added coordinates remain outside accepted topology. The existing 1,024-coordinate
+journal and overflow sweep rules apply. No second queue or retained input is added.
+
+`VoxelObject.MatchesManagedGeometrySource(expected)` checks only current source
+identity and core derivative/selection guards. It invokes neither provider,
+captures no geometry and does not establish producer-owned live qualification or
+generation ordering. Older inputs from the same attachment can match. The engine
+feed supplies those additional live checks.
+
+`volume.VisitVoxelNormalHaloSectors(x, y, z, visit)` emits the target sector first,
+exactly once, then the fitted-normal extended-radius sector range used by managed
+geometry refresh. It allocates no storage; nil callbacks do nothing and false
+stops traversal. Signed floor-sector coordinates and the existing wrapped native
+integer halo arithmetic are preserved, including a mandatory target when the
+wrapped range is empty. With the current radius the visit count is at most eight.
+Both managed geometry refresh and the notification feed use this definition.
+
+Notifications are synchronous producer-side work. They enumerate changed writes
+and their fixed halo, use existing per-coordinate manager owner lookup and bounded
+journal duplicate checks; their cost is not a frame-time bound. Structural-copy
+progress and admission charges are unchanged. Draining notifications still does
+not reconcile copied content or certify GPU readiness. Replacement peak accounting,
+bounded reconciliation and coherent GPU publication remain subsequent steps.
+
 ### Ordinary managed runtime geometry
 
 `AssetServer.RegisterManagedVoxelGeometry(source, sourcePath)` defensively seals

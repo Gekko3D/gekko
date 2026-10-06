@@ -906,6 +906,17 @@ qualified absence differs from unavailable input. See the
 Edit/halo notification wiring, replacement peak accounting, reconciliation and
 coherent GPU publication remain. No frame integration or frame-time claim.
 
+### S1l11: Managed edit and halo notifications
+
+Completed 2026-10-06 in this batch. Finalized ordinary managed edits feed the
+accepted journal using shared fitted-normal halo enumeration and noncapturing
+live source checks. No-ops stay silent; applied panic prefixes notify after
+publication. Successors and structural-copy progress are preserved. See the
+[canonical contract](../renderer/editing.md#managed-edit-notifications-s1l11) and
+[delivery record](streamed-rendering-content-optimization.md#s1l11-managed-edit-and-halo-notifications).
+Replacement peak accounting, bounded reconciliation and coherent GPU publication
+remain. Notification cost stays synchronous; no frame-time claim.
+
 ## Verification and execution record
 
 Workflow: GPT-6.1 sol tests to red; root adversarial test review; GPT-6.1 sol code to green; root adversarial production review; commit. User authorized tests/subagents. Preserve unrelated changes.
